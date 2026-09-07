@@ -1,103 +1,141 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Coins, Users, Mic, Compass, Home, Search } from "lucide-react";
+import { Mic, Plus, RefreshCw, Search, Users } from "lucide-react";
 import { MOCK_ROOMS, formatCount, type LobbyRoom } from "@/lib/rooms";
 import { fetchRooms } from "@/lib/api";
-import { useWallet } from "@/stores/useWallet";
-import { useRoomStore } from "@/stores/useRoomStore";
-import DailyRewardModal from "@/components/DailyRewardModal";
+import { EmptyState, Spinner } from "@/components/bits";
 
-const TABS = [
-  { id: "home", label: "Home", icon: Home },
-  { id: "discover", label: "Discover", icon: Compass },
-  { id: "search", label: "Search", icon: Search },
-] as const;
+const CATEGORIES = ["All", "Chill", "Music", "Karaoke", "Games", "Community", "Chat"] as const;
 
 export default function LobbyView() {
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("home");
-  const [liveRooms, setLiveRooms] = useState<LobbyRoom[] | null>(null);
-  const coins = useWallet((s) => s.coins);
-  const setActiveRoom = useRoomStore((s) => s.setActiveRoom);
+  const [rooms, setRooms] = useState<LobbyRoom[]>(MOCK_ROOMS);
+  const [live, setLive] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]>("All");
+  const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchRooms()
-      .then((rooms) => {
-        if (!cancelled && rooms.length > 0) setLiveRooms(rooms);
-      })
-      .catch(() => {
-        if (!cancelled) setLiveRooms(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      const data = await fetchRooms();
+      if (data.length > 0) {
+        setRooms(data);
+        setLive(true);
+      }
+    } catch {
+      // Offline or backend hiccup — keep the last good list.
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const rooms = liveRooms ?? MOCK_ROOMS;
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => void load(), 15000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = rooms.filter(
+    (r) =>
+      (category === "All" || r.category === category) &&
+      (q === "" || r.title.toLowerCase().includes(q) || r.description.toLowerCase().includes(q))
+  );
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-[#0d0d12] text-white">
-      <header className="sticky top-0 z-10 border-b border-white/5 bg-[#0d0d12]/90 px-4 pb-3 pt-5 backdrop-blur">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-white/40">Live audio, all night</p>
-            <h1 className="text-2xl font-extrabold tracking-tight">VibeRoom</h1>
-          </div>
-          <div className="flex items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-semibold text-amber-200">
-            <Coins size={15} />
-            <span>{coins.toLocaleString()}</span>
-          </div>
-        </div>
-        <nav className="mt-4 grid grid-cols-3 gap-2" aria-label="Primary">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-sm font-semibold transition ${
-                  active ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
-                }`}
-              >
-                <Icon size={15} />
-                {t.label}
-              </button>
-            );
-          })}
-        </nav>
-      </header>
-
-      <main className="flex-1 space-y-3 px-4 py-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Live now</h2>
-          <span className="flex items-center gap-1 text-xs text-emerald-300">
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-black tracking-tight md:text-3xl">Live voice parties</h1>
+          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-white/50">
             <span className="live-dot inline-block h-2 w-2 rounded-full bg-emerald-400" />
-            {rooms.length} rooms{liveRooms ? "" : " · preview"}
-          </span>
+            {live ? `${rooms.length} rooms live now` : "Connecting to live rooms…"}
+          </p>
         </div>
-
-        {rooms.map((room) => (
-          <Link
-            key={room.id}
-            href={`/room?slug=${room.slug}`}
-            onClick={() => setActiveRoom(room.slug)}
-            className="block overflow-hidden rounded-3xl border border-white/8 bg-[#15151d] transition hover:border-white/20 active:scale-[0.99]"
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              setLoading(true);
+              void load();
+            }}
+            aria-label="Refresh rooms"
+            className="rounded-full bg-white/5 p-2.5 text-white/60 transition hover:bg-white/10 hover:text-white"
           >
-            <div className="flex gap-3 p-4">
-              <div
-                className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl"
-                style={{ backgroundColor: room.coverColor }}
-                aria-hidden
-              >
-                <Mic size={26} className="text-white/90" />
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          </button>
+          <Link
+            href="/create"
+            className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85"
+          >
+            <Plus size={15} /> Go live
+          </Link>
+        </div>
+      </div>
+
+      <div className="relative mt-4">
+        <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search rooms…"
+          maxLength={40}
+          className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
+        />
+      </div>
+
+      <div className="-mx-4 mt-3 flex gap-2 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Categories">
+        {CATEGORIES.map((c) => (
+          <button
+            key={c}
+            role="tab"
+            aria-selected={category === c}
+            onClick={() => setCategory(c)}
+            className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
+              category === c ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
+      {loading && rooms === MOCK_ROOMS ? (
+        <Spinner />
+      ) : filtered.length === 0 ? (
+        <div className="mt-4">
+          <EmptyState
+            title="No rooms match"
+            hint={rooms.length === 0 ? "Be the first to go live right now." : "Try another search or category."}
+          />
+          <Link
+            href="/create"
+            className="mt-3 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black transition hover:bg-white/85"
+          >
+            Create a room
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {filtered.map((room) => (
+            <Link
+              key={room.id}
+              href={`/room?slug=${room.slug}`}
+              className="group overflow-hidden rounded-3xl border border-white/10 bg-[#15151d] transition hover:border-violet-400/40 active:scale-[0.99]"
+            >
+              <div className="relative flex h-24 items-center justify-center overflow-hidden" style={{ background: `linear-gradient(135deg, ${room.coverColor}, #15151d)` }}>
+                <Mic size={30} className="text-white/80 transition group-hover:scale-110" />
+                <span className="absolute left-3 top-3 flex items-center gap-1 rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-white">
+                  <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-white" /> Live
+                </span>
+                <span className="absolute bottom-3 right-3 rounded-full bg-black/50 px-2 py-0.5 text-[11px] font-bold text-white/85">
+                  {room.category}
+                </span>
               </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="truncate text-base font-bold">{room.title}</h3>
+              <div className="p-4">
+                <h3 className="truncate text-base font-extrabold">{room.title}</h3>
                 <p className="truncate text-sm text-white/55">{room.description}</p>
-                <p className="mt-1 text-xs text-white/40">Hosted by {room.hostName} · {room.category}</p>
+                <p className="mt-1 text-xs text-white/40">Hosted by {room.hostName}</p>
                 <div className="mt-2 flex items-center gap-3 text-xs text-white/60">
                   <span className="flex items-center gap-1">
                     <Users size={13} />
@@ -109,27 +147,10 @@ export default function LobbyView() {
                   </span>
                 </div>
               </div>
-            </div>
-          </Link>
-        ))}
-
-        <div className="rounded-3xl border border-white/8 bg-gradient-to-br from-violet-500/20 to-fuchsia-500/10 p-4">
-          <h3 className="font-bold">Start your own room</h3>
-          <p className="mt-1 text-sm text-white/60">Invite friends, open 8 speaker seats, and go live in seconds.</p>
-          <Link
-            href="/room?slug=late-check-in"
-            onClick={() => setActiveRoom("late-check-in")}
-            className="mt-3 inline-block rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85"
-          >
-            Preview demo room
-          </Link>
+            </Link>
+          ))}
         </div>
-      </main>
-
-      <footer className="sticky bottom-0 border-t border-white/5 bg-[#0d0d12]/95 px-6 py-3 text-center text-xs text-white/35 backdrop-blur">
-        Web-first audio party · Pages + Workers + D1 + Cloudflare Realtime
-      </footer>
-      <DailyRewardModal />
+      )}
     </div>
   );
 }

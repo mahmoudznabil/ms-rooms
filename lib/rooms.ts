@@ -1,4 +1,4 @@
-export type RoomCategory = "Chill" | "Music" | "Community" | "Chat";
+export type RoomCategory = "Chill" | "Music" | "Community" | "Karaoke" | "Games" | "Chat";
 
 export interface LobbyRoom {
   id: string;

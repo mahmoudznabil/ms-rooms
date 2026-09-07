@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Firebase iOS config for bestaudioroom / 628489866765 -->
+	<!-- Bundle: mzn.muse.bestaudioroom.ios (from provided google-services (1).json second client) -->
+	<!-- Note: If Firebase console shows iOS app with mobilesdk_app_id 1:628489866765:ios:..., replace GOOGLE_APP_ID accordingly -->
+	<key>CLIENT_ID</key>
+	<string>628489866765-jk3oa34lub86ntuviun1lpjlfemv5094.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.628489866765-jk3oa34lub86ntuviun1lpjlfemv5094</string>
+	<key>API_KEY</key>
+	<string>AIzaSyCcVRFSgVz2iQLDy8E34b5iWiFYH2M5mX8</string>
+	<key>GCM_SENDER_ID</key>
+	<string>628489866765</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>mzn.muse.bestaudioroom.ios</string>
+	<key>PROJECT_ID</key>
+	<string>bestaudioroom</string>
+	<key>STORAGE_BUCKET</key>
+	<string>bestaudioroom.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false/>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false/>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true/>
+	<key>IS_GCM_ENABLED</key>
+	<true/>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true/>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:628489866765:ios:9fc97ccd39d0604a700f44</string>
+	<key>DATABASE_URL</key>
+	<string></string>
+</dict>
+</plist>
