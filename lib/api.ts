@@ -31,7 +31,9 @@ export interface ApiUser {
   avatar_url: string | null;
   bio: string | null;
   coins: number;
+  gems: number;
   xp: number;
+  level?: number;
   created_at: string;
   updated_at: string;
 }
@@ -328,4 +330,40 @@ export async function reportUser(input: {
   room_id?: string | null;
 }): Promise<{ id: string }> {
   return req(`/api/reports`, { method: "POST", body: JSON.stringify(input) });
+}
+
+// ---- Triple-Currency / Admin / Support (spec) ----
+export interface AdminUser { id: string; username: string; display_name: string; role: "master_admin" | "finance" | "support"; }
+export async function adminLogin(username: string, password: string): Promise<{ admin: AdminUser; token: string }> {
+  return req(`/api/admin/login`, { method: "POST", body: JSON.stringify({ username, password }) });
+}
+export async function adminMe(token: string): Promise<{ admin: AdminUser }> {
+  return req(`/api/admin/me`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function adminRecharge(token: string, input: { target_user_id: string; action_type: "ADD_COINS" | "DEDUCT_COINS" | "ADD_GEMS" | "DEDUCT_GEMS" | "ADD_XP" | "DEDUCT_XP"; amount: number; notes?: string }): Promise<{ balance: { coins: number; gems: number; xp: number } }> {
+  return req(`/api/admin/recharge`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function adminTransactions(token: string, limit = 50): Promise<{ transactions: Array<Record<string, unknown>> }> {
+  return req(`/api/admin/transactions?limit=${limit}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function adminLookupUsers(token: string, q: string): Promise<{ users: ApiUser[] }> {
+  return req(`/api/admin/users?q=${encodeURIComponent(q)}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function adminStats(token: string): Promise<{ stats: Record<string, unknown>; pricing: Array<Record<string, unknown>> }> {
+  return req(`/api/admin/stats`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function fetchPricing(): Promise<{ tiers: Array<{ tier: string; standard_coins: number; standard_price_cents: number; app_coins: number; app_price_cents: number; bonus_percent: number }> }> {
+  return req(`/api/pricing`, { cache: "no-store" });
+}
+export interface SupportTicket { id: string; user_id: string; subject: string; category: string; message: string; status: string; created_at: string; updated_at: string; }
+export async function createTicket(input: { user_id: string; subject: string; category: "recharge" | "account" | "technical" | "moderation" | "other"; message: string }): Promise<{ id: string }> {
+  return req(`/api/support/tickets`, { method: "POST", body: JSON.stringify(input) });
+}
+export async function listTickets(params: { user_id?: string; adminToken?: string; status?: string }): Promise<{ tickets: SupportTicket[] }> {
+  const q = new URLSearchParams();
+  if (params.user_id) q.set("user_id", params.user_id);
+  if (params.status) q.set("status", params.status);
+  const headers: Record<string, string> = {};
+  if (params.adminToken) headers.Authorization = `Bearer ${params.adminToken}`;
+  return req(`/api/support/tickets${q.toString() ? `?${q}` : ""}`, { headers, cache: "no-store" });
 }

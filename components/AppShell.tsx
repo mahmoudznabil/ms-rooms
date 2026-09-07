@@ -3,7 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Plus, Search, Sparkles, Trophy, User, Wallet } from "lucide-react";
+import { Coins, Home, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { levelForXp } from "@/lib/levels";
 import LoginView from "@/components/LoginView";
@@ -17,6 +17,8 @@ const NAV = [
   { href: "/rankings", label: "Rankings", icon: Trophy },
   { href: "/wallet", label: "Wallet", icon: Wallet },
   { href: "/search", label: "Search", icon: Search },
+  { href: "/support", label: "Support", icon: Headset },
+  { href: "/admin", label: "Admin", icon: Shield },
   { href: "/profile", label: "Profile", icon: User },
 ];
 

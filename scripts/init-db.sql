@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
   xp INTEGER NOT NULL DEFAULT 0 CHECK (xp >= 0),
   level INTEGER NOT NULL DEFAULT 1 CHECK (level BETWEEN 1 AND 99),
   coins INTEGER NOT NULL DEFAULT 0 CHECK (coins >= 0),
+  gems INTEGER NOT NULL DEFAULT 0 CHECK (gems >= 0),
   streak INTEGER NOT NULL DEFAULT 0 CHECK (streak >= 0),
   last_checkin TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -127,6 +128,78 @@ CREATE INDEX IF NOT EXISTS idx_xp_user_created ON xp_events (user_id, created_at
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_pk_status ON pk_battles (status, ends_at);
 CREATE INDEX IF NOT EXISTS idx_game_room ON game_sessions (room_id, status);
+
+-- Triple-Currency / Admin / Support (spec)
+CREATE TABLE IF NOT EXISTS admin_users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('master_admin','finance','support')),
+  password_hash TEXT NOT NULL,
+  firebase_uid TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_login TEXT
+);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id TEXT PRIMARY KEY,
+  admin_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TEXT NOT NULL,
+  FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS admin_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id TEXT NOT NULL,
+  target_user_id TEXT NOT NULL,
+  action_type TEXT NOT NULL CHECK(action_type IN ('ADD_COINS','DEDUCT_COINS','ADD_GEMS','DEDUCT_GEMS','ADD_XP','DEDUCT_XP')),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE SET NULL,
+  FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  category TEXT NOT NULL CHECK (category IN ('recharge','account','technical','moderation','other')),
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','pending','resolved','closed')),
+  assigned_admin_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (assigned_admin_id) REFERENCES admin_users(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS ticket_replies (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL,
+  author_admin_id TEXT,
+  author_user_id TEXT,
+  message TEXT NOT NULL,
+  is_internal INTEGER NOT NULL DEFAULT 0 CHECK (is_internal IN (0,1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS pricing_tiers (
+  id TEXT PRIMARY KEY,
+  tier TEXT NOT NULL UNIQUE CHECK (tier IN ('starter','growth','pro','enterprise')),
+  standard_coins INTEGER NOT NULL,
+  standard_price_cents INTEGER NOT NULL,
+  app_coins INTEGER NOT NULL,
+  app_price_cents INTEGER NOT NULL,
+  bonus_percent REAL NOT NULL DEFAULT 10.0
+);
+INSERT OR IGNORE INTO admin_users (id, username, display_name, role, password_hash) VALUES
+  ('admin-master', 'master', 'Master Admin', 'master_admin', '3eb3fe66b31e0ea2f5892c6daf441a28f9013d07c3a5a3c5d1b9b4f3a8a3c5e3b4'),
+  ('admin-finance', 'finance', 'Finance Agent', 'finance', '3eb3fe66b31e0ea2f5892c6daf441a28f9013d07c3a5a3c5d1b9b4f3a8a3c5e3b4'),
+  ('admin-support', 'support', 'Support Agent', 'support', '3eb3fe66b31e0ea2f5892c6daf441a28f9013d07c3a5a3c5d1b9b4f3a8a3c5e3b4');
+INSERT OR IGNORE INTO pricing_tiers (id, tier, standard_coins, standard_price_cents, app_coins, app_price_cents, bonus_percent) VALUES
+  ('tier-starter', 'starter', 25000, 500, 27500, 500, 10.0),
+  ('tier-growth', 'growth', 50000, 1000, 55000, 1000, 10.0),
+  ('tier-pro', 'pro', 100000, 2000, 110000, 2000, 10.0),
+  ('tier-enterprise', 'enterprise', 500000, 10000, 550000, 10000, 10.0);
 
 INSERT OR IGNORE INTO users (id, username, display_name, avatar_url, frame_style, id_tag, bio, xp, level, coins, streak)
 VALUES

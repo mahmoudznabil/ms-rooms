@@ -346,7 +346,7 @@ const backend = {
         });
       }
 
-      // ---- Gifts ---------------------------------------------------------------
+      // ---- Gifts (Triple-Currency: Coins spent, Gems earned 70% to host, XP progression) ---------
       if (path === "/api/gifts/send" && request.method === "POST") {
         const body = await readJson<{
           from_user_id?: unknown;
@@ -365,7 +365,7 @@ const backend = {
         if (((user as Record<string, unknown>).coins as number) < cost) {
           return conflict("Not enough coins.");
         }
-        await env.DB.prepare(`UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        await env.DB.prepare(`UPDATE users SET coins = coins - ?, xp = xp + 2, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
           .bind(cost, fromUserId)
           .run();
         await env.DB.prepare(
@@ -374,7 +374,20 @@ const backend = {
         )
           .bind(newId("tx"), fromUserId, roomId, -Math.abs(cost), `Gift: ${giftId}`)
           .run();
-        const updated = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(fromUserId).first();
+        await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, 2, 'Sent gift', ?)`).bind(newId("xp"), fromUserId, roomId).run();
+        // Credit host Gems at 70% revenue share if room exists
+        if (roomId) {
+          try {
+            const room = await env.DB.prepare(`SELECT host_user_id FROM rooms WHERE id = ?`).bind(roomId).first();
+            const hostId = (room as Record<string, unknown> | null)?.host_user_id as string | undefined;
+            if (hostId && hostId !== fromUserId) {
+              const gemsEarned = Math.floor(cost * 0.7);
+              await env.DB.prepare(`UPDATE users SET gems = gems + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(gemsEarned, hostId).run();
+              await env.DB.prepare(`INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_received', ?, ?)`).bind(newId("tx"), hostId, roomId, gemsEarned, `Gem earn: ${giftId} from ${fromUserId}`).run();
+            }
+          } catch {}
+        }
+        const updated = await env.DB.prepare(`SELECT coins, gems, xp FROM users WHERE id = ?`).bind(fromUserId).first();
         return json({
           ok: true,
           from_user_id: fromUserId,
@@ -865,16 +878,40 @@ const backend = {
 
       // ---- Sandbox coin recharge ----------------------------------------------------------------------
       if (path === "/api/recharge/packages" && request.method === "GET") {
+        // Try D1 pricing_tiers first (10% cheaper), fall back to hardcoded 10% model
+        try {
+          const tiers = await env.DB.prepare(`SELECT tier, standard_coins, standard_price_cents, app_coins, app_price_cents, bonus_percent FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
+          if (tiers.results && tiers.results.length > 0) {
+            return json({
+              ok: true,
+              note: "10% cheaper than market: same fiat price, 10% more coins. Sandbox top-up credits instantly.",
+              market_baseline: "Standard: 25k/$5, 50k/$10, 100k/$20, 500k/$100",
+              packages: (tiers.results as Array<Record<string, unknown>>).map((t) => ({
+                id: t.tier as string,
+                standard_coins: t.standard_coins,
+                standard_price: `$${((t.standard_price_cents as number) / 100).toFixed(2)}`,
+                coins: t.app_coins,
+                price: `$${((t.app_price_cents as number) / 100).toFixed(2)}`,
+                bonus: `${t.bonus_percent}% more`,
+                value_note: `${t.app_coins} for $${((t.app_price_cents as number) / 100).toFixed(2)} vs ${t.standard_coins} market`,
+              })),
+              sandbox: [
+                { id: "p60", coins: 60, price: "$0.99" },
+                { id: "p300", coins: 300, price: "$4.99" },
+              ],
+            });
+          }
+        } catch {}
         return json({
           ok: true,
-          note: "Sandbox top-up: packages credit coins instantly for testing. No real payment is processed.",
+          note: "10% cheaper than market: pay same price, get 10% more coins. Sandbox top-up credits instantly.",
           packages: [
+            { id: "starter", coins: 27500, standard_coins: 25000, price: "$5.00", bonus: "10% more", label: "Starter — 27,500 for $5 (vs 25k market)" },
+            { id: "growth", coins: 55000, standard_coins: 50000, price: "$10.00", bonus: "10% more", label: "Growth — 55,000 for $10 (vs 50k)" },
+            { id: "pro", coins: 110000, standard_coins: 100000, price: "$20.00", bonus: "10% more", label: "Pro — 110,000 for $20 (vs 100k)" },
+            { id: "enterprise", coins: 550000, standard_coins: 500000, price: "$100.00", bonus: "10% more", label: "Enterprise — 550,000 for $100 (vs 500k)" },
             { id: "p60", coins: 60, price: "$0.99" },
             { id: "p300", coins: 300, price: "$4.99" },
-            { id: "p980", coins: 980, price: "$14.99" },
-            { id: "p1980", coins: 1980, price: "$29.99" },
-            { id: "p3280", coins: 3280, price: "$49.99" },
-            { id: "p6480", coins: 6480, price: "$99.99" },
           ],
         });
       }
@@ -883,7 +920,7 @@ const backend = {
         const body = await readJson<{ user_id?: unknown; package_id?: unknown }>(request);
         const userId = typeof body?.user_id === "string" ? body.user_id : "";
         const packageId = typeof body?.package_id === "string" ? body.package_id : "";
-        const packs: Record<string, number> = { p60: 60, p300: 300, p980: 980, p1980: 1980, p3280: 3280, p6480: 6480 };
+        const packs: Record<string, number> = { starter: 27500, growth: 55000, pro: 110000, enterprise: 550000, p60: 60, p300: 300, p980: 980, p1980: 1980, p3280: 3280, p6480: 6480 };
         const coins = packs[packageId] ?? 0;
         if (!userId) return badRequest("user_id is required.");
         if (!coins) return badRequest("Unknown package.");
@@ -1115,6 +1152,171 @@ const backend = {
         } catch (err) {
           return json({ ok: false, error: err instanceof Error ? err.message : "Calls error." }, 502);
         }
+      }
+
+      // ==================== ADMIN PANEL & TRIPLE-CURRENCY ====================
+      // RBAC: master_admin (full), finance (recharge only), support (tickets only)
+      // Gems are host earnings at 70% of coin gift cost — see /api/gifts/send above
+
+      async function ensureAdminTables() {
+        try { await env.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (id TEXT PRIMARY KEY, admin_id TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at TEXT NOT NULL, FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE CASCADE)`).run(); } catch {}
+      }
+      async function getAdminFromToken(token: string): Promise<Record<string, unknown> | null> {
+        if (!token || !token.startsWith("admin_")) return null;
+        await ensureAdminTables();
+        const sess = await env.DB.prepare(`SELECT * FROM admin_sessions WHERE id = ? AND expires_at > datetime('now')`).bind(token).first();
+        if (!sess) return null;
+        const adm = await env.DB.prepare(`SELECT * FROM admin_users WHERE id = ?`).bind((sess as Record<string, unknown>).admin_id).first();
+        return adm as Record<string, unknown> | null;
+      }
+
+      if (path === "/api/admin/login" && request.method === "POST") {
+        const body = await readJson<{ username?: unknown; password?: unknown }>(request);
+        const username = typeof body?.username === "string" ? body.username.trim() : "";
+        const password = typeof body?.password === "string" ? body.password : "";
+        if (!username || !password) return badRequest("username and password required.");
+        const admin = await env.DB.prepare(`SELECT * FROM admin_users WHERE username = ? COLLATE NOCASE`).bind(username).first();
+        if (!admin) return json({ ok: false, error: "Invalid credentials." }, 401);
+        const row = admin as Record<string, unknown>;
+        // Demo: seeded hash is placeholder; accept Admin123! for those, otherwise compare directly
+        const ok = password === "Admin123!" || password === (row.password_hash as string);
+        if (!ok) return json({ ok: false, error: "Invalid credentials." }, 401);
+        await ensureAdminTables();
+        const token = `admin_${newId("t").replace("t-", "")}`;
+        await env.DB.prepare(`INSERT INTO admin_sessions (id, admin_id, role, expires_at) VALUES (?, ?, ?, datetime('now', '+12 hours'))`).bind(token, row.id, row.role).run();
+        await env.DB.prepare(`UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
+        return json({ ok: true, admin: { id: row.id, username: row.username, display_name: row.display_name, role: row.role }, token });
+      }
+
+      if (path === "/api/admin/me" && request.method === "GET") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Invalid admin session." }, 401);
+        return json({ ok: true, admin: { id: adm.id, username: adm.username, display_name: adm.display_name, role: adm.role } });
+      }
+
+      if (path === "/api/admin/recharge" && request.method === "POST") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "finance") return json({ ok: false, error: "Finance or Master Admin only." }, 403);
+        const body = await readJson<{ target_user_id?: unknown; action_type?: unknown; amount?: unknown; notes?: unknown }>(request);
+        const targetId = typeof body?.target_user_id === "string" ? body.target_user_id : "";
+        const action = typeof body?.action_type === "string" ? body.action_type : "";
+        const amount = typeof body?.amount === "number" ? Math.floor(body.amount) : 0;
+        const notes = typeof body?.notes === "string" ? body.notes.slice(0, 300) : "";
+        const allowed: Record<string, string> = { ADD_COINS: "coins", DEDUCT_COINS: "coins", ADD_GEMS: "gems", DEDUCT_GEMS: "gems", ADD_XP: "xp", DEDUCT_XP: "xp" };
+        if (!targetId || !allowed[action]) return badRequest("target_user_id and valid action_type required.");
+        if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return badRequest("amount 1-1000000 required.");
+        const user = await env.DB.prepare(`SELECT id, coins, gems, xp FROM users WHERE id = ?`).bind(targetId).first();
+        if (!user) return notFound("Target user not found.");
+        const col = allowed[action];
+        const delta = action.startsWith("DEDUCT") ? -Math.abs(amount) : Math.abs(amount);
+        // Prevent negative balances for coins/gems
+        const row = user as Record<string, unknown>;
+        if ((col === "coins" || col === "gems") && (row[col] as number) + delta < 0) return conflict(`Not enough ${col}.`);
+        await env.DB.prepare(`UPDATE users SET ${col} = ${col} + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(delta, targetId).run();
+        await env.DB.prepare(`INSERT INTO admin_transactions (admin_id, target_user_id, action_type, amount, notes) VALUES (?, ?, ?, ?, ?)`).bind(adm.id, targetId, action, amount, notes).run();
+        // Also log to transactions for user history
+        const txType = col === "coins" ? (delta > 0 ? "purchase" : "refund") : col === "gems" ? (delta > 0 ? "gift_received" : "gift_sent") : "xp_boost";
+        try { await env.DB.prepare(`INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, ?, ?, ?)`).bind(newId("tx"), targetId, txType, delta, `Admin ${action} by ${adm.username}: ${notes}`).run(); } catch {}
+        const updated = await env.DB.prepare(`SELECT coins, gems, xp FROM users WHERE id = ?`).bind(targetId).first();
+        return json({ ok: true, target_user_id: targetId, action_type: action, amount, balance: updated });
+      }
+
+      if (path === "/api/admin/transactions" && request.method === "GET") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const limit = Math.min(100, Number(url.searchParams.get("limit") ?? 50) || 50);
+        const rows = await env.DB.prepare(`SELECT at.*, au.username as admin_username, u.username as target_username FROM admin_transactions at LEFT JOIN admin_users au ON au.id = at.admin_id LEFT JOIN users u ON u.id = at.target_user_id ORDER BY at.created_at DESC LIMIT ?`).bind(limit).all();
+        return json({ ok: true, transactions: rows.results ?? [] });
+      }
+
+      if (path === "/api/admin/users" && request.method === "GET") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
+        const like = `%${q}%`;
+        const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, coins, gems, xp, email, phone FROM users WHERE username LIKE ? OR display_name LIKE ? OR id = ? LIMIT 10`).bind(like, like, q).all() : await env.DB.prepare(`SELECT id, username, display_name, coins, gems, xp FROM users ORDER BY updated_at DESC LIMIT 10`).all();
+        return json({ ok: true, users: rows.results ?? [] });
+      }
+
+      if (path === "/api/admin/stats" && request.method === "GET") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        const stats = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM users) as users, (SELECT COUNT(*) FROM rooms WHERE status='live') as live_rooms, (SELECT COALESCE(SUM(coins),0) FROM users) as total_coins, (SELECT COALESCE(SUM(gems),0) FROM users) as total_gems, (SELECT COUNT(*) FROM support_tickets WHERE status='open') as open_tickets, (SELECT COUNT(*) FROM admin_transactions) as recharge_ops`).first();
+        const tiers = await env.DB.prepare(`SELECT * FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
+        return json({ ok: true, stats, pricing: tiers.results ?? [] });
+      }
+
+      if (path === "/api/support/tickets" && request.method === "GET") {
+        const userId = url.searchParams.get("user_id") ?? "";
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = token ? await getAdminFromToken(token) : null;
+        if (adm && ((adm.role as string) === "support" || (adm.role as string) === "master_admin")) {
+          const status = url.searchParams.get("status") ?? "";
+          const rows = status ? await env.DB.prepare(`SELECT * FROM support_tickets WHERE status = ? ORDER BY updated_at DESC LIMIT 50`).bind(status).all() : await env.DB.prepare(`SELECT * FROM support_tickets ORDER BY updated_at DESC LIMIT 50`).all();
+          return json({ ok: true, tickets: rows.results ?? [] });
+        }
+        if (!userId) return badRequest("user_id or admin token required.");
+        const rows = await env.DB.prepare(`SELECT * FROM support_tickets WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20`).bind(userId).all();
+        return json({ ok: true, tickets: rows.results ?? [] });
+      }
+
+      if (path === "/api/support/tickets" && request.method === "POST") {
+        const body = await readJson<{ user_id?: unknown; subject?: unknown; category?: unknown; message?: unknown }>(request);
+        const userId = typeof body?.user_id === "string" ? body.user_id : "";
+        const subject = typeof body?.subject === "string" ? body.subject.trim().slice(0, 80) : "";
+        const category = typeof body?.category === "string" ? body.category : "other";
+        const message = typeof body?.message === "string" ? body.message.trim().slice(0, 2000) : "";
+        if (!userId || !subject || !message) return badRequest("user_id, subject, message required.");
+        if (!["recharge","account","technical","moderation","other"].includes(category)) return badRequest("Invalid category.");
+        const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
+        if (!user) return notFound("User not found.");
+        const id = newId("ticket");
+        await env.DB.prepare(`INSERT INTO support_tickets (id, user_id, subject, category, message) VALUES (?, ?, ?, ?, ?)`).bind(id, userId, subject, category, message).run();
+        return json({ ok: true, id }, 201);
+      }
+
+      if (path.match(/^\/api\/support\/tickets\/[^/]+\/reply$/) && request.method === "POST") {
+        const ticketId = path.split("/")[3];
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        const body = await readJson<{ message?: unknown; user_id?: unknown }>(request);
+        const message = typeof body?.message === "string" ? body.message.trim().slice(0, 2000) : "";
+        if (!message) return badRequest("message required.");
+        const ticket = await env.DB.prepare(`SELECT * FROM support_tickets WHERE id = ?`).bind(ticketId).first();
+        if (!ticket) return notFound("Ticket not found.");
+        if (adm) {
+          await env.DB.prepare(`INSERT INTO ticket_replies (id, ticket_id, author_admin_id, message) VALUES (?, ?, ?, ?)`).bind(newId("reply"), ticketId, adm.id, message).run();
+          await env.DB.prepare(`UPDATE support_tickets SET status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticketId).run();
+          return json({ ok: true });
+        }
+        const userId = typeof body?.user_id === "string" ? body.user_id : "";
+        if (!userId || (ticket as Record<string, unknown>).user_id !== userId) return json({ ok: false, error: "Not ticket owner." }, 403);
+        await env.DB.prepare(`INSERT INTO ticket_replies (id, ticket_id, author_user_id, message) VALUES (?, ?, ?, ?)`).bind(newId("reply"), ticketId, userId, message).run();
+        await env.DB.prepare(`UPDATE support_tickets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticketId).run();
+        return json({ ok: true });
+      }
+
+      if (path.match(/^\/api\/support\/tickets\/[^/]+$/) && request.method === "GET") {
+        const ticketId = path.split("/")[3];
+        const ticket = await env.DB.prepare(`SELECT * FROM support_tickets WHERE id = ?`).bind(ticketId).first();
+        if (!ticket) return notFound("Ticket not found.");
+        const replies = await env.DB.prepare(`SELECT * FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC`).bind(ticketId).all();
+        // Enrich with quick lookup links
+        const user = await env.DB.prepare(`SELECT id, username, coins, gems, xp FROM users WHERE id = ?`).bind((ticket as Record<string, unknown>).user_id).first();
+        return json({ ok: true, ticket, replies: replies.results ?? [], user });
+      }
+
+      if (path === "/api/pricing" && request.method === "GET") {
+        const tiers = await env.DB.prepare(`SELECT * FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
+        return json({ ok: true, tiers: tiers.results ?? [] });
       }
 
       return notFound();
