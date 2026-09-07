@@ -1,0 +1,20 @@
+# dependencies
+/node_modules
+
+# Next.js
+/.next/
+/out/
+/build/
+
+# local environment
+.env*
+
+# generated files
+*.tsbuildinfo
+npm-debug.log*
+
+# local wrangler state (dev D1 data, build cache)
+.wrangler/
+
+# scaffold artifact from the initial generator workaround
+/best-audio-room/

@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --background: #0d0d12;
+  --foreground: #f7f5f2;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--background);
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(600px 320px at 20% -5%, rgba(139, 92, 246, 0.18), transparent 60%),
+    radial-gradient(520px 300px at 90% 0%, rgba(236, 72, 153, 0.12), transparent 60%),
+    var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(251, 191, 36, 0.35);
+}
+
+.live-dot {
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+.modal-pop {
+  animation: modal-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.chat-in {
+  animation: chat-in 0.22s ease-out;
+}
+
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot,
+  .modal-pop,
+  .chat-in {
+    animation: none;
+  }
+}
+
+/* Mobile-first phone frame: full-bleed on phones, centered device frame
+   on tablet/desktop widths. */
+.phone-stage {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+
+.phone-frame {
+  width: 100%;
+  max-width: 430px;
+  min-height: 100vh;
+  background: var(--background);
+  position: relative;
+}
+
+@media (min-width: 768px) {
+  .phone-stage {
+    align-items: center;
+    padding: 28px 16px;
+  }
+
+  .phone-frame {
+    min-height: min(880px, calc(100vh - 56px));
+    max-height: calc(100vh - 56px);
+    border-radius: 2.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 0 0 10px rgba(255, 255, 255, 0.03),
+      0 30px 80px rgba(0, 0, 0, 0.6),
+      0 0 120px rgba(139, 92, 246, 0.12);
+    overflow: hidden;
+  }
+
+  .phone-frame > * {
+    max-height: calc(100vh - 58px);
+    overflow-y: auto;
+  }
+}
