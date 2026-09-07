@@ -49,7 +49,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
-  if (!user) return <LoginView />;
+  const publicPaths = ["/", "/login"];
+  if (!user && !publicPaths.includes(pathname)) return <LoginView />;
+  // Landing (/) is public — let guests see the portfolio and still offer login CTA inside it
 
   return (
     <div className="app-shell">
@@ -83,13 +85,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
         >
           <Plus size={16} /> Start a room
         </Link>
-        <Link href="/profile" className="mt-3 flex items-center gap-2.5 rounded-2xl bg-white/5 p-2.5 transition hover:bg-white/10">
-          <UserAvatar name={user.display_name} avatarUrl={user.avatar_url} xp={user.xp} size={34} />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-bold">{user.display_name}</span>
-            <span className="block text-xs text-white/45">Lv.{levelForXp(user.xp)}</span>
-          </span>
-        </Link>
+        {user ? (
+          <Link href="/profile" className="mt-3 flex items-center gap-2.5 rounded-2xl bg-white/5 p-2.5 transition hover:bg-white/10">
+            <UserAvatar name={user.display_name} avatarUrl={user.avatar_url} xp={user.xp} size={34} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-bold">{user.display_name}</span>
+              <span className="block text-xs text-white/45">Lv.{levelForXp(user.xp)}</span>
+            </span>
+          </Link>
+        ) : (
+          <Link href="/login" className="mt-3 flex items-center justify-center rounded-2xl bg-white py-3 text-sm font-bold text-black hover:bg-white/85">
+            Login / Sign up
+          </Link>
+        )}
       </aside>
 
       {/* Main column */}
@@ -106,13 +114,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <Link href="/search" aria-label="Search" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Search size={16} />
             </Link>
-            <Link
-              href="/wallet"
-              className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200"
-            >
-              <Coins size={14} />
-              {user.coins.toLocaleString()}
-            </Link>
+            {user ? (
+              <Link
+                href="/wallet"
+                className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200"
+              >
+                <Coins size={14} />
+                {user.coins.toLocaleString()}
+              </Link>
+            ) : (
+              <Link href="/login" className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-black hover:bg-white/85">
+                Login
+              </Link>
+            )}
           </div>
         </header>
 
