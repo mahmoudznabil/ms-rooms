@@ -82,7 +82,7 @@ export default function FirebaseAuthPanel() {
     setBusy(true); setErr(null); setMsg(null);
     try {
       await sendSignInLinkToEmail(auth, email.trim(), {
-        url: window.location.href,
+        url: `${window.location.origin}/login`,
         handleCodeInApp: true,
       });
       window.localStorage.setItem("emailForSignIn", email.trim());
