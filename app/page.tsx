@@ -43,48 +43,41 @@ export default function Home() {
 
   return (
     <div className="space-y-10 pb-6">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm font-black">V</span>
-          <span className="hidden text-sm font-black tracking-tight sm:block">VibeRoom</span>
-          <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-white/50">Web-first</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link href="/login" className="rounded-full bg-white px-4 py-2 text-xs font-bold text-black hover:bg-white/85">Login / Sign up</Link>
-          <Link href="/lobby" className="hidden rounded-full bg-white/5 px-4 py-2 text-xs font-bold text-white hover:bg-white/10 sm:block">Open Web App</Link>
-        </div>
-      </div>
-
-      <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-violet-600/20 via-[#15151d] to-fuchsia-600/10 p-6 sm:p-8">
-        <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-fuchsia-500/20 blur-3xl" aria-hidden />
-        <div className="absolute -left-20 -bottom-20 h-64 w-64 rounded-full bg-violet-500/15 blur-3xl" aria-hidden />
-        <p className="relative text-xs font-bold uppercase tracking-[0.2em] text-violet-300">Not just words — voice</p>
-        <h1 className="relative mt-2 text-3xl font-black leading-tight tracking-tight sm:text-4xl">
-          Voice parties, <span className="bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">live</span> in your browser.
-        </h1>
-        <p className="relative mt-2 max-w-xl text-sm leading-relaxed text-white/60">
-          Group voice chat rooms you can join instantly — no install. Unlike Fomi Party’s app-only world, VibeRoom is a <span className="font-bold text-white">usable Web UI + game</span> with real login that follows you phone → laptop → tablet. Coins, Gems, XP all sync via Firebase + D1.
-        </p>
-        <div className="relative mt-5 flex flex-wrap gap-2">
-          <a href="#download" className="flex items-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-bold text-black hover:bg-white/85">
-            <Apple size={16} /> Download for iOS
-          </a>
-          <a href="#download" className="flex items-center gap-2 rounded-full bg-white/10 px-5 py-3 text-sm font-bold text-white hover:bg-white/15">
-            <Smartphone size={16} /> Download for Android
-          </a>
-          <Link href="/login" className="flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-5 py-3 text-sm font-bold text-white hover:bg-white/10">
-            <Shield size={16} /> Login / Sign up
-          </Link>
-        </div>
-        <div className="relative mt-3 flex flex-wrap gap-2 text-xs text-white/40">
-          <span className="flex items-center gap-1"><span className="live-dot h-2 w-2 rounded-full bg-emerald-400" /> Web-first • Firebase Auth (phone, email, Google, email-link)</span>
-          <span>•</span>
-          <span><Gamepad2 size={12} className="inline" /> Ludo & Reaction inside voice</span>
-        </div>
-        <div className="relative mt-4 flex items-center gap-2 text-xs">
-          <Stars n={5} />
-          <span className="font-bold text-white">4.82</span>
-          <span className="text-white/40">559+ reviews • 77k+ downloads — inspired by Fomi Party, 10% more value</span>
+      {/* Blackbox-style hero — minimal, centered, no choice bar */}
+      <section className="relative overflow-hidden rounded-2xl border border-white/5 bg-[#0f0f10] p-6 sm:p-10">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:24px_24px] opacity-30" aria-hidden />
+        <div className="relative text-center">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-white text-sm font-black text-black">V</div>
+          <h1 className="mx-auto mt-4 max-w-2xl text-3xl font-semibold leading-tight tracking-tight text-white sm:text-4xl">
+            Voice parties, live in your browser.
+          </h1>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-white/45">
+            The Fomi Party vibe — rebuilt web-first. No APK to install. Real login (phone/email/Google) that follows you on every device, with a <span className="text-white/70">usable Web UI + games</span>.
+          </p>
+          {/* Blackbox-style input mock */}
+          <div className="mx-auto mt-6 flex max-w-xl items-center gap-2 rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 text-white/40">
+              <Mic size={14} />
+            </div>
+            <span className="flex-1 text-left text-sm text-white/30">Try “Join a chill room…”</span>
+            <Link href="/login" className="shrink-0 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">
+              Login
+            </Link>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">Login / Sign up</Link>
+            <a href="#download" className="rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-white/70 hover:bg-white/10">
+              <span className="inline-flex items-center gap-1.5"><Apple size={14} /> iOS</span>
+            </a>
+            <a href="#download" className="rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-white/70 hover:bg-white/10">
+              <span className="inline-flex items-center gap-1.5"><Smartphone size={14} /> Android</span>
+            </a>
+          </div>
+          <div className="mt-4 flex items-center justify-center gap-2 text-xs text-white/25">
+            <Stars n={5} />
+            <span className="font-medium text-white/50">4.82</span>
+            <span>559+ reviews • 77k+ installs • 10% more value</span>
+          </div>
         </div>
       </section>
 

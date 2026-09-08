@@ -17,7 +17,6 @@ import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
 
 export default function FirebaseAuthPanel() {
-  const [mode, setMode] = useState<"google" | "email" | "phone" | "link">("google");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
@@ -25,9 +24,10 @@ export default function FirebaseAuthPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [showPhone, setShowPhone] = useState(false);
+  const [showLink, setShowLink] = useState(false);
   const [phoneConfirm, setPhoneConfirm] = useState<import("firebase/auth").ConfirmationResult | null>(null);
 
-  // Handle email-link redirect back
   useEffect(() => {
     if (isSignInWithEmailLink(auth, window.location.href)) {
       let storedEmail = window.localStorage.getItem("emailForSignIn") ?? "";
@@ -40,7 +40,7 @@ export default function FirebaseAuthPanel() {
             useSession.setState({ user, token, ready: true, authError: null });
             try { window.localStorage.removeItem("emailForSignIn"); } catch {}
             window.history.replaceState({}, "", window.location.pathname);
-            setMsg("Signed in with email link — progress restored across devices.");
+            setMsg("Signed in — progress restored across devices.");
           })
           .catch((e: Error) => setErr(e.message))
           .finally(() => setBusy(false));
@@ -50,7 +50,6 @@ export default function FirebaseAuthPanel() {
 
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
     const { user, token } = await syncFirebaseUser(fbUser);
-    // Persist like legacy login does
     try {
       window.localStorage.setItem("viberoom_token", token);
       window.localStorage.setItem("viberoom_uid", user.id);
@@ -63,7 +62,7 @@ export default function FirebaseAuthPanel() {
     try {
       const cred = await signInWithPopup(auth, googleProvider);
       await afterFirebase(cred.user);
-      setMsg("Google sign-in complete — your coins, XP and rooms follow you on any device.");
+      setMsg("Signed in — your coins, XP and Gems follow you.");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
@@ -74,19 +73,16 @@ export default function FirebaseAuthPanel() {
         ? await createUserWithEmailAndPassword(auth, email.trim(), password)
         : await signInWithEmailAndPassword(auth, email.trim(), password);
       await afterFirebase(cred.user);
-      setMsg(create ? "Account created — progress will sync on every device." : "Signed in — progress restored.");
+      setMsg(create ? "Account created." : "Signed in.");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   const handleSendLink = async () => {
     setBusy(true); setErr(null); setMsg(null);
     try {
-      await sendSignInLinkToEmail(auth, email.trim(), {
-        url: `${window.location.origin}/login`,
-        handleCodeInApp: true,
-      });
+      await sendSignInLinkToEmail(auth, email.trim(), { url: `${window.location.origin}/login`, handleCodeInApp: true });
       window.localStorage.setItem("emailForSignIn", email.trim());
-      setMsg("Email link sent — check your inbox (and spam) to sign in on any device.");
+      setMsg("Link sent — check your inbox.");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
@@ -96,7 +92,7 @@ export default function FirebaseAuthPanel() {
       const verifier = getRecaptcha("recaptcha-container");
       const conf = await signInWithPhoneNumber(auth, phone.trim(), verifier);
       setPhoneConfirm(conf);
-      setMsg("SMS code sent — enter it below. Works on any device with your phone.");
+      setMsg("Code sent — enter it below.");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
@@ -106,87 +102,83 @@ export default function FirebaseAuthPanel() {
     try {
       const cred = await phoneConfirm.confirm(code.trim());
       await afterFirebase(cred.user);
-      setMsg("Phone verified — progress synced.");
+      setMsg("Phone verified.");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-[#15151d] p-5">
-      <div className="flex gap-2 overflow-x-auto pb-2">
-        {(["google", "email", "phone", "link"] as const).map((m) => (
-          <button key={m} onClick={() => setMode(m)}
-            className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold ${mode === m ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}>
-            {m === "google" ? "Google" : m === "email" ? "Email + Password" : m === "phone" ? "Phone" : "Email Link"}
-          </button>
-        ))}
+    <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#111113] p-6 shadow-2xl">
+      <div className="text-center">
+        <h2 className="text-lg font-semibold text-white">Sign in to VibeRoom</h2>
+        <p className="mt-1 text-xs text-white/40">Your progress follows you on every device.</p>
       </div>
 
-      {mode === "google" && (
-        <div className="mt-3 space-y-3">
-          <p className="text-xs text-white/50">One tap — same Firebase identity on web & Android (mzn.muse.bestaudioroom). Progress stored in D1 by firebase_uid.</p>
-          <button onClick={handleGoogle} disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white py-3 text-sm font-bold text-black hover:bg-white/85 disabled:opacity-50">
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#4285F4] text-xs font-black text-white">G</span>
-            {busy ? "Connecting…" : "Continue with Google"}
-          </button>
-        </div>
-      )}
+      <button onClick={handleGoogle} disabled={busy}
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-white py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-50">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#4285F4] text-xs font-bold text-white">G</span>
+        Continue with Google
+      </button>
 
-      {mode === "email" && (
-        <div className="mt-3 space-y-3">
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" type="email"
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none" />
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (6+ chars)" type="password"
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none" />
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => handleEmail(false)} disabled={busy || !email || !password}
-              className="rounded-2xl bg-white py-2.5 text-sm font-bold text-black hover:bg-white/85 disabled:opacity-40">Sign in</button>
-            <button onClick={() => handleEmail(true)} disabled={busy || !email || password.length < 6}
-              className="rounded-2xl bg-white/10 py-2.5 text-sm font-bold text-white hover:bg-white/15 disabled:opacity-40">Create account</button>
-          </div>
-        </div>
-      )}
+      <div className="my-5 flex items-center gap-3">
+        <div className="h-px flex-1 bg-white/10" />
+        <span className="text-xs text-white/25">or continue with email</span>
+        <div className="h-px flex-1 bg-white/10" />
+      </div>
 
-      {mode === "link" && (
-        <div className="mt-3 space-y-3">
-          <p className="text-xs text-white/50">Passwordless — we send a link. Open it on any device to restore the same D1 progress.</p>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" type="email"
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none" />
-          <button onClick={handleSendLink} disabled={busy || !email}
-            className="w-full rounded-2xl bg-white py-2.5 text-sm font-bold text-black hover:bg-white/85 disabled:opacity-40">
-            {busy ? "Sending…" : "Send sign-in link"}
-          </button>
+      <div className="space-y-3">
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address"
+          type="email"
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white placeholder:text-white/25 focus:border-white/15 focus:outline-none focus:ring-1 focus:ring-white/10" />
+        <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password"
+          type="password"
+          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white placeholder:text-white/25 focus:border-white/15 focus:outline-none focus:ring-1 focus:ring-white/10" />
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => handleEmail(false)} disabled={busy || !email || !password}
+            className="rounded-xl bg-white/5 py-3 text-sm font-medium text-white hover:bg-white/10 disabled:opacity-30">Sign in</button>
+          <button onClick={() => handleEmail(true)} disabled={busy || !email || password.length < 6}
+            className="rounded-xl bg-white py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-30">Create account</button>
         </div>
-      )}
+      </div>
 
-      {mode === "phone" && (
-        <div className="mt-3 space-y-3">
-          <p className="text-xs text-white/50">Phone auth uses invisible reCAPTCHA. Your phone becomes the cross-device key.</p>
+      <div className="mt-4 flex justify-center gap-4 text-xs">
+        <button onClick={() => setShowPhone((v) => !v)} className="text-white/40 hover:text-white/70 hover:underline">Phone</button>
+        <span className="text-white/10">•</span>
+        <button onClick={() => setShowLink((v) => !v)} className="text-white/40 hover:text-white/70 hover:underline">Email link</button>
+      </div>
+
+      {showPhone && (
+        <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+          <p className="text-xs text-white/40">Phone sign-in — same identity on web & Android.</p>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+15551234567" type="tel"
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none" />
+            className="mt-2 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-white placeholder:text-white/25 focus:outline-none" />
           {!phoneConfirm ? (
             <button onClick={handleSendCode} disabled={busy || !phone}
-              className="w-full rounded-2xl bg-white py-2.5 text-sm font-bold text-black hover:bg-white/85 disabled:opacity-40">
-              {busy ? "Sending…" : "Send SMS code"}
-            </button>
+              className="mt-2 w-full rounded-xl bg-white/10 py-2.5 text-sm font-medium text-white hover:bg-white/15 disabled:opacity-40">Send code</button>
           ) : (
-            <div className="space-y-2">
+            <div className="mt-2 space-y-2">
               <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" inputMode="numeric"
-                className="w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none" />
+                className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-white placeholder:text-white/25 focus:outline-none" />
               <button onClick={handleVerifyCode} disabled={busy || !code}
-                className="w-full rounded-2xl bg-white py-2.5 text-sm font-bold text-black hover:bg-white/85 disabled:opacity-40">
-                Verify & sign in
-              </button>
+                className="w-full rounded-xl bg-white py-2.5 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-40">Verify</button>
             </div>
           )}
           <div id="recaptcha-container" />
         </div>
       )}
 
-      {msg && <p className="mt-3 rounded-xl bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200">{msg}</p>}
-      {err && <p className="mt-3 rounded-xl bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300">{err}</p>}
-      <p className="mt-3 text-center text-[11px] leading-relaxed text-white/35">
-        Security: Firebase verifies the credential, the Worker verifies the ID token (aud=bestaudioroom) via Google tokeninfo, then D1 upserts by <code className="rounded bg-white/10 px-1">firebase_uid</code>. All coins/XP/rooms stay server-side.
+      {showLink && (
+        <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+          <p className="text-xs text-white/40">We’ll send a passwordless link — open it on any device.</p>
+          <button onClick={handleSendLink} disabled={busy || !email}
+            className="mt-2 w-full rounded-xl bg-white/10 py-2.5 text-sm font-medium text-white hover:bg-white/15 disabled:opacity-40">Send link</button>
+        </div>
+      )}
+
+      {msg && <p className="mt-4 rounded-xl bg-emerald-500/10 px-3 py-2 text-center text-xs text-emerald-200">{msg}</p>}
+      {err && <p className="mt-4 rounded-xl bg-red-500/10 px-3 py-2 text-center text-xs text-red-300">{err}</p>}
+
+      <p className="mt-5 text-center text-[10px] leading-relaxed text-white/20">
+        Firebase verifies, Worker verifies <code className="rounded bg-white/10 px-1 py-0.5">aud=bestaudioroom</code> → D1. Coins/Gems/XP server-side.
       </p>
     </div>
   );
