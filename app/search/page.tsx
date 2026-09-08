@@ -66,7 +66,7 @@ export default function SearchPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search rooms or people…"
+          placeholder="Search rooms or people… or unique ID (e.g. MAYA#1842)"
           maxLength={40}
           autoFocus
           className="w-full rounded-2xl border border-white/10 bg-white/5 py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
@@ -112,8 +112,8 @@ export default function SearchPage() {
                   <li key={u.id} className="flex items-center gap-2.5 rounded-2xl border border-white/10 bg-[#15151d] p-3">
                     <UserAvatar name={u.display_name} avatarUrl={u.avatar_url} xp={u.xp} size={36} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-extrabold">{u.display_name}</span>
-                      <span className="block text-xs text-white/40">@{u.username}</span>
+                      <span className="flex items-center gap-1 truncate text-sm font-extrabold">{u.display_name} {u.id_tag && <span className="rounded bg-white/10 px-1.5 py-0.5 text-xs font-bold text-white/60">{u.id_tag}</span>}</span>
+                      <span className="block text-xs text-white/40">@{u.username} • {u.id}</span>
                     </span>
                     <button
                       onClick={() => void toggleFollow(u.id)}

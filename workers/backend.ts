@@ -1079,10 +1079,10 @@ const backend = {
         }
         if (type === "all" || type === "users") {
           const u = await env.DB.prepare(
-            `SELECT id, username, display_name, avatar_url, coins, xp FROM users
-             WHERE username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' LIMIT 8`
+            `SELECT id, username, display_name, avatar_url, coins, gems, xp, id_tag FROM users
+             WHERE username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR id_tag LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' LIMIT 8`
           )
-            .bind(like, like)
+            .bind(like, like, like, like)
             .all();
           users = u.results ?? [];
         }
@@ -1482,7 +1482,7 @@ const backend = {
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
         const like = `%${q}%`;
-        const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, coins, gems, xp, email, phone FROM users WHERE username LIKE ? OR display_name LIKE ? OR id = ? LIMIT 10`).bind(like, like, q).all() : await env.DB.prepare(`SELECT id, username, display_name, coins, gems, xp FROM users ORDER BY updated_at DESC LIMIT 10`).all();
+        const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ? OR email LIKE ? LIMIT 10`).bind(like, like, like, q, like).all() : await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp FROM users ORDER BY updated_at DESC LIMIT 10`).all();
         return json({ ok: true, users: rows.results ?? [] });
       }
 

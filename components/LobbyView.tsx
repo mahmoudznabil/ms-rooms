@@ -10,7 +10,7 @@ import { EmptyState, Spinner } from "@/components/bits";
 const CATEGORIES = ["All", "Chill", "Music", "Karaoke", "Games", "Community", "Chat"] as const;
 
 export default function LobbyView() {
-  const [rooms, setRooms] = useState<LobbyRoom[]>(MOCK_ROOMS);
+  const [rooms, setRooms] = useState<LobbyRoom[]>([]);
   const [live, setLive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState<(typeof CATEGORIES)[number]>("All");
@@ -19,12 +19,10 @@ export default function LobbyView() {
   const load = useCallback(async () => {
     try {
       const data = await fetchRooms();
-      if (data.length > 0) {
-        setRooms(data);
-        setLive(true);
-      }
+      setRooms(data);
+      setLive(true);
     } catch {
-      // Offline or backend hiccup — keep the last good list.
+      // Keep empty — rooms only opened by users (no fake seeded rooms)
     } finally {
       setLoading(false);
     }
@@ -100,13 +98,13 @@ export default function LobbyView() {
         ))}
       </div>
 
-      {loading && rooms === MOCK_ROOMS ? (
+      {loading ? (
         <Spinner />
       ) : filtered.length === 0 ? (
         <div className="mt-4">
           <EmptyState
-            title="No rooms match"
-            hint={rooms.length === 0 ? "Be the first to go live right now." : "Try another search or category."}
+            title={rooms.length === 0 ? "No live rooms yet" : "No rooms match"}
+            hint={rooms.length === 0 ? "No empty rooms are left open — be the first to open one for others to join." : "Try another search or category."}
           />
           <Link
             href="/create"

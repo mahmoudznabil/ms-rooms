@@ -201,25 +201,11 @@ INSERT OR IGNORE INTO pricing_tiers (id, tier, standard_coins, standard_price_ce
   ('tier-pro', 'pro', 100000, 2000, 110000, 2000, 10.0),
   ('tier-enterprise', 'enterprise', 500000, 10000, 550000, 10000, 10.0);
 
-INSERT OR IGNORE INTO users (id, username, display_name, avatar_url, frame_style, id_tag, bio, xp, level, coins, streak)
+INSERT OR IGNORE INTO users (id, username, display_name, avatar_url, frame_style, id_tag, bio, xp, level, coins, gems, streak)
 VALUES
-  ('user-maya', 'mayarose', 'Maya Rose', 'https://i.pravatar.cc/200?img=5', 'aurora', 'MAYA#1842', 'Finding the good frequencies.', 2400, 12, 2480, 5),
-  ('user-omar', 'omarsound', 'Omar Sound', 'https://i.pravatar.cc/200?img=12', 'neon', 'OMAR#936', 'Producer, listener, night owl.', 1180, 7, 920, 2),
-  ('user-jules', 'julesafterdark', 'Jules After Dark', 'https://i.pravatar.cc/200?img=9', 'glow', 'JULES#428', 'Late-night conversations.', 860, 5, 1540, 3);
+  ('user-maya', 'mayarose', 'Maya Rose', 'https://i.pravatar.cc/200?img=5', 'aurora', 'MAYA#1842', 'Finding the good frequencies.', 2400, 12, 2480, 150, 5),
+  ('user-omar', 'omarsound', 'Omar Sound', 'https://i.pravatar.cc/200?img=12', 'neon', 'OMAR#936', 'Producer, listener, night owl.', 1180, 7, 920, 80, 2),
+  ('user-jules', 'julesafterdark', 'Jules After Dark', 'https://i.pravatar.cc/200?img=9', 'glow', 'JULES#428', 'Late-night conversations.', 860, 5, 1540, 40, 3);
 
-INSERT OR IGNORE INTO rooms
-  (id, slug, title, description, host_user_id, category, status, locked, capacity, listener_count, speaker_count, cover_color)
-VALUES
-  ('room-late-check-in', 'late-check-in', 'Late Check-In', 'A soft place to land after a long day.', 'user-maya', 'Chill', 'live', 0, 8, 1842, 5, '#5e6579'),
-  ('room-behind-the-beat', 'behind-the-beat', 'Behind the Beat', 'Unreleased loops, honest opinions, zero skips.', 'user-omar', 'Music', 'live', 0, 8, 936, 4, '#7c5948'),
-  ('room-tiny-joys', 'tiny-joys', 'Tiny Joys Club', 'Share the small things keeping you going.', 'user-jules', 'Community', 'live', 0, 12, 428, 3, '#526d64'),
-  ('room-night-owl', 'night-owl', 'Night Owl Radio', 'Lo-fi beats for sleepless minds.', 'user-maya', 'Chill', 'live', 1, 4, 312, 2, '#4a5568');
-
-INSERT OR IGNORE INTO seats (room_id, seat_index, user_id, role, is_muted, is_locked, joined_at)
-VALUES
-  ('room-late-check-in', 0, 'user-maya', 'host', 0, 0, CURRENT_TIMESTAMP),
-  ('room-late-check-in', 1, 'user-omar', 'speaker', 0, 0, CURRENT_TIMESTAMP),
-  ('room-late-check-in', 2, 'user-jules', 'speaker', 1, 0, CURRENT_TIMESTAMP),
-  ('room-late-check-in', 3, NULL, 'listener', 0, 0, NULL),
-  ('room-behind-the-beat', 0, 'user-omar', 'host', 0, 0, CURRENT_TIMESTAMP),
-  ('room-tiny-joys', 0, 'user-jules', 'host', 0, 0, CURRENT_TIMESTAMP);
+-- No seeded rooms: rooms are only opened by users for others to join (per spec)
+-- Rooms are created via POST /api/rooms and appear in lobby only when live

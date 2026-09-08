@@ -34,6 +34,7 @@ export interface ApiUser {
   gems: number;
   xp: number;
   level?: number;
+  id_tag?: string;
   created_at: string;
   updated_at: string;
 }
