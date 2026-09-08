@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Coins, Home, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset } from "lucide-react";
@@ -32,6 +32,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const ready = useSession((s) => s.ready);
   const user = useSession((s) => s.user);
   const boot = useSession((s) => s.boot);
+  const [isAdmin, setIsAdmin] = useState(false);
+  // Only Marc + Mahmoud see Admin — hidden from public
+  const ADMIN_ALLOW = ["mahmoudnabil03@gmail.com", "marc@viberoom.app", "marc@gmail.com"];
+  useEffect(() => {
+    const check = async () => {
+      const email = (user as unknown as { email?: string | null })?.email ?? null;
+      if (email && ADMIN_ALLOW.includes(email.toLowerCase())) { setIsAdmin(true); return; }
+      const tok = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
+      if (!tok) { setIsAdmin(false); return; }
+      try {
+        const { adminMe } = await import("@/lib/api");
+        const r = await adminMe(tok);
+        setIsAdmin(r.admin.role === "master_admin");
+      } catch { setIsAdmin(false); }
+    };
+    void check();
+  }, [user]);
 
   useEffect(() => {
     void boot();
@@ -52,6 +69,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const publicPaths = ["/", "/login"];
   if (!user && !publicPaths.includes(pathname)) return <LoginView />;
   // Landing (/) is public — let guests see the portfolio and still offer login CTA inside it
+  const visibleNav = NAV.filter((n) => n.href !== "/admin" || isAdmin);
+  // Direct /admin access without admin token → show admin login page, but hide tab from public nav
 
   return (
     <div className="app-shell">
@@ -64,7 +83,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <span className="text-lg font-black tracking-tight">VibeRoom</span>
         </Link>
         <nav className="flex-1 space-y-1" aria-label="Primary">
-          {NAV.map((n) => (
+          {visibleNav.map((n) => (
             <Link
               key={n.href}
               href={n.href}

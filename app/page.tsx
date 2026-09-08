@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Apple, Smartphone, Gamepad2, Mic, Crown, Gift, Star, Quote, Shield, Zap, Users, Headset } from "lucide-react";
+import { Apple, Smartphone, Gamepad2, Mic, Crown, Gift, Star, Quote, Shield, Users, Headset } from "lucide-react";
+import { useSession } from "@/stores/useSession";
+import LobbyView from "@/components/LobbyView";
 
-// Portfolio landing — public homepage inspired by Fomi Party but web-first.
-// Main differentiator callout: Login/Signup + usable Web UI + embedded games (vs app-only).
-
+// Portfolio landing — public homepage for guests; authenticated users see live lobby directly
 const REVIEWS = [
   { name: "Alya R.", stars: 5, text: "Finally a voice party I can join from my laptop! No install, just click and talk. Rooms feel alive.", date: "2 days ago", tag: "Web UI" },
   { name: "Khaled M.", stars: 5, text: "Gifts and PK battles are crazy fun. I earned gems hosting and my XP actually unlocks frames.", date: "1 week ago", tag: "Host" },
@@ -33,9 +33,16 @@ function Stars({ n }: { n: number }) {
 }
 
 export default function Home() {
+  const ready = useSession((s) => s.ready);
+  const user = useSession((s) => s.user);
+
+  if (!ready) return <div className="flex justify-center py-20 text-sm text-white/40">Loading…</div>;
+
+  // Once signed in → no portfolio / no login CTA — straight to live app
+  if (user) return <LobbyView />;
+
   return (
     <div className="space-y-10 pb-6">
-      {/* NAV CTA bar — visible even when AppShell shows sidebar */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm font-black">V</span>
@@ -48,7 +55,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* HERO */}
       <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-violet-600/20 via-[#15151d] to-fuchsia-600/10 p-6 sm:p-8">
         <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-fuchsia-500/20 blur-3xl" aria-hidden />
         <div className="absolute -left-20 -bottom-20 h-64 w-64 rounded-full bg-violet-500/15 blur-3xl" aria-hidden />
@@ -82,7 +88,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* WHO WE ARE */}
       <section className="rounded-3xl border border-white/10 bg-[#15151d] p-6">
         <p className="text-xs font-bold uppercase tracking-widest text-violet-300">Who we are</p>
         <h2 className="mt-1 text-xl font-black tracking-tight">A small team obsessed with voice.</h2>
@@ -93,7 +98,7 @@ export default function Home() {
           <div className="rounded-2xl bg-white/[0.04] p-4">
             <Mic size={18} className="text-violet-300" />
             <p className="mt-2 text-sm font-bold">Cloudflare Realtime</p>
-            <p className="text-xs text-white/50">Low-latency voice on Cloudflare Calls SFU + TURN. 8–12 seats, mute/lock, host controls. No external media servers.</p>
+            <p className="text-xs text-white/50">Low-latency voice on Cloudflare Calls SFU + TURN. 8–12 seats, mute/lock, host controls.</p>
           </div>
           <div className="rounded-2xl bg-white/[0.04] p-4">
             <Gamepad2 size={18} className="text-fuchsia-300" />
@@ -112,7 +117,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* SCREENSHOTS */}
       <section>
         <div className="flex items-end justify-between">
           <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Screenshots</h2>
@@ -134,7 +138,6 @@ export default function Home() {
         <p className="mt-2 text-center text-xs text-white/30">Swipe lobby → take a mic seat → send gifts → play — all inside the browser.</p>
       </section>
 
-      {/* WEB GAME HIGHLIGHT */}
       <section className="rounded-3xl border border-fuchsia-400/20 bg-gradient-to-br from-fuchsia-500/10 to-violet-500/10 p-6">
         <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-fuchsia-200"><Gamepad2 size={13} /> Our main difference: usable web game</p>
         <h3 className="mt-1 text-lg font-black">Voice + play, no download.</h3>
@@ -145,7 +148,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* REVIEWS — 5 and 4 stars like Fomi Party */}
       <section className="rounded-3xl border border-white/10 bg-[#15151d] p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Reviews</h2>
@@ -170,7 +172,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* DOWNLOAD */}
       <section id="download" className="rounded-3xl border border-white/10 bg-gradient-to-br from-violet-600/15 to-fuchsia-600/10 p-6 text-center">
         <h2 className="text-xl font-black tracking-tight">Get the app — or just use the web.</h2>
         <p className="mx-auto mt-1 max-w-xl text-sm text-white/60">Native when you want it, web when you need it. Same Firebase login, same coins/gems/XP on D1. 10% more value than market on every recharge.</p>
@@ -191,7 +192,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* FOOTER meta */}
       <footer className="rounded-3xl border border-white/5 bg-black/20 p-4 text-center text-xs leading-relaxed text-white/35">
         <p className="flex flex-wrap items-center justify-center gap-2">
           <span className="flex items-center gap-1"><Headset size={12} /> Support</span>
