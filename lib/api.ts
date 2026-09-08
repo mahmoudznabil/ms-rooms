@@ -367,3 +367,38 @@ export async function listTickets(params: { user_id?: string; adminToken?: strin
   if (params.adminToken) headers.Authorization = `Bearer ${params.adminToken}`;
   return req(`/api/support/tickets${q.toString() ? `?${q}` : ""}`, { headers, cache: "no-store" });
 }
+
+export async function adminFirebaseLogin(idToken: string): Promise<{ admin: AdminUser; token: string }> {
+  return req(`/api/admin/firebase`, { method: "POST", headers: { Authorization: `Bearer ${idToken}` } });
+}
+export interface TeamAdmin { id: string; username: string; display_name: string; role: string; firebase_uid: string | null; created_at: string; last_login: string | null; }
+export async function adminTeamList(token: string): Promise<{ team: TeamAdmin[] }> {
+  return req(`/api/admin/team`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function adminTeamCreate(token: string, input: { username: string; display_name: string; role: "finance" | "support"; password: string }): Promise<{ id: string }> {
+  return req(`/api/admin/team`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function adminTeamRemove(token: string, id: string): Promise<void> {
+  await req(`/api/admin/team/${encodeURIComponent(id)}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+}
+export interface SafetyReport { id: string; reporter_id: string; target_id: string; reason: string; room_id: string | null; status: string; handled_by: string | null; created_at: string; reporter_name: string | null; target_name: string | null; }
+export async function listReports(token: string, status?: string): Promise<{ reports: SafetyReport[] }> {
+  return req(`/api/reports${status ? `?status=${status}` : ""}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function resolveReport(token: string, id: string, status: "reviewing" | "resolved" | "dismissed"): Promise<void> {
+  await req(`/api/reports/${encodeURIComponent(id)}`, { method: "PATCH", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) });
+}
+export async function adminEndRoom(token: string, slug: string): Promise<void> {
+  await req(`/api/admin/rooms/end`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ slug }) });
+}
+export async function updateTicketStatus(token: string, id: string, status: "open" | "pending" | "resolved" | "closed"): Promise<void> {
+  await req(`/api/support/tickets/${encodeURIComponent(id)}`, { method: "PATCH", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) });
+}
+export async function ticketDetail(id: string): Promise<{ ticket: SupportTicket; replies: Array<{ id: string; message: string; author_admin_id: string | null; author_user_id: string | null; created_at: string }>; user: { id: string; username: string; coins: number; gems: number; xp: number } | null }> {
+  return req(`/api/support/tickets/${encodeURIComponent(id)}`, { cache: "no-store" });
+}
+export async function replyTicket(id: string, input: { message: string; adminToken?: string; user_id?: string }): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (input.adminToken) headers.Authorization = `Bearer ${input.adminToken}`;
+  await req(`/api/support/tickets/${encodeURIComponent(id)}/reply`, { method: "POST", headers, body: JSON.stringify({ message: input.message, user_id: input.user_id }) });
+}

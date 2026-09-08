@@ -71,6 +71,14 @@ function newId(prefix: string): string {
 // local/preview and edge failures don't block Google/Phone/Email sign-in. D1 binding still ensures progress follows firebase_uid.
 const FIREBASE_PROJECT_ID = "bestaudioroom";
 const FIREBASE_APP_ID = "1:628489866765:web:a75db602122ef083700f44";
+
+/** THE admin: the only identity allowed to bootstrap master_admin via Firebase. */
+const MASTER_ADMIN_EMAIL = "marcamgadalfonse2004@gmail.com";
+
+async function sha256hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const part = token.split(".")[1];
@@ -179,6 +187,15 @@ const backend = {
             "GET /api/leaderboard",
             "GET /api/search",
             "POST /api/reports",
+            "GET /api/reports",
+            "PATCH /api/reports/:id",
+            "POST /api/admin/firebase",
+            "POST /api/admin/login",
+            "GET /api/admin/me",
+            "GET /api/admin/team",
+            "POST /api/admin/team",
+            "DELETE /api/admin/team/:id",
+            "POST /api/admin/rooms/end",
             "GET /api/turn",
             "POST /api/calls/session",
           ],
@@ -1208,8 +1225,10 @@ const backend = {
         const admin = await env.DB.prepare(`SELECT * FROM admin_users WHERE username = ? COLLATE NOCASE`).bind(username).first();
         if (!admin) return json({ ok: false, error: "Invalid credentials." }, 401);
         const row = admin as Record<string, unknown>;
-        // Demo: seeded hash is placeholder; accept Admin123! for those, otherwise compare directly
-        const ok = password === "Admin123!" || password === (row.password_hash as string);
+        // Strict check only: SHA-256(password) must match the stored hash.
+        // (The old "Admin123!" backdoor was removed; seeded placeholder
+        // hashes are disabled. Master provisions team passwords explicitly.)
+        const ok = (await sha256hex(password)) === (row.password_hash as string);
         if (!ok) return json({ ok: false, error: "Invalid credentials." }, 401);
         await ensureAdminTables();
         const token = `admin_${newId("t").replace("t-", "")}`;
@@ -1223,6 +1242,199 @@ const backend = {
         const adm = await getAdminFromToken(token);
         if (!adm) return json({ ok: false, error: "Invalid admin session." }, 401);
         return json({ ok: true, admin: { id: adm.id, username: adm.username, display_name: adm.display_name, role: adm.role } });
+      }
+
+      // ---- Master bootstrap: THE admin signs in with Google, no password ----
+      // Only the hardcoded master email can ever mint a master_admin session
+      // this way. Everyone else gets 403, even with a valid Firebase token.
+      if (path === "/api/admin/firebase" && request.method === "POST") {
+        const idToken = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        if (!idToken) return json({ ok: false, error: "Missing Firebase ID token." }, 401);
+        const verified = await verifyFirebaseIdToken(idToken);
+        if (!verified) return json({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
+        const email = (verified.email ?? "").trim().toLowerCase();
+        if (email !== MASTER_ADMIN_EMAIL) {
+          return json({ ok: false, error: "This Google account is not the game admin." }, 403);
+        }
+        await ensureAdminTables();
+        let adm = await env.DB.prepare(
+          `SELECT * FROM admin_users WHERE firebase_uid = ? OR username = 'marco'`
+        )
+          .bind(verified.uid)
+          .first();
+        if (!adm) {
+          await env.DB.prepare(
+            `INSERT INTO admin_users (id, username, display_name, role, password_hash, firebase_uid)
+             VALUES ('admin-marco', 'marco', 'Marco (Owner)', 'master_admin', 'DISABLED-FIREBASE-ONLY', ?)`
+          )
+            .bind(verified.uid)
+            .run();
+          adm = await env.DB.prepare(`SELECT * FROM admin_users WHERE id = 'admin-marco'`).first();
+        } else {
+          const row = adm as Record<string, unknown>;
+          await env.DB.prepare(
+            `UPDATE admin_users SET firebase_uid = ?, role = 'master_admin', last_login = CURRENT_TIMESTAMP WHERE id = ?`
+          )
+            .bind(verified.uid, row.id)
+            .run();
+          adm = await env.DB.prepare(`SELECT * FROM admin_users WHERE id = ?`).bind(row.id).first();
+        }
+        const row = adm as Record<string, unknown>;
+        const token = `admin_${newId("t").replace("t-", "")}`;
+        await env.DB.prepare(
+          `INSERT INTO admin_sessions (id, admin_id, role, expires_at) VALUES (?, ?, 'master_admin', datetime('now', '+12 hours'))`
+        )
+          .bind(token, row.id)
+          .run();
+        return json({
+          ok: true,
+          admin: { id: row.id, username: row.username, display_name: row.display_name, role: "master_admin" },
+          token,
+        });
+      }
+
+      // ---- Team management (master only) ----
+      if (path === "/api/admin/team" && request.method === "GET") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        const team = await env.DB.prepare(
+          `SELECT id, username, display_name, role, firebase_uid, created_at, last_login FROM admin_users ORDER BY created_at ASC`
+        ).all();
+        return json({ ok: true, team: team.results ?? [] });
+      }
+
+      if (path === "/api/admin/team" && request.method === "POST") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        const body = await readJson<{ username?: unknown; display_name?: unknown; role?: unknown; password?: unknown }>(request);
+        const username = typeof body?.username === "string" ? body.username.trim().toLowerCase() : "";
+        const displayName = typeof body?.display_name === "string" ? body.display_name.trim().slice(0, 40) : "";
+        const role = typeof body?.role === "string" ? body.role : "";
+        const password = typeof body?.password === "string" ? body.password : "";
+        if (!/^[a-z0-9_.-]{3,20}$/.test(username)) return badRequest("username must be 3-20 chars (a-z, 0-9, _ . -).");
+        if (!displayName) return badRequest("display_name is required.");
+        if (role !== "finance" && role !== "support") return badRequest("role must be finance or support.");
+        if (password.length < 8 || password.length > 100) return badRequest("password must be 8-100 characters.");
+        const exists = await env.DB.prepare(`SELECT id FROM admin_users WHERE username = ? COLLATE NOCASE`).bind(username).first();
+        if (exists) return conflict("That admin username is taken.");
+        const id = newId("admin");
+        await env.DB.prepare(
+          `INSERT INTO admin_users (id, username, display_name, role, password_hash) VALUES (?, ?, ?, ?, ?)`
+        )
+          .bind(id, username, displayName, role, await sha256hex(password))
+          .run();
+        return json({ ok: true, id, username, role }, 201);
+      }
+
+      const teamDelMatch = path.match(/^\/api\/admin\/team\/([^/]+)$/);
+      if (teamDelMatch && request.method === "DELETE") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        const id = decodeURIComponent(teamDelMatch[1]);
+        if (id === adm.id) return badRequest("You cannot remove your own admin account.");
+        const target = await env.DB.prepare(`SELECT * FROM admin_users WHERE id = ?`).bind(id).first();
+        if (!target) return notFound("Admin not found.");
+        if ((target as Record<string, unknown>).role === "master_admin") {
+          return json({ ok: false, error: "Master Admin accounts cannot be removed." }, 403);
+        }
+        await env.DB.prepare(`DELETE FROM admin_sessions WHERE admin_id = ?`).bind(id).run();
+        await env.DB.prepare(`DELETE FROM admin_users WHERE id = ?`).bind(id).run();
+        return json({ ok: true, removed: true });
+      }
+
+      // ---- Moderation: safety reports ----
+      if (path === "/api/reports" && request.method === "GET") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "support") {
+          return json({ ok: false, error: "Support or Master Admin only." }, 403);
+        }
+        const status = url.searchParams.get("status") ?? "";
+        const rows = status
+          ? await env.DB.prepare(
+              `SELECT r.*, ru.username AS reporter_name, tu.username AS target_name
+               FROM reports r LEFT JOIN users ru ON ru.id = r.reporter_id LEFT JOIN users tu ON tu.id = r.target_id
+               WHERE r.status = ? ORDER BY r.created_at DESC LIMIT 50`
+            ).bind(status).all()
+          : await env.DB.prepare(
+              `SELECT r.*, ru.username AS reporter_name, tu.username AS target_name
+               FROM reports r LEFT JOIN users ru ON ru.id = r.reporter_id LEFT JOIN users tu ON tu.id = r.target_id
+               ORDER BY r.created_at DESC LIMIT 50`
+            ).all();
+        return json({ ok: true, reports: rows.results ?? [] });
+      }
+
+      const reportPatchMatch = path.match(/^\/api\/reports\/([^/]+)$/);
+      if (reportPatchMatch && request.method === "PATCH") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "support") {
+          return json({ ok: false, error: "Support or Master Admin only." }, 403);
+        }
+        const body = await readJson<{ status?: unknown }>(request);
+        const status = typeof body?.status === "string" ? body.status : "";
+        if (status !== "reviewing" && status !== "resolved" && status !== "dismissed") {
+          return badRequest("status must be reviewing, resolved or dismissed.");
+        }
+        await env.DB.prepare(`UPDATE reports SET status = ?, handled_by = ? WHERE id = ?`)
+          .bind(status, adm.id, decodeURIComponent(reportPatchMatch[1]))
+          .run();
+        return json({ ok: true, status });
+      }
+
+      // ---- Moderation: end any live room ----
+      if (path === "/api/admin/rooms/end" && request.method === "POST") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "support") {
+          return json({ ok: false, error: "Support or Master Admin only." }, 403);
+        }
+        const body = await readJson<{ slug?: unknown }>(request);
+        const slug = typeof body?.slug === "string" ? body.slug : "";
+        if (!slug) return badRequest("slug is required.");
+        const room = await env.DB.prepare(`SELECT id, status FROM rooms WHERE slug = ? OR id = ?`)
+          .bind(slug, slug)
+          .first();
+        if (!room) return notFound("Room not found.");
+        await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .bind((room as Record<string, unknown>).id)
+          .run();
+        return json({ ok: true, ended: true });
+      }
+
+      // ---- Support ticket status ----
+      const ticketStatusMatch = path.match(/^\/api\/support\/tickets\/([^/]+)$/);
+      if (ticketStatusMatch && request.method === "PATCH") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "support") {
+          return json({ ok: false, error: "Support or Master Admin only." }, 403);
+        }
+        const body = await readJson<{ status?: unknown }>(request);
+        const status = typeof body?.status === "string" ? body.status : "";
+        if (!["open", "pending", "resolved", "closed"].includes(status)) {
+          return badRequest("Invalid status.");
+        }
+        await env.DB.prepare(
+          `UPDATE support_tickets SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+        )
+          .bind(status, decodeURIComponent(ticketStatusMatch[1]))
+          .run();
+        return json({ ok: true, status });
       }
 
       if (path === "/api/admin/recharge" && request.method === "POST") {
