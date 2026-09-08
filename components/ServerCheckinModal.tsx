@@ -5,7 +5,7 @@ import { Coins, Gift, X, Flame } from "lucide-react";
 import { checkin } from "@/lib/api";
 import { useSession } from "@/stores/useSession";
 
-const SEEN_KEY = "viberoom_checkin_seen";
+const SEEN_KEY = "MS-ROOMS_checkin_seen";
 
 function todayKey(): string {
   return new Date().toDateString();

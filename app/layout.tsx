@@ -4,12 +4,12 @@ import AppShell from "@/components/AppShell";
 import RegisterSW from "@/components/RegisterSW";
 
 export const metadata: Metadata = {
-  title: "VibeRoom | Audio, together",
+  title: "MS-ROOMS | Live Voice • Neon Audio Parties",
   description:
-    "Live voice party rooms, gifts, games, moments and friends — entirely on Cloudflare.",
+    "MS-ROOMS — live voice party rooms, gifts, games, moments and friends. Neon audio, 8–12 seats, on Cloudflare.",
   manifest: "/manifest.json",
-  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "VibeRoom" },
-  icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "MS-ROOMS" },
+  icons: { icon: "/ms-rooms-logo.svg", apple: "/ms-rooms-logo.svg" },
 };
 
 export const viewport: Viewport = {

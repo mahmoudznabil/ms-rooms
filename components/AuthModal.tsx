@@ -34,7 +34,7 @@ export default function AuthModal({ open, onClose }: { open: boolean; onClose: (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="modal-pop w-full max-w-sm rounded-3xl border border-white/10 bg-[#17171f] p-6 shadow-2xl">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">Join VibeRoom</h2>
+          <h2 className="text-lg font-bold">Join MS-ROOMS</h2>
           <button onClick={onClose} aria-label="Close" className="rounded-full p-1 text-white/50 hover:bg-white/10 hover:text-white">
             <X size={16} />
           </button>

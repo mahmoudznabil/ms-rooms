@@ -34,7 +34,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const boot = useSession((s) => s.boot);
   const [isAdmin, setIsAdmin] = useState(false);
   // Only Marc + Mahmoud see Admin — hidden from public
-  const ADMIN_ALLOW = ["mahmoudnabil03@gmail.com", "marc@viberoom.app", "marc@gmail.com"];
+  const ADMIN_ALLOW = ["mahmoudnabil03@gmail.com", "marc@ms-rooms.app", "marc@gmail.com", "marc@msrooms.app"];
   useEffect(() => {
     const check = async () => {
       const email = (user as unknown as { email?: string | null })?.email ?? null;
@@ -59,7 +59,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <p className="text-2xl font-black tracking-tight">VibeRoom</p>
+          <div className="flex justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-16 w-16 rounded-2xl object-contain" />
+          </div>
+          <p className="mt-3 text-2xl font-black tracking-tight">MS-ROOMS</p>
           <p className="mt-1 text-sm text-white/45">Tuning the frequency…</p>
         </div>
       </div>
@@ -77,10 +81,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
       {/* Desktop sidebar */}
       <aside className="app-sidebar">
         <Link href="/" className="flex items-center gap-2 px-2 py-4">
-          <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-lg font-black">
-            V
-          </span>
-          <span className="text-lg font-black tracking-tight">VibeRoom</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-9 w-9 rounded-xl object-contain bg-[#0a0a12] ring-1 ring-white/10" />
+          <span className="text-lg font-black tracking-tight">MS-ROOMS</span>
         </Link>
         <nav className="flex-1 space-y-1" aria-label="Primary">
           {visibleNav.map((n) => (
@@ -124,10 +127,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {/* Mobile top bar */}
         <header className="app-topbar">
           <Link href="/" className="flex items-center gap-1.5">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-base font-black">
-              V
-            </span>
-            <span className="font-black tracking-tight">VibeRoom</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain bg-[#0a0a12] ring-1 ring-white/10" />
+            <span className="font-black tracking-tight">MS-ROOMS</span>
           </Link>
           <div className="flex items-center gap-2">
             <Link href="/search" aria-label="Search" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">

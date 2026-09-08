@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800" role="img" aria-label="MS ROOMS logo">
+  <defs>
+    <linearGradient id="g-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="100%" stop-color="#7C4DFF"/>
+    </linearGradient>
+    <linearGradient id="g-pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C4DFF"/>
+      <stop offset="100%" stop-color="#FF00E6"/>
+    </linearGradient>
+    <linearGradient id="g-mic" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="50%" stop-color="#7C4DFF"/>
+      <stop offset="100%" stop-color="#FF00E6"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="coloredBlur"/>
+      <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- background -->
+  <rect width="800" height="800" rx="0" fill="#020205"/>
+  <!-- outer ring -->
+  <circle cx="400" cy="360" r="280" fill="none" stroke="url(#g-blue)" stroke-width="3" opacity="0.9" filter="url(#glow)"/>
+  <circle cx="400" cy="360" r="260" fill="none" stroke="url(#g-pink)" stroke-width="1.5" opacity="0.4"/>
+  <!-- sound waves left -->
+  <g stroke="#00E5FF" stroke-linecap="round" opacity="0.9">
+    <line x1="80" y1="360" x2="80" y2="320" stroke-width="10" />
+    <line x1="105" y1="360" x2="105" y2="300" stroke-width="12" />
+    <line x1="130" y1="360" x2="130" y2="285" stroke-width="14" />
+    <line x1="155" y1="360" x2="155" y2="295" stroke-width="12" />
+    <line x1="180" y1="360" x2="180" y2="315" stroke-width="10" />
+  </g>
+  <g stroke="#FF00E6" stroke-linecap="round" opacity="0.9">
+    <line x1="620" y1="360" x2="620" y2="315" stroke-width="10" />
+    <line x1="645" y1="360" x2="645" y2="295" stroke-width="12" />
+    <line x1="670" y1="360" x2="670" y2="285" stroke-width="14" />
+    <line x1="695" y1="360" x2="695" y2="300" stroke-width="12" />
+    <line x1="720" y1="360" x2="720" y2="320" stroke-width="10" />
+  </g>
+  <!-- microphone -->
+  <g filter="url(#glow)">
+    <rect x="330" y="170" width="140" height="260" rx="70" fill="url(#g-mic)" stroke="white" stroke-opacity="0.15" stroke-width="1"/>
+    <!-- mic grille lines -->
+    <rect x="350" y="220" width="100" height="10" rx="5" fill="black" opacity="0.35"/>
+    <rect x="350" y="250" width="100" height="10" rx="5" fill="black" opacity="0.35"/>
+    <rect x="350" y="280" width="100" height="10" rx="5" fill="black" opacity="0.35"/>
+    <rect x="350" y="310" width="100" height="10" rx="5" fill="black" opacity="0.35"/>
+    <rect x="350" y="340" width="100" height="10" rx="5" fill="black" opacity="0.35"/>
+    <rect x="350" y="370" width="100" height="10" rx="5" fill="black" opacity="0.35"/>
+    <!-- stand -->
+    <path d="M 340 430 Q 400 500 460 430 L 460 470 Q 400 530 340 470 Z" fill="none" stroke="url(#g-blue)" stroke-width="6"/>
+    <ellipse cx="400" cy="540" rx="70" ry="18" fill="#0a0a12" stroke="url(#g-blue)" stroke-width="2"/>
+  </g>
+  <!-- MS letters 3D -->
+  <g font-family="Arial Black, sans-serif" font-weight="900" text-anchor="middle" filter="url(#glow)">
+    <text x="310" y="480" font-size="210" fill="url(#g-blue)" stroke="rgba(255,255,255,0.15)" stroke-width="1" style="paint-order: stroke">M</text>
+    <text x="490" y="480" font-size="210" fill="url(#g-pink)" stroke="rgba(255,255,255,0.15)" stroke-width="1" style="paint-order: stroke">S</text>
+  </g>
+  <!-- small icons -->
+  <g>
+    <circle cx="150" cy="210" r="32" fill="#0a0a1a" stroke="url(#g-blue)" stroke-width="2"/>
+    <path d="M150 215 Q150 205 142 210 L150 195 Q158 210 166 210 Q158 215 150 225 Q142 215 150 215" fill="#7C4DFF" opacity="0.9"/>
+    <circle cx="150" cy="210" r="4" fill="white"/>
+    <circle cx="165" cy="210" r="4" fill="white"/>
+    <circle cx="180" cy="210" r="4" fill="white"/>
+    <!-- speech bubble -->
+    <path d="M120 180 Q120 160 150 160 Q180 160 180 180 Q180 210 150 230 L135 215 Q120 210 120 180" fill="none" stroke="url(#g-blue)" stroke-width="2"/>
+  </g>
+  <g>
+    <circle cx="650" cy="230" r="38" fill="#0a0a1a" stroke="url(#g-pink)" stroke-width="2"/>
+    <circle cx="650" cy="220" r="10" fill="white" opacity="0.9"/>
+    <path d="M630 250 Q650 230 670 250 Q670 270 650 280 Q630 270 630 250" fill="white" opacity="0.8"/>
+  </g>
+  <g>
+    <circle cx="140" cy="520" r="34" fill="#0a0a1a" stroke="url(#g-blue)" stroke-width="2"/>
+    <circle cx="140" cy="512" r="8" fill="#FF7BAC"/>
+    <path d="M122 535 Q140 520 158 535 Q158 550 140 560 Q122 550 122 535" fill="#FF7BAC" opacity="0.85"/>
+  </g>
+  <g>
+    <circle cx="660" cy="530" r="28" fill="#0a0a1a" stroke="url(#g-pink)" stroke-width="2"/>
+    <circle cx="660" cy="522" r="7" fill="white" opacity="0.9"/>
+    <path d="M645 540 Q660 530 675 540 Q675 552 660 558 Q645 552 645 540" fill="white" opacity="0.8"/>
+  </g>
+  <!-- ROOMS pill -->
+  <g filter="url(#glow)">
+    <rect x="170" y="590" width="460" height="85" rx="42.5" fill="#040414" stroke="url(#g-blue)" stroke-width="2"/>
+    <rect x="170" y="590" width="460" height="85" rx="42.5" fill="none" stroke="url(#g-pink)" stroke-width="1" opacity="0.6"/>
+    <!-- sound icons inside pill -->
+    <g stroke="#00E5FF" stroke-linecap="round" opacity="0.9">
+      <line x1="220" y1="632" x2="220" y2="622" stroke-width="5"/>
+      <line x1="232" y1="632" x2="232" y2="612" stroke-width="6"/>
+      <line x1="244" y1="632" x2="244" y2="605" stroke-width="7"/>
+    </g>
+    <text x="400" y="642" font-family="Arial, sans-serif" font-size="48" font-weight="800" letter-spacing="14" fill="white" text-anchor="middle">ROOMS</text>
+    <g stroke="#FF00E6" stroke-linecap="round" opacity="0.9">
+      <line x1="556" y1="632" x2="556" y2="605" stroke-width="7"/>
+      <line x1="568" y1="632" x2="568" y2="612" stroke-width="6"/>
+      <line x1="580" y1="632" x2="580" y2="622" stroke-width="5"/>
+    </g>
+  </g>
+</svg>

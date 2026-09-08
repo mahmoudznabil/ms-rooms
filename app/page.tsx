@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { Apple, Smartphone, Gamepad2, Mic, Crown, Gift, Star, Quote, Shield, Users, Headset } from "lucide-react";
 import { useSession } from "@/stores/useSession";
-import LobbyView from "@/components/LobbyView";
 
 // Portfolio landing — public homepage for guests; authenticated users see live lobby directly
 const REVIEWS = [
@@ -38,8 +37,7 @@ export default function Home() {
 
   if (!ready) return <div className="flex justify-center py-20 text-sm text-white/40">Loading…</div>;
 
-  // Once signed in → no portfolio / no login CTA — straight to live app
-  if (user) return <LobbyView />;
+  const isAuthed = !!user;
 
   return (
     <div className="space-y-10 pb-6">
@@ -47,7 +45,10 @@ export default function Home() {
       <section className="relative overflow-hidden rounded-2xl border border-white/5 bg-[#0f0f10] p-6 sm:p-10">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:24px_24px] opacity-30" aria-hidden />
         <div className="relative text-center">
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-white text-sm font-black text-black">V</div>
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-black/40 ring-1 ring-white/10">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-12 w-12 object-contain" />
+          </div>
           <h1 className="mx-auto mt-4 max-w-2xl text-3xl font-semibold leading-tight tracking-tight text-white sm:text-4xl">
             Voice parties, live in your browser.
           </h1>
@@ -60,12 +61,22 @@ export default function Home() {
               <Mic size={14} />
             </div>
             <span className="flex-1 text-left text-sm text-white/30">Try “Join a chill room…”</span>
-            <Link href="/login" className="shrink-0 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">
-              Login
-            </Link>
+            {isAuthed ? (
+              <Link href="/lobby" className="shrink-0 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">
+                Go to lobby
+              </Link>
+            ) : (
+              <Link href="/login" className="shrink-0 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">
+                Login
+              </Link>
+            )}
           </div>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-            <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">Login / Sign up</Link>
+            {isAuthed ? (
+              <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">Open lobby — {user?.display_name}</Link>
+            ) : (
+              <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">Login / Sign up</Link>
+            )}
             <a href="#download" className="rounded-full border border-white/10 bg-white/5 px-5 py-2.5 text-sm font-medium text-white/70 hover:bg-white/10">
               <span className="inline-flex items-center gap-1.5"><Apple size={14} /> iOS</span>
             </a>
@@ -85,7 +96,7 @@ export default function Home() {
         <p className="text-xs font-bold uppercase tracking-widest text-violet-300">Who we are</p>
         <h2 className="mt-1 text-xl font-black tracking-tight">A small team obsessed with voice.</h2>
         <p className="mt-2 text-sm leading-relaxed text-white/60">
-          We’re VibeRoom — a studio portfolio turning “Fomi Party” vibes into an open web. We build live audio homes where every voice deserves to be heard: intimate rooms, playful gifts, fair 70% host gems, and XP that actually unlocks frames and leaderboard crowns. Small team, real support (see <Link href="/support" className="underline decoration-violet-400/50">Support Desk</Link>), and a Master Admin panel that keeps recharges and tickets honest.
+          We’re MS-ROOMS — a studio portfolio turning “Fomi Party” vibes into an open web. We build live audio homes where every voice deserves to be heard: intimate rooms, playful gifts, fair 70% host gems, and XP that actually unlocks frames and leaderboard crowns. Small team, real support (see <Link href="/support" className="underline decoration-violet-400/50">Support Desk</Link>), and a Master Admin panel that keeps recharges and tickets honest.
         </p>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-2xl bg-white/[0.04] p-4">
@@ -134,9 +145,13 @@ export default function Home() {
       <section className="rounded-3xl border border-fuchsia-400/20 bg-gradient-to-br from-fuchsia-500/10 to-violet-500/10 p-6">
         <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-fuchsia-200"><Gamepad2 size={13} /> Our main difference: usable web game</p>
         <h3 className="mt-1 text-lg font-black">Voice + play, no download.</h3>
-        <p className="mt-1 text-sm text-white/60">Fomi Party keeps games inside the APK. VibeRoom runs <span className="font-bold text-white">Ludo dice + Reaction tap</span> directly in the room pane — state syncs locally, never breaks the mobile frame. Try it after you <Link href="/room?slug=late-check-in" className="underline">join a room</Link>.</p>
+        <p className="mt-1 text-sm text-white/60">Fomi Party keeps games inside the APK. MS-ROOMS runs <span className="font-bold text-white">Ludo dice + Reaction tap</span> directly in the room pane — state syncs locally, never breaks the mobile frame. Try it after you <Link href="/room?slug=late-check-in" className="underline">join a room</Link>.</p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Link href="/login" className="rounded-full bg-white px-4 py-2 text-xs font-bold text-black">Login to play</Link>
+          {isAuthed ? (
+            <Link href="/lobby" className="rounded-full bg-white px-4 py-2 text-xs font-bold text-black">Play now — open lobby</Link>
+          ) : (
+            <Link href="/login" className="rounded-full bg-white px-4 py-2 text-xs font-bold text-black">Login to play</Link>
+          )}
           <Link href="/lobby" className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold text-white">Browse rooms</Link>
         </div>
       </section>
@@ -180,7 +195,11 @@ export default function Home() {
         </div>
         <p className="mt-2 text-xs text-white/30">Placeholders until store review — web app is live now at <Link href="/lobby" className="underline">/lobby</Link>. APK uses `android/app/google-services.json`.</p>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
-          <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Create account — free 100 coins</Link>
+          {isAuthed ? (
+            <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Open lobby — live now</Link>
+          ) : (
+            <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Create account — free 100 coins</Link>
+          )}
           <Link href="/wallet" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">See 10% bonus pricing</Link>
         </div>
       </section>
@@ -190,7 +209,7 @@ export default function Home() {
           <span className="flex items-center gap-1"><Headset size={12} /> Support</span>
           <Link href="/support" className="underline">Help desk</Link> • <Link href="/admin" className="underline">Admin</Link> • <Link href="/wallet" className="underline">Pricing</Link> • Firebase Auth: phone, email, email-link, Google → D1 `firebase_uid` sync.
         </p>
-        <p className="mt-1">© VibeRoom — portfolio + live voice. Built for web-first parties. Fomi Party is a trademark of its owner; we’re an independent homage with a usable web game.</p>
+        <p className="mt-1">© MS-ROOMS — portfolio + live voice. Built for web-first parties. Fomi Party is a trademark of its owner; we’re an independent homage with a usable web game.</p>
       </footer>
     </div>
   );

@@ -51,8 +51,8 @@ export default function FirebaseAuthPanel() {
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
     const { user, token } = await syncFirebaseUser(fbUser);
     try {
-      window.localStorage.setItem("viberoom_token", token);
-      window.localStorage.setItem("viberoom_uid", user.id);
+      window.localStorage.setItem("MS-ROOMS_token", token);
+      window.localStorage.setItem("MS-ROOMS_uid", user.id);
     } catch {}
     useSession.setState({ user, token, ready: true, authError: null });
   };
@@ -109,7 +109,7 @@ export default function FirebaseAuthPanel() {
   return (
     <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#111113] p-6 shadow-2xl">
       <div className="text-center">
-        <h2 className="text-lg font-semibold text-white">Sign in to VibeRoom</h2>
+        <h2 className="text-lg font-semibold text-white">Sign in to MS-ROOMS</h2>
         <p className="mt-1 text-xs text-white/40">Your progress follows you on every device.</p>
       </div>
 
