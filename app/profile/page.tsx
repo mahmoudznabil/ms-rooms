@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Gift, LogOut, Mic, Pencil, Sparkles, Users } from "lucide-react";
+import { Gift, LogOut, Mic, Pencil, Sparkles, Users, Trash2, AlertTriangle } from "lucide-react";
 import { fetchProfile, fetchSocial, patchUser, type ProfileStats, type SocialInfo } from "@/lib/api";
 import { AVATAR_CHOICES, levelProgress } from "@/lib/levels";
 import { useSession } from "@/stores/useSession";
@@ -19,6 +19,8 @@ export default function ProfilePage() {
   const [avatar, setAvatar] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -43,6 +45,25 @@ export default function ProfilePage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
+
+  const deleteAccount = async () => {
+    setDeleteBusy(true);
+    try {
+      const res = await fetch("/api/users/me/delete", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Failed to delete account");
+      // Redirect to home after successful deletion
+      window.location.href = "/";
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete account");
+    } finally {
+      setDeleteBusy(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   if (!user) return null;
   const prog = levelProgress(user.xp);
@@ -155,6 +176,54 @@ export default function ProfilePage() {
         </>
       )}
 
+      <button
+        onClick={logout}
+        className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-white/5 py-3 text-sm font-bold text-white/70 transition hover:bg-white/10 hover:text-white"
+      >
+        <LogOut size={15} /> Switch account
+      </button>
+      <button
+        onClick={() => setShowDeleteConfirm(true)}
+        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-red-400/30 bg-red-500/10 py-3 text-sm font-bold text-red-300 transition hover:bg-red-500/20"
+      >
+        <Trash2 size={15} /> Delete account
+      </button>
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="modal-pop w-full max-w-sm rounded-3xl border border-white/10 bg-[#17171f] p-6 text-center shadow-2xl">
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="rounded-full p-1 text-white/50 transition hover:bg-white/10 hover:text-white"
+              >
+                <AlertTriangle size={16} />
+              </button>
+            </div>
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-500/15 text-red-300">
+              <Trash2 size={28} />
+            </div>
+            <h2 className="text-lg font-bold text-white">Delete your account?</h2>
+            <p className="mt-1 text-sm text-white/60">
+              This will permanently delete your account and all data. This action cannot be undone.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 rounded-2xl bg-white/10 py-3 text-sm font-semibold text-white transition hover:bg-white/15"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deleteAccount}
+                disabled={deleteBusy}
+                className="flex-1 rounded-2xl bg-red-500 py-3 text-sm font-bold text-white transition hover:bg-red-400 disabled:opacity-50"
+              >
+                {deleteBusy ? "Deleting…" : "Yes, delete my account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <button
         onClick={logout}
         className="mt-6 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-white/5 py-3 text-sm font-bold text-white/70 transition hover:bg-white/10 hover:text-white"

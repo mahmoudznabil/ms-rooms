@@ -34,7 +34,7 @@ export default function AdminPage() {
       const saved = localStorage.getItem(ADMIN_TOKEN_KEY);
       if (!saved) return;
       setToken(saved);
-      adminMe(saved)
+      adminMe()
         .then((r) => setAdmin(r.admin))
         .catch(() => {
           localStorage.removeItem(ADMIN_TOKEN_KEY);

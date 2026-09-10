@@ -43,7 +43,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       if (!tok) { setIsAdmin(false); return; }
       try {
         const { adminMe } = await import("@/lib/api");
-        const r = await adminMe(tok);
+        const r = await adminMe();
         setIsAdmin(r.admin.role === "master_admin");
       } catch { setIsAdmin(false); }
     };

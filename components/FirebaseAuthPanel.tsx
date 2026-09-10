@@ -36,8 +36,8 @@ export default function FirebaseAuthPanel() {
         setBusy(true);
         signInWithEmailLink(auth, storedEmail, window.location.href)
           .then(async (cred) => {
-            const { user, token } = await syncFirebaseUser(cred.user);
-            useSession.setState({ user, token, ready: true, authError: null });
+            const { user } = await syncFirebaseUser(cred.user);
+            useSession.setState({ user, ready: true, authError: null });
             try { window.localStorage.removeItem("emailForSignIn"); } catch {}
             window.history.replaceState({}, "", window.location.pathname);
             setMsg("Signed in — progress restored across devices.");
@@ -49,12 +49,8 @@ export default function FirebaseAuthPanel() {
   }, []);
 
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
-    const { user, token } = await syncFirebaseUser(fbUser);
-    try {
-      window.localStorage.setItem("MS-ROOMS_token", token);
-      window.localStorage.setItem("MS-ROOMS_uid", user.id);
-    } catch {}
-    useSession.setState({ user, token, ready: true, authError: null });
+    const { user } = await syncFirebaseUser(fbUser);
+    useSession.setState({ user, ready: true, authError: null });
   };
 
   const handleGoogle = async () => {

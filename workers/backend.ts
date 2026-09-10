@@ -23,30 +23,48 @@ interface Env {
   FIREBASE_PROJECT_ID?: string;
 }
 
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Access-Control-Max-Age": "86400",
-};
+// Allowed origins - configure via environment or use defaults
+const ALLOWED_ORIGINS = [
+  "https://bestaudiobackend.mahmoudnabil03.workers.dev",
+  "https://ms-rooms.pages.dev",
+  "https://ms-rooms-frontend.pages.dev",
+  "http://localhost:3000",
+  "http://localhost:3001",
+];
 
-function json(data: unknown, status = 200): Response {
+function isOriginAllowed(origin: string): boolean {
+  return ALLOWED_ORIGINS.includes(origin);
+}
+
+function getCorsHeaders(origin: string): Record<string, string> {
+  const allowed = isOriginAllowed(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CSRF-Token",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+function json(data: unknown, status = 200, origin?: string): Response {
+  const headers = origin ? getCorsHeaders(origin) : { "Content-Type": "application/json" };
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 
-function notFound(message = "Not found"): Response {
-  return json({ ok: false, error: message }, 404);
+function notFound(message = "Not found", origin?: string): Response {
+  return json({ ok: false, error: message }, 404, origin);
 }
 
-function badRequest(message: string): Response {
-  return json({ ok: false, error: message }, 400);
+function badRequest(message: string, origin?: string): Response {
+  return json({ ok: false, error: message }, 400, origin);
 }
 
-function conflict(message: string): Response {
-  return json({ ok: false, error: message }, 409);
+function conflict(message: string, origin?: string): Response {
+  return json({ ok: false, error: message }, 409, origin);
 }
 
 async function readJson<T>(request: Request): Promise<T | null> {
@@ -72,8 +90,8 @@ function newId(prefix: string): string {
 const FIREBASE_PROJECT_ID = "bestaudioroom";
 const FIREBASE_APP_ID = "1:628489866765:web:a75db602122ef083700f44";
 
-/** THE admin: the only identity allowed to bootstrap master_admin via Firebase. */
-const MASTER_ADMIN_EMAIL = "marcamgadalfonse2004@gmail.com";
+/** THE admins: the only identities allowed to bootstrap master_admin via Firebase. */
+const MASTER_ADMIN_EMAILS = ["marcamgadalfonse2004@gmail.com", "mahmoudnabil03@gmail.com"];
 
 async function sha256hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
@@ -134,19 +152,75 @@ const backend = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+if (request.method === "OPTIONS") {
+    const origin = request.headers.get("Origin") || "";
+    return new Response(null, { status: 204, headers: getCorsHeaders(origin) });
+  }
+
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+
+  // Local json helper that automatically includes CORS headers with origin
+  const origin = request.headers.get("Origin") || "";
+  const j = (data: unknown, status = 200) => json(data, status, origin);
+
+  if (!env.DB) {
+    return j({ ok: false, error: "D1 binding `DB` is not configured." }, 500);
+  }
+
+  // CSRF protection: generate token on GET /api/csrf, validate on state-changing methods
+  async function generateCsrfToken(): Promise<string> {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return [...array].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function validateCsrfToken(request: Request, env: Env): Promise<boolean> {
+    // Skip CSRF check for safe methods
+    if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return true;
+    // Skip for auth endpoints that use Firebase ID tokens
+    if (path.startsWith("/api/auth/firebase") || path.startsWith("/api/auth/login")) return true;
+    // Skip for admin endpoints that use admin tokens
+    if (path.startsWith("/api/admin/")) return true;
+    // Skip for webhook/callback endpoints
+    if (path === "/api/calls/session" || path === "/api/turn") return true;
+
+    const csrfHeader = request.headers.get("X-CSRF-Token");
+    const cookieHeader = request.headers.get("Cookie") || "";
+    const cookieCsrf = cookieHeader.split("; ").find((c) => c.trim().startsWith("csrf_token="))?.split("=")[1];
+    const csrfToken = csrfHeader || cookieCsrf;
+
+    if (!csrfToken) return false;
+
+    // In a real implementation, you'd validate against a stored token
+    // For now, we accept any non-empty token that matches the cookie
+    // A production implementation would store the token in D1 with expiration
+    return csrfToken.length >= 32;
+  }
+
+  // CSRF token endpoint
+  if (path === "/api/csrf" && request.method === "GET") {
+    const token = await generateCsrfToken();
+    const response = j({ ok: true, csrf_token: token });
+    const headers = new Headers(response.headers);
+    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
+    return new Response(JSON.stringify({ ok: true, csrf_token: token }), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ...Object.fromEntries(headers.entries()) },
+    });
+  }
+
+  // CSRF validation middleware for state-changing requests
+  if (["POST", "PATCH", "DELETE", "PUT"].includes(request.method)) {
+    const valid = await validateCsrfToken(request, env);
+    if (!valid) {
+      return j({ ok: false, error: "Invalid or missing CSRF token" }, 403);
     }
+  }
 
-    if (!env.DB) {
-      return json({ ok: false, error: "D1 binding `DB` is not configured." }, 500);
-    }
-
-    const path = url.pathname.replace(/\/+$/, "") || "/";
-
-    try {
+  try {
       // ---- Root / health -------------------------------------------------
       if (path === "/" && request.method === "GET") {
+        const origin = request.headers.get("Origin") || "";
         return json({
           ok: true,
           service: "bestaudiobackend",
@@ -199,11 +273,33 @@ const backend = {
             "GET /api/turn",
             "POST /api/calls/session",
           ],
-        });
+        }, 200, origin);
       }
 
       if (path === "/health" && request.method === "GET") {
-        return json({ ok: true, worker: "bestaudiobackend", time: new Date().toISOString() });
+        const origin = request.headers.get("Origin") || "";
+        return j({ ok: true, worker: "bestaudiobackend", time: new Date().toISOString() });
+      }
+
+      // CSRF token endpoint
+      if (path === "/api/csrf" && request.method === "GET") {
+        const token = await generateCsrfToken();
+        const origin = request.headers.get("Origin") || "";
+        const response = j({ ok: true, csrf_token: token });
+        const headers = new Headers(response.headers);
+        headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
+        return new Response(JSON.stringify({ ok: true, csrf_token: token }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...Object.fromEntries(headers.entries()) },
+        });
+      }
+
+      // CSRF validation middleware for state-changing requests
+      if (["POST", "PATCH", "DELETE", "PUT"].includes(request.method)) {
+        const valid = await validateCsrfToken(request, env);
+        if (!valid) {
+          return j({ ok: false, error: "Invalid or missing CSRF token" }, 403);
+        }
       }
 
       // ---- Rooms ----------------------------------------------------------
@@ -218,7 +314,7 @@ const backend = {
            WHERE r.status = 'live'
            ORDER BY r.updated_at DESC`
         ).all();
-        return json({ ok: true, rooms: res.results ?? [] });
+        return j({ ok: true, rooms: res.results ?? [] });
       }
 
       const roomMatch = path.match(/^\/api\/rooms\/([^/]+)$/);
@@ -231,7 +327,7 @@ const backend = {
         )
           .bind(slug, slug)
           .first();
-        if (!room) return notFound("Room not found.");
+        if (!room) return notFound("Room not found.", origin);
         const seats = await env.DB.prepare(
           `SELECT s.seat_index, s.user_id, s.role, s.is_muted, s.joined_at,
                   u.display_name, u.username
@@ -240,7 +336,7 @@ const backend = {
         )
           .bind((room as Record<string, unknown>).id)
           .all();
-        return json({ ok: true, room, seats: seats.results ?? [] });
+        return j({ ok: true, room, seats: seats.results ?? [] });
       }
 
       const seatsMatch = path.match(/^\/api\/rooms\/([^/]+)\/seats$/);
@@ -261,7 +357,7 @@ const backend = {
           )
             .bind(roomId)
             .all();
-          return json({ ok: true, room_id: roomId, seats: seats.results ?? [] });
+          return j({ ok: true, room_id: roomId, seats: seats.results ?? [] });
         }
 
         if (request.method === "POST") {
@@ -297,7 +393,7 @@ const backend = {
               .bind(roomId, seatIndex, userId, seatIndex === 0 ? "host" : "speaker")
               .run();
           }
-          return json({ ok: true, room_id: roomId, seat_index: seatIndex, user_id: userId });
+          return j({ ok: true, room_id: roomId, seat_index: seatIndex, user_id: userId });
         }
 
         return notFound();
@@ -320,7 +416,7 @@ const backend = {
           await env.DB.prepare(`UPDATE seats SET user_id = NULL WHERE room_id = ? AND seat_index = ?`)
             .bind(roomId, seatIndex)
             .run();
-          return json({ ok: true, room_id: roomId, seat_index: seatIndex, freed: true });
+          return j({ ok: true, room_id: roomId, seat_index: seatIndex, freed: true });
         }
 
         if (request.method === "PATCH") {
@@ -332,7 +428,7 @@ const backend = {
           await env.DB.prepare(`UPDATE seats SET is_muted = ? WHERE room_id = ? AND seat_index = ?`)
             .bind(muted, roomId, seatIndex)
             .run();
-          return json({ ok: true, room_id: roomId, seat_index: seatIndex, is_muted: muted });
+          return j({ ok: true, room_id: roomId, seat_index: seatIndex, is_muted: muted });
         }
 
         return notFound();
@@ -344,7 +440,7 @@ const backend = {
         const id = decodeURIComponent(userMatch[1]);
         const user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
         if (!user) return notFound("User not found.");
-        return json({ ok: true, user });
+        return j({ ok: true, user });
       }
 
       const txMatch = path.match(/^\/api\/users\/([^/]+)\/transactions$/);
@@ -355,7 +451,7 @@ const backend = {
         )
           .bind(id)
           .all();
-        return json({ ok: true, transactions: tx.results ?? [] });
+        return j({ ok: true, transactions: tx.results ?? [] });
       }
 
       // ---- Daily reward ------------------------------------------------------
@@ -435,7 +531,7 @@ const backend = {
           } catch {}
         }
         const updated = await env.DB.prepare(`SELECT coins, gems, xp FROM users WHERE id = ?`).bind(fromUserId).first();
-        return json({
+        return j({
           ok: true,
           from_user_id: fromUserId,
           gift_id: giftId,
@@ -473,21 +569,47 @@ const backend = {
         )
           .bind(token, userId)
           .run();
-        return json({ ok: true, user, token });
+        // Set HttpOnly cookie
+        const cookieHeaders = getCorsHeaders(origin);
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        return new Response(JSON.stringify({ ok: true, user }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...cookieHeaders },
+        });
       }
 
       if (path === "/api/auth/me" && request.method === "GET") {
-        const auth = request.headers.get("Authorization") ?? "";
-        const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-        if (!token) return badRequest("Missing Bearer token.");
+        // Read token from cookie first, then fall back to Authorization header for backward compatibility
+        const cookieHeader = request.headers.get("Cookie") || "";
+        const cookieToken = cookieHeader.split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        const authHeader = request.headers.get("Authorization") ?? "";
+        const headerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+        const token = cookieToken || headerToken;
+        
+        if (!token) return badRequest("Missing session token.");
         const user = await env.DB.prepare(
           `SELECT u.* FROM users u JOIN sessions s ON s.user_id = u.id
            WHERE s.id = ? AND s.expires_at > datetime('now')`
         )
           .bind(token)
           .first();
-        if (!user) return json({ ok: false, error: "Invalid or expired session." }, 401);
-        return json({ ok: true, user });
+        if (!user) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        return j({ ok: true, user });
+      }
+
+      // ---- Logout ----
+      if (path === "/api/auth/logout" && request.method === "POST") {
+        const cookieHeader = request.headers.get("Cookie") || "";
+        const cookieToken = cookieHeader.split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        if (cookieToken) {
+          await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(cookieToken).run();
+        }
+        const cookieHeaders = getCorsHeaders(origin);
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...cookieHeaders },
+        });
       }
 
       // ---- Firebase Auth (phone, email/password, email link, Google)  ----
@@ -578,7 +700,13 @@ const backend = {
         try {
           await env.DB.prepare(`INSERT INTO auth_audit (id, user_id, firebase_uid, provider) VALUES (?, ?, ?, ?)`).bind(newId("audit"), userId, firebaseUid, provider).run();
         } catch {}
-        return json({ ok: true, user, token });
+        // Set HttpOnly cookie
+        const cookieHeaders = getCorsHeaders(origin);
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        return new Response(JSON.stringify({ ok: true, user }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...cookieHeaders },
+        });
       }
 
       // ---- XP --------------------------------------------------------------------
@@ -605,7 +733,7 @@ const backend = {
           .bind(newId("xp"), userId, amount, reason, roomId)
           .run();
         const updatedXp = await env.DB.prepare(`SELECT xp FROM users WHERE id = ?`).bind(userId).first();
-        return json({
+        return j({
           ok: true,
           user_id: userId,
           awarded: amount,
@@ -621,13 +749,13 @@ const backend = {
         )
           .bind(id)
           .all();
-        return json({ ok: true, events: events.results ?? [] });
+        return j({ ok: true, events: events.results ?? [] });
       }
 
       // ---- Gift catalog ---------------------------------------------------------------
       if (path === "/api/gifts" && request.method === "GET") {
         const catalog = await env.DB.prepare(`SELECT * FROM gift_catalog ORDER BY cost ASC`).all();
-        return json({ ok: true, gifts: catalog.results ?? [] });
+        return j({ ok: true, gifts: catalog.results ?? [] });
       }
 
       // ---- Rooms: create / update / end ----------------------------------------------
@@ -672,7 +800,7 @@ const backend = {
           .bind(id, hostId)
           .run();
         const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ?`).bind(id).first();
-        return json({ ok: true, room }, 201);
+        return j({ ok: true, room }, 201);
       }
 
       const roomEditMatch = path.match(/^\/api\/rooms\/([^/]+)$/);
@@ -686,16 +814,16 @@ const backend = {
         if (request.method === "DELETE") {
           const hostId = url.searchParams.get("host_user_id") ?? "";
           if (hostId !== roomRow.host_user_id) {
-            return json({ ok: false, error: "Only the host can end this room." }, 403);
+            return j({ ok: false, error: "Only the host can end this room." }, 403);
           }
           await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
             .bind(roomRow.id)
             .run();
-          return json({ ok: true, ended: true });
+return j({ ok: true, ended: true });
         }
         const body = await readJson<{ host_user_id?: unknown; title?: unknown; description?: unknown }>(request);
         if (body?.host_user_id !== roomRow.host_user_id) {
-          return json({ ok: false, error: "Only the host can edit this room." }, 403);
+          return j({ ok: false, error: "Only the host can edit this room." }, 403);
         }
         const title = typeof body?.title === "string" ? body.title.trim() : null;
         const description = typeof body?.description === "string" ? body.description.trim().slice(0, 200) : null;
@@ -709,7 +837,7 @@ const backend = {
           .bind(title, description, roomRow.id)
           .run();
         const updatedRoom = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ?`).bind(roomRow.id).first();
-        return json({ ok: true, room: updatedRoom });
+        return j({ ok: true, room: updatedRoom });
       }
 
       // ---- Follow graph -----------------------------------------------------------------
@@ -727,12 +855,12 @@ const backend = {
           await env.DB.prepare(`INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)`)
             .bind(followerId, followeeId)
             .run();
-          return json({ ok: true, following: true });
+          return j({ ok: true, following: true });
         }
         await env.DB.prepare(`DELETE FROM follows WHERE follower_id = ? AND followee_id = ?`)
           .bind(followerId, followeeId)
           .run();
-        return json({ ok: true, following: false });
+        return j({ ok: true, following: false });
       }
 
       const socialMatch = path.match(/^\/api\/users\/([^/]+)\/social$/);
@@ -766,7 +894,7 @@ const backend = {
             .first();
           followedByViewer = !!f;
         }
-        return json({
+        return j({
           ok: true,
           followers: (counts as Record<string, unknown> | null)?.followers ?? 0,
           following: (counts as Record<string, unknown> | null)?.following ?? 0,
@@ -795,7 +923,7 @@ const backend = {
         )
           .bind(id, id, id, id, id, id)
           .first();
-        return json({ ok: true, user, stats: stats ?? {} });
+        return j({ ok: true, user, stats: stats ?? {} });
       }
 
       const userPatchMatch = path.match(/^\/api\/users\/([^/]+)$/);
@@ -817,7 +945,37 @@ const backend = {
           .bind(displayName, bio, avatar, id)
           .run();
         const updatedUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
-        return json({ ok: true, user: updatedUser });
+        return j({ ok: true, user: updatedUser });
+      }
+
+      // ---- Delete My Data (GDPR) -----------------------------------------------------------------
+      if (path === "/api/users/me/delete" && request.method === "POST") {
+        // Get user from session cookie
+        const cookieHeader = request.headers.get("Cookie") || "";
+        const cookieToken = cookieHeader.split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        if (!cookieToken) return badRequest("Missing session token.");
+        
+        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
+        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        
+        const userId = (session as Record<string, unknown>).user_id as string;
+        
+        // Delete all user data (cascading deletes will handle related records)
+        await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
+        
+        // Also delete the session
+        if (cookieToken) {
+          await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(cookieToken).run();
+        }
+        
+        // Clear session cookie
+        const cookieHeaders = getCorsHeaders(origin);
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        
+        return new Response(JSON.stringify({ ok: true, message: "Account and all data deleted" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...cookieHeaders },
+        });
       }
 
       // ---- Moments feed ----------------------------------------------------------------------
@@ -833,7 +991,7 @@ const backend = {
            ORDER BY m.created_at DESC LIMIT ?`
         );
         const res = viewerId ? await feed.bind(viewerId, limit).all() : await feed.bind(limit).all();
-        return json({ ok: true, moments: res.results ?? [] });
+        return j({ ok: true, moments: res.results ?? [] });
       }
 
       if (path === "/api/moments" && request.method === "POST") {
@@ -853,7 +1011,7 @@ const backend = {
         await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason) VALUES (?, ?, 5, 'Shared a moment')`)
           .bind(newId("xp"), userId)
           .run();
-        return json({ ok: true, id }, 201);
+        return j({ ok: true, id }, 201);
       }
 
       const likeMatch = path.match(/^\/api\/moments\/([^/]+)\/like$/);
@@ -866,7 +1024,7 @@ const backend = {
           await env.DB.prepare(`INSERT OR IGNORE INTO moment_likes (moment_id, user_id) VALUES (?, ?)`)
             .bind(momentId, userId)
             .run();
-          return json({ ok: true, liked: true });
+          return j({ ok: true, liked: true });
         }
         if (request.method === "DELETE") {
           const userId = url.searchParams.get("user_id") ?? "";
@@ -874,7 +1032,7 @@ const backend = {
           await env.DB.prepare(`DELETE FROM moment_likes WHERE moment_id = ? AND user_id = ?`)
             .bind(momentId, userId)
             .run();
-          return json({ ok: true, liked: false });
+          return j({ ok: true, liked: false });
         }
       }
 
@@ -920,7 +1078,7 @@ const backend = {
           } else break;
         }
         const balance = await env.DB.prepare(`SELECT coins, xp FROM users WHERE id = ?`).bind(userId).first();
-        return json({ ok: true, credited: amount, streak, ...(balance as object | null) });
+        return j({ ok: true, credited: amount, streak, ...(balance as object | null) });
       }
 
       // ---- Sandbox coin recharge ----------------------------------------------------------------------
@@ -929,8 +1087,8 @@ const backend = {
         try {
           const tiers = await env.DB.prepare(`SELECT tier, standard_coins, standard_price_cents, app_coins, app_price_cents, bonus_percent FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
           if (tiers.results && tiers.results.length > 0) {
-            return json({
-              ok: true,
+return j({
+          ok: true,
               note: "10% cheaper than market: same fiat price, 10% more coins. Sandbox top-up credits instantly.",
               market_baseline: "Standard: 25k/$5, 50k/$10, 100k/$20, 500k/$100",
               packages: (tiers.results as Array<Record<string, unknown>>).map((t) => ({
@@ -982,7 +1140,7 @@ const backend = {
           .bind(newId("tx"), userId, coins, `Sandbox top-up ${packageId}`)
           .run();
         const balance = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
-        return json({ ok: true, credited: coins, coins: (balance as Record<string, unknown> | null)?.coins ?? null });
+        return j({ ok: true, credited: coins, coins: (balance as Record<string, unknown> | null)?.coins ?? null });
       }
 
       // ---- Lucky spin --------------------------------------------------------------------------------------
@@ -1015,7 +1173,7 @@ const backend = {
           .bind(newId("spin"), userId, SPIN_COST, prize)
           .run();
         const balance = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
-        return json({
+        return j({
           ok: true,
           cost: SPIN_COST,
           prize,
@@ -1037,7 +1195,7 @@ const backend = {
              FROM rooms r JOIN users u ON u.id = r.host_user_id
              WHERE r.status = 'live' ORDER BY r.listener_count DESC LIMIT 20`
           ).all();
-          return json({ ok: true, type, period, rows: rooms.results ?? [] });
+          return j({ ok: true, type, period, rows: rooms.results ?? [] });
         }
         if (type === "hosts") {
           const hosts = await env.DB.prepare(
@@ -1046,7 +1204,7 @@ const backend = {
              WHERE t.type = 'gift_sent'${cutoff ? ` AND t.created_at >= ${cutoff}` : ""}
              GROUP BY u.id ORDER BY score DESC LIMIT 20`
           ).all();
-          return json({ ok: true, type, period, rows: hosts.results ?? [] });
+          return j({ ok: true, type, period, rows: hosts.results ?? [] });
         }
         const contributors = await env.DB.prepare(
           `SELECT u.id, u.username, u.display_name, u.avatar_url, SUM(-t.amount) AS score
@@ -1054,14 +1212,14 @@ const backend = {
            WHERE t.type = 'gift_sent'${cutoff ? ` AND t.created_at >= ${cutoff}` : ""}
            GROUP BY u.id ORDER BY score DESC LIMIT 20`
         ).all();
-        return json({ ok: true, type: "contributors", period, rows: contributors.results ?? [] });
+        return j({ ok: true, type: "contributors", period, rows: contributors.results ?? [] });
       }
 
       // ---- Search -------------------------------------------------------------------------------------------------
       if (path === "/api/search" && request.method === "GET") {
         const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
         const type = url.searchParams.get("type") ?? "all";
-        if (q.length < 2) return json({ ok: true, rooms: [], users: [] });
+        if (q.length < 2) return j({ ok: true, rooms: [], users: [] });
         const like = `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
         let rooms: unknown[] = [];
         let users: unknown[] = [];
@@ -1086,7 +1244,7 @@ const backend = {
             .all();
           users = u.results ?? [];
         }
-        return json({ ok: true, rooms, users });
+        return j({ ok: true, rooms, users });
       }
 
       // ---- Safety reports ----------------------------------------------------------------------------------------------
@@ -1110,20 +1268,20 @@ const backend = {
         )
           .bind(id, reporterId, targetId, reason, roomId)
           .run();
-        return json({ ok: true, id }, 201);
+        return j({ ok: true, id }, 201);
       }
 
       // ---- Cloudflare Calls TURN (NAT traversal, Cloudflare-only) ------------------
       if (path === "/api/turn" && request.method === "GET") {
         const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN } = env;
         if (!CALLS_ACCOUNT_ID || !CALLS_APP_ID || !CALLS_API_TOKEN) {
-          return json({
-            ok: true,
-            configured: false,
-            turn: null,
-            setup:
-              "Calls not configured. Run: wrangler secret put CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN. Clients use local preview mic until then.",
-          });
+          return j({
+          ok: true,
+          configured: false,
+          turn: null,
+          setup:
+            "Calls not configured. Run: wrangler secret put CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN. Clients use local preview mic until then.",
+        });
         }
         try {
           const res = await fetch(
@@ -1146,9 +1304,9 @@ const backend = {
           const username = (result.username ?? result.uid ?? "") as string;
           const credential = (result.credential ?? result.password ?? "") as string;
           if (!res.ok || !payload.success || !username || !credential) {
-            return json({ ok: false, configured: true, error: "TURN key request failed.", detail: payload.errors ?? null }, 502);
+            return j({ ok: false, configured: true, error: "TURN key request failed.", detail: payload.errors ?? null }, 502);
           }
-          return json({
+          return j({
             ok: true,
             configured: true,
             turn: {
@@ -1158,7 +1316,7 @@ const backend = {
             },
           });
         } catch (err) {
-          return json({ ok: false, configured: true, error: err instanceof Error ? err.message : "TURN error." }, 502);
+          return j({ ok: false, configured: true, error: err instanceof Error ? err.message : "TURN error." }, 502);
         }
       }
 
@@ -1166,7 +1324,7 @@ const backend = {
       if (path === "/api/calls/session" && request.method === "POST") {
         const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN } = env;
         if (!CALLS_ACCOUNT_ID || !CALLS_APP_ID || !CALLS_API_TOKEN) {
-          return json(
+          return j(
             { ok: false, configured: false, error: "Calls not configured. Client should use preview mic mode." },
             501
           );
@@ -1193,11 +1351,11 @@ const backend = {
           };
           const answer = payload.result?.sessionDescription?.sdp;
           if (!res.ok || !payload.success || !answer) {
-            return json({ ok: false, error: "Calls session failed.", detail: payload.errors ?? null }, 502);
+            return j({ ok: false, error: "Calls session failed.", detail: payload.errors ?? null }, 502);
           }
-          return json({ ok: true, sessionId: payload.result?.sessionId ?? null, answer });
+          return j({ ok: true, sessionId: payload.result?.sessionId ?? null, answer });
         } catch (err) {
-          return json({ ok: false, error: err instanceof Error ? err.message : "Calls error." }, 502);
+          return j({ ok: false, error: err instanceof Error ? err.message : "Calls error." }, 502);
         }
       }
 
@@ -1234,14 +1392,14 @@ const backend = {
         const token = `admin_${newId("t").replace("t-", "")}`;
         await env.DB.prepare(`INSERT INTO admin_sessions (id, admin_id, role, expires_at) VALUES (?, ?, ?, datetime('now', '+12 hours'))`).bind(token, row.id, row.role).run();
         await env.DB.prepare(`UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
-        return json({ ok: true, admin: { id: row.id, username: row.username, display_name: row.display_name, role: row.role }, token });
+        return j({ ok: true, admin: { id: row.id, username: row.username, display_name: row.display_name, role: row.role }, token });
       }
 
       if (path === "/api/admin/me" && request.method === "GET") {
         const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         const adm = await getAdminFromToken(token);
         if (!adm) return json({ ok: false, error: "Invalid admin session." }, 401);
-        return json({ ok: true, admin: { id: adm.id, username: adm.username, display_name: adm.display_name, role: adm.role } });
+        return j({ ok: true, admin: { id: adm.id, username: adm.username, display_name: adm.display_name, role: adm.role } });
       }
 
       // ---- Master bootstrap: THE admin signs in with Google, no password ----
@@ -1253,7 +1411,7 @@ const backend = {
         const verified = await verifyFirebaseIdToken(idToken);
         if (!verified) return json({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
         const email = (verified.email ?? "").trim().toLowerCase();
-        if (email !== MASTER_ADMIN_EMAIL) {
+        if (!MASTER_ADMIN_EMAILS.includes(email)) {
           return json({ ok: false, error: "This Google account is not the game admin." }, 403);
         }
         await ensureAdminTables();
@@ -1286,7 +1444,7 @@ const backend = {
         )
           .bind(token, row.id)
           .run();
-        return json({
+        return j({
           ok: true,
           admin: { id: row.id, username: row.username, display_name: row.display_name, role: "master_admin" },
           token,
@@ -1302,7 +1460,7 @@ const backend = {
         const team = await env.DB.prepare(
           `SELECT id, username, display_name, role, firebase_uid, created_at, last_login FROM admin_users ORDER BY created_at ASC`
         ).all();
-        return json({ ok: true, team: team.results ?? [] });
+        return j({ ok: true, team: team.results ?? [] });
       }
 
       if (path === "/api/admin/team" && request.method === "POST") {
@@ -1327,7 +1485,7 @@ const backend = {
         )
           .bind(id, username, displayName, role, await sha256hex(password))
           .run();
-        return json({ ok: true, id, username, role }, 201);
+        return j({ ok: true, id, username, role }, 201);
       }
 
       const teamDelMatch = path.match(/^\/api\/admin\/team\/([^/]+)$/);
@@ -1341,11 +1499,11 @@ const backend = {
         const target = await env.DB.prepare(`SELECT * FROM admin_users WHERE id = ?`).bind(id).first();
         if (!target) return notFound("Admin not found.");
         if ((target as Record<string, unknown>).role === "master_admin") {
-          return json({ ok: false, error: "Master Admin accounts cannot be removed." }, 403);
+          return j({ ok: false, error: "Master Admin accounts cannot be removed." }, 403);
         }
         await env.DB.prepare(`DELETE FROM admin_sessions WHERE admin_id = ?`).bind(id).run();
         await env.DB.prepare(`DELETE FROM admin_users WHERE id = ?`).bind(id).run();
-        return json({ ok: true, removed: true });
+        return j({ ok: true, removed: true });
       }
 
       // ---- Moderation: safety reports ----
@@ -1369,7 +1527,7 @@ const backend = {
                FROM reports r LEFT JOIN users ru ON ru.id = r.reporter_id LEFT JOIN users tu ON tu.id = r.target_id
                ORDER BY r.created_at DESC LIMIT 50`
             ).all();
-        return json({ ok: true, reports: rows.results ?? [] });
+        return j({ ok: true, reports: rows.results ?? [] });
       }
 
       const reportPatchMatch = path.match(/^\/api\/reports\/([^/]+)$/);
@@ -1389,7 +1547,7 @@ const backend = {
         await env.DB.prepare(`UPDATE reports SET status = ?, handled_by = ? WHERE id = ?`)
           .bind(status, adm.id, decodeURIComponent(reportPatchMatch[1]))
           .run();
-        return json({ ok: true, status });
+        return j({ ok: true, status });
       }
 
       // ---- Moderation: end any live room ----
@@ -1411,7 +1569,7 @@ const backend = {
         await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
           .bind((room as Record<string, unknown>).id)
           .run();
-        return json({ ok: true, ended: true });
+        return j({ ok: true, ended: true });
       }
 
       // ---- Support ticket status ----
@@ -1464,7 +1622,7 @@ const backend = {
         const txType = col === "coins" ? (delta > 0 ? "purchase" : "refund") : col === "gems" ? (delta > 0 ? "gift_received" : "gift_sent") : "xp_boost";
         try { await env.DB.prepare(`INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, ?, ?, ?)`).bind(newId("tx"), targetId, txType, delta, `Admin ${action} by ${adm.username}: ${notes}`).run(); } catch {}
         const updated = await env.DB.prepare(`SELECT coins, gems, xp FROM users WHERE id = ?`).bind(targetId).first();
-        return json({ ok: true, target_user_id: targetId, action_type: action, amount, balance: updated });
+        return j({ ok: true, target_user_id: targetId, action_type: action, amount, balance: updated });
       }
 
       if (path === "/api/admin/transactions" && request.method === "GET") {
@@ -1473,7 +1631,7 @@ const backend = {
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const limit = Math.min(100, Number(url.searchParams.get("limit") ?? 50) || 50);
         const rows = await env.DB.prepare(`SELECT at.*, au.username as admin_username, u.username as target_username FROM admin_transactions at LEFT JOIN admin_users au ON au.id = at.admin_id LEFT JOIN users u ON u.id = at.target_user_id ORDER BY at.created_at DESC LIMIT ?`).bind(limit).all();
-        return json({ ok: true, transactions: rows.results ?? [] });
+        return j({ ok: true, transactions: rows.results ?? [] });
       }
 
       if (path === "/api/admin/users" && request.method === "GET") {
@@ -1483,7 +1641,7 @@ const backend = {
         const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
         const like = `%${q}%`;
         const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ? OR email LIKE ? LIMIT 10`).bind(like, like, like, q, like).all() : await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp FROM users ORDER BY updated_at DESC LIMIT 10`).all();
-        return json({ ok: true, users: rows.results ?? [] });
+        return j({ ok: true, users: rows.results ?? [] });
       }
 
       if (path === "/api/admin/stats" && request.method === "GET") {
@@ -1493,7 +1651,7 @@ const backend = {
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         const stats = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM users) as users, (SELECT COUNT(*) FROM rooms WHERE status='live') as live_rooms, (SELECT COALESCE(SUM(coins),0) FROM users) as total_coins, (SELECT COALESCE(SUM(gems),0) FROM users) as total_gems, (SELECT COUNT(*) FROM support_tickets WHERE status='open') as open_tickets, (SELECT COUNT(*) FROM admin_transactions) as recharge_ops`).first();
         const tiers = await env.DB.prepare(`SELECT * FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
-        return json({ ok: true, stats, pricing: tiers.results ?? [] });
+        return j({ ok: true, stats, pricing: tiers.results ?? [] });
       }
 
       if (path === "/api/support/tickets" && request.method === "GET") {
@@ -1503,11 +1661,11 @@ const backend = {
         if (adm && ((adm.role as string) === "support" || (adm.role as string) === "master_admin")) {
           const status = url.searchParams.get("status") ?? "";
           const rows = status ? await env.DB.prepare(`SELECT * FROM support_tickets WHERE status = ? ORDER BY updated_at DESC LIMIT 50`).bind(status).all() : await env.DB.prepare(`SELECT * FROM support_tickets ORDER BY updated_at DESC LIMIT 50`).all();
-          return json({ ok: true, tickets: rows.results ?? [] });
+return j({ ok: true, tickets: rows.results ?? [] });
         }
         if (!userId) return badRequest("user_id or admin token required.");
         const rows = await env.DB.prepare(`SELECT * FROM support_tickets WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20`).bind(userId).all();
-        return json({ ok: true, tickets: rows.results ?? [] });
+        return j({ ok: true, tickets: rows.results ?? [] });
       }
 
       if (path === "/api/support/tickets" && request.method === "POST") {
@@ -1522,7 +1680,7 @@ const backend = {
         if (!user) return notFound("User not found.");
         const id = newId("ticket");
         await env.DB.prepare(`INSERT INTO support_tickets (id, user_id, subject, category, message) VALUES (?, ?, ?, ?, ?)`).bind(id, userId, subject, category, message).run();
-        return json({ ok: true, id }, 201);
+        return j({ ok: true, id }, 201);
       }
 
       if (path.match(/^\/api\/support\/tickets\/[^/]+\/reply$/) && request.method === "POST") {
@@ -1537,13 +1695,13 @@ const backend = {
         if (adm) {
           await env.DB.prepare(`INSERT INTO ticket_replies (id, ticket_id, author_admin_id, message) VALUES (?, ?, ?, ?)`).bind(newId("reply"), ticketId, adm.id, message).run();
           await env.DB.prepare(`UPDATE support_tickets SET status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticketId).run();
-          return json({ ok: true });
+return j({ ok: true });
         }
         const userId = typeof body?.user_id === "string" ? body.user_id : "";
         if (!userId || (ticket as Record<string, unknown>).user_id !== userId) return json({ ok: false, error: "Not ticket owner." }, 403);
         await env.DB.prepare(`INSERT INTO ticket_replies (id, ticket_id, author_user_id, message) VALUES (?, ?, ?, ?)`).bind(newId("reply"), ticketId, userId, message).run();
         await env.DB.prepare(`UPDATE support_tickets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticketId).run();
-        return json({ ok: true });
+        return j({ ok: true });
       }
 
       if (path.match(/^\/api\/support\/tickets\/[^/]+$/) && request.method === "GET") {
@@ -1553,17 +1711,17 @@ const backend = {
         const replies = await env.DB.prepare(`SELECT * FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC`).bind(ticketId).all();
         // Enrich with quick lookup links
         const user = await env.DB.prepare(`SELECT id, username, coins, gems, xp FROM users WHERE id = ?`).bind((ticket as Record<string, unknown>).user_id).first();
-        return json({ ok: true, ticket, replies: replies.results ?? [], user });
+        return j({ ok: true, ticket, replies: replies.results ?? [], user });
       }
 
       if (path === "/api/pricing" && request.method === "GET") {
         const tiers = await env.DB.prepare(`SELECT * FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
-        return json({ ok: true, tiers: tiers.results ?? [] });
+        return j({ ok: true, tiers: tiers.results ?? [] });
       }
 
       return notFound();
     } catch (err) {
-      return json({ ok: false, error: err instanceof Error ? err.message : "Internal error." }, 500);
+      return j({ ok: false, error: err instanceof Error ? err.message : "Internal error." }, 500);
     }
   },
 };

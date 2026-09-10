@@ -15,6 +15,7 @@ export class ApiError extends Error {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
   const data = (await res.json().catch(() => null)) as (T & { ok?: boolean; error?: string }) | null;
@@ -187,8 +188,8 @@ export async function login(username: string): Promise<{ user: ApiUser; token: s
   return req(`/api/auth/login`, { method: "POST", body: JSON.stringify({ username }) });
 }
 
-export async function me(token: string): Promise<{ user: ApiUser }> {
-  return req(`/api/auth/me`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+export async function me(): Promise<{ user: ApiUser }> {
+  return req(`/api/auth/me`, { cache: "no-store" });
 }
 
 export async function fetchUser(id: string): Promise<{ user: ApiUser }> {
@@ -338,8 +339,8 @@ export interface AdminUser { id: string; username: string; display_name: string;
 export async function adminLogin(username: string, password: string): Promise<{ admin: AdminUser; token: string }> {
   return req(`/api/admin/login`, { method: "POST", body: JSON.stringify({ username, password }) });
 }
-export async function adminMe(token: string): Promise<{ admin: AdminUser }> {
-  return req(`/api/admin/me`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+export async function adminMe(): Promise<{ admin: AdminUser }> {
+  return req(`/api/admin/me`, { cache: "no-store" });
 }
 export async function adminRecharge(token: string, input: { target_user_id: string; action_type: "ADD_COINS" | "DEDUCT_COINS" | "ADD_GEMS" | "DEDUCT_GEMS" | "ADD_XP" | "DEDUCT_XP"; amount: number; notes?: string }): Promise<{ balance: { coins: number; gems: number; xp: number } }> {
   return req(`/api/admin/recharge`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
