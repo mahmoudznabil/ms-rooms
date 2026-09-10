@@ -12,6 +12,8 @@ import {
   Gift,
   Mic,
   MicOff,
+  MessageCircle,
+  Phone,
   Plus,
   Send,
   Settings2,
@@ -48,6 +50,7 @@ import { Modal, Spinner, UserAvatar, LevelBadge, EmptyState, Field, inputCls, Pr
 import SpinModal from "@/components/SpinModal";
 import PKBattleBar from "@/components/PKBattleBar";
 import MiniGamePanel from "@/components/MiniGamePanel";
+import ChatPanel from "@/components/ChatPanel";
 
 interface ChatMsg {
   id: string;
@@ -93,6 +96,9 @@ function RoomViewInner() {
   const [rushLeft, setRushLeft] = useState(0);
   const [pk, setPk] = useState<{ endsAt: number; scoreA: number; scoreB: number; opponent: string } | null>(null);
   const [pkWinner, setPkWinner] = useState<string | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ roomId: string; callerName: string; callerAvatar?: string; pricePerMinute: number } | null>(null);
+  const [callState, setCallState] = useState<"idle" | "ringing" | "connecting" | "connected" | "ended">("idle");
+  const [showChat, setShowChat] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const fxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -128,6 +134,19 @@ function RoomViewInner() {
         setRoom(detail.room);
         setSeats(detail.seats);
         pushMsg({ user: "System", text: `Welcome to ${detail.room.title}. Be kind, mind mic etiquette.`, kind: "system" });
+        
+        // Check for incoming private call
+        if (detail.room.is_private && detail.room.call_participant_user_id === user.id && detail.room.status === 'live') {
+          const caller = detail.seats.find(s => s.seat_index === 0 && s.user_id);
+          if (caller) {
+            setIncomingCall({
+              roomId: detail.room.id,
+              callerName: caller.display_name ?? 'Unknown',
+              callerAvatar: caller.avatar_url,
+              pricePerMinute: detail.room.call_price_per_minute || 10,
+            });
+          }
+        }
       } catch (e) {
         if (!cancelled && e instanceof ApiError && e.status === 404) setMissing(true);
         if (!cancelled && !(e instanceof ApiError)) {
@@ -201,23 +220,121 @@ function RoomViewInner() {
     };
   }, []);
 
+  // Poll for incoming call status changes
+  useEffect(() => {
+    if (!slug || !user || !room) return;
+    let cancelled = false;
+    
+    const pollCallStatus = () => {
+      if (!room?.is_private) return;
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/status?room_id=${room.id}`, {
+        credentials: "include",
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled) return;
+          if (data.ok && data.call_session) {
+            const callSession = data.call_session;
+            if (callSession.status === 'ringing' && room.call_participant_user_id === user.id) {
+              const caller = data.caller;
+              if (caller && !incomingCall) {
+                setIncomingCall({
+                  roomId: room.id,
+                  callerName: caller.display_name ?? 'Unknown',
+                  callerAvatar: caller.avatar_url,
+                  pricePerMinute: room.call_price_per_minute || 10,
+                });
+              }
+            } else if (callSession.status === 'connected') {
+              setCallState('connected');
+              setIncomingCall(null);
+            } else if (callSession.status === 'rejected' || callSession.status === 'ended') {
+              setCallState('ended');
+              setIncomingCall(null);
+              setNotice(callSession.status === 'rejected' ? "Call was rejected" : "Call ended");
+            }
+          }
+        })
+        .catch(() => {
+          // Silently ignore polling errors
+        });
+    };
+    
+    const interval = setInterval(pollCallStatus, 3000);
+    pollCallStatus(); // Initial check
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [slug, room, user]);
+
+  // Handle incoming call acceptance
+  const acceptCall = async () => {
+    if (!incomingCall || !room) return;
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room_id: incomingCall.roomId }),
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setIncomingCall(null);
+        setCallState('connected');
+        router.push(`/room?slug=${room.slug}`);
+      } else {
+        alert(data.error || "Failed to accept call");
+      }
+    } catch (e) {
+      alert("Failed to accept call");
+    }
+  };
+
+  const rejectCall = async () => {
+    if (!incomingCall) return;
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room_id: incomingCall.roomId }),
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setIncomingCall(null);
+        setCallState('ended');
+        setNotice("Call rejected");
+      } else {
+        alert(data.error || "Failed to reject call");
+      }
+    } catch (e) {
+      alert("Failed to reject call");
+    }
+  };
+
+  const endCall = async () => {
+    if (!room) return;
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/end`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room_id: room.id }),
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCallState('ended');
+        router.push("/");
+      } else {
+        alert(data.error || "Failed to end call");
+      }
+    } catch (e) {
+      alert("Failed to end call");
+    }
+  };
+
   if (!user) return <Spinner />;
-  if (!slug) {
-    return (
-      <div className="pt-10">
-        <EmptyState title="No room selected" hint="Pick a live room from Home." />
-        <Link href="/" className="mt-3 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black">Back home</Link>
-      </div>
-    );
-  }
-  if (missing) {
-    return (
-      <div className="pt-10">
-        <EmptyState title="This room has ended" hint="The host closed it, or the link is wrong." />
-        <Link href="/" className="mt-3 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black">Find another room</Link>
-      </div>
-    );
-  }
   if (!room) return <Spinner />;
 
   const showFx = (emoji: string, name: string, from: string, effect: string) => {
@@ -342,6 +459,9 @@ function RoomViewInner() {
             <Settings2 size={16} />
           </button>
         )}
+        <button onClick={() => setShowChat(true)} aria-label="Open messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+          <MessageCircle size={16} />
+        </button>
         <Link href="/wallet" className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-xs font-bold text-amber-200">
           <Coins size={13} /> {user.coins.toLocaleString()}
         </Link>
@@ -478,11 +598,42 @@ function RoomViewInner() {
           <p className="truncate text-xs text-white/45">{room.description || room.category}</p>
         </div>
         {!isHost && room.host_user_id && (
-          <button onClick={() => void toggleFollowHost()}
-            className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition ${followingHost ? "bg-white/10 text-white/70" : "bg-white text-black"}`}>
-            {followingHost ? <UserCheck size={13} /> : <UserPlus size={13} />}
-            {followingHost ? "Following" : "Follow"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => void toggleFollowHost()}
+              className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition ${followingHost ? "bg-white/10 text-white/70" : "bg-white text-black"}`}>
+              {followingHost ? <UserCheck size={13} /> : <UserPlus size={13} />}
+              {followingHost ? "Following" : "Follow"}
+            </button>
+            <button
+              onClick={async () => {
+                if (!user) return;
+                try {
+                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      caller_user_id: user.id,
+                      callee_user_id: room.host_user_id,
+                      call_price_per_minute: room.call_price_per_minute || 10,
+                    }),
+                    credentials: "include",
+                  });
+                  const data = await res.json();
+                  if (data.ok && data.room) {
+                    router.push(`/room?slug=${data.room.slug}`);
+                  } else {
+                    alert(data.error || "Failed to start call");
+                  }
+                } catch (e) {
+                  alert("Failed to start call");
+                }
+              }}
+              disabled={!user}
+              className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition ${user ? "bg-violet-500 text-black hover:opacity-90" : "bg-white/5 text-white/40 cursor-not-allowed"}`}
+            >
+              <Phone size={13} /> Call
+            </button>
+          </div>
         )}
       </div>
 
@@ -570,6 +721,13 @@ function RoomViewInner() {
       )}
 
       {spinOpen && <SpinModal onClose={() => setSpinOpen(false)} />}
+      {showChat && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setShowChat(false)}>
+          <div className="h-[82dvh] w-full overflow-hidden rounded-t-3xl border border-white/10 bg-[#0d0d12] sm:h-[640px] sm:max-w-md sm:rounded-3xl" onClick={(e) => e.stopPropagation()}>
+            <ChatPanel onClose={() => setShowChat(false)} />
+          </div>
+        </div>
+      )}
       {manageOpen && isHost && (
         <ManageRoomModal slug={slug} title={room.title} description={room.description}
           onClose={() => setManageOpen(false)}
@@ -579,6 +737,41 @@ function RoomViewInner() {
       {reportTarget && (
         <ReportModal userId={reportTarget.id} name={reportTarget.name} roomId={room.id} onClose={() => setReportTarget(null)}
           onSent={() => { setReportTarget(null); setNotice("Thanks — our team will review this report."); }} />
+      )}
+      {/* Incoming Call Modal */}
+      {incomingCall && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="modal-pop w-full max-w-md rounded-3xl border border-white/10 bg-[#17171f] p-6 shadow-2xl">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500">
+                {incomingCall.callerAvatar ? (
+                  <img src={incomingCall.callerAvatar} alt={incomingCall.callerName} className="h-full w-full rounded-full object-cover" />
+                ) : (
+                  <span className="text-3xl font-bold text-white">{incomingCall.callerName?.slice(0,1).toUpperCase()}</span>
+                )}
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-bold text-white">Incoming Call</h3>
+                <p className="text-white/70">{incomingCall.callerName} is calling you</p>
+                <p className="text-sm text-white/50">{incomingCall.pricePerMinute} coins/min</p>
+              </div>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={rejectCall}
+                  className="flex-1 rounded-2xl border border-red-400/30 bg-red-500/10 py-3 text-sm font-bold text-red-300 transition hover:bg-red-500/20"
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={acceptCall}
+                  className="flex-1 rounded-2xl bg-green-500 py-3 text-sm font-bold text-black transition hover:bg-green-400"
+                >
+                  Accept
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

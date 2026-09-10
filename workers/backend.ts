@@ -21,6 +21,8 @@ interface Env {
   // Firebase Admin (optional): if set, Worker verifies ID tokens with the Admin SDK service account.
   // Otherwise it falls back to google tokeninfo verification (no secrets needed).
   FIREBASE_PROJECT_ID?: string;
+  RECAPTCHA_SITE_KEY?: string;
+  RECAPTCHA_SECRET_KEY?: string;
 }
 
 // Allowed origins - configure via environment or use defaults
@@ -178,34 +180,35 @@ if (request.method === "OPTIONS") {
     // Skip CSRF check for safe methods
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return true;
     // Skip for auth endpoints that use Firebase ID tokens
-    if (path.startsWith("/api/auth/firebase") || path.startsWith("/api/auth/login")) return true;
+    if (path.startsWith("/api/auth/firebase") || path.startsWith("/api/auth/login") || path.startsWith("/api/auth/me")) return true;
+    if (path.startsWith("/api/recaptcha/")) return true;
     // Skip for admin endpoints that use admin tokens
     if (path.startsWith("/api/admin/")) return true;
     // Skip for webhook/callback endpoints
     if (path === "/api/calls/session" || path === "/api/turn") return true;
-
+    // Follow/rooms/gifts/moments etc. are cross-origin (Pages -> Workers) with credentials:include
+    // Strict cookie CSRF fails cross-site without SameSite=None. Use Origin allowlist instead.
+    // Keep token check optional: if Origin is allowed, allow request (CORS protection).
+    const origin = request.headers.get("Origin") || "";
+    if (origin && isOriginAllowed(origin)) return true;
+    // Same-origin or no Origin header: require token
     const csrfHeader = request.headers.get("X-CSRF-Token");
     const cookieHeader = request.headers.get("Cookie") || "";
     const cookieCsrf = cookieHeader.split("; ").find((c) => c.trim().startsWith("csrf_token="))?.split("=")[1];
     const csrfToken = csrfHeader || cookieCsrf;
-
     if (!csrfToken) return false;
-
-    // In a real implementation, you'd validate against a stored token
-    // For now, we accept any non-empty token that matches the cookie
-    // A production implementation would store the token in D1 with expiration
     return csrfToken.length >= 32;
   }
 
-  // CSRF token endpoint
+  // CSRF token endpoint — SameSite=None for cross-origin Pages -> Workers with credentials:include
   if (path === "/api/csrf" && request.method === "GET") {
     const token = await generateCsrfToken();
-    const response = j({ ok: true, csrf_token: token });
-    const headers = new Headers(response.headers);
-    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
+    const headers = new Headers(getCorsHeaders(origin));
+    headers.set("Content-Type", "application/json");
+    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${24 * 60 * 60}`);
     return new Response(JSON.stringify({ ok: true, csrf_token: token }), {
       status: 200,
-      headers: { "Content-Type": "application/json", ...Object.fromEntries(headers.entries()) },
+      headers,
     });
   }
 
@@ -218,6 +221,166 @@ if (request.method === "OPTIONS") {
   }
 
   try {
+      // ---- reCAPTCHA verify (public site key 6LdgXbQt..., secret via RECAPTCHA_SECRET_KEY) ----
+      if (path === "/api/recaptcha/verify" && request.method === "POST") {
+        const body = await readJson<{ token?: unknown }>(request);
+        const token = typeof body?.token === "string" ? body.token : "";
+        if (!token) return j({ ok: false, error: "Missing token" }, 400);
+        const secret = (env as unknown as Record<string, string | undefined>).RECAPTCHA_SECRET_KEY;
+        if (!secret) {
+          // No secret configured — fail open in dev, but log warning. Set via `wrangler secret put RECAPTCHA_SECRET_KEY`
+          console.warn("RECAPTCHA_SECRET_KEY not set — skipping server verification");
+          return j({ ok: true, warning: "RECAPTCHA_SECRET_KEY not set, verification skipped" });
+        }
+        try {
+          const verifyRes = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `secret=${encodeURIComponent(secret)}&response=${encodeURIComponent(token)}&remoteip=${encodeURIComponent(request.headers.get("CF-Connecting-IP") || "")}`,
+          });
+          const verifyData = (await verifyRes.json()) as { success?: boolean; "error-codes"?: string[] };
+          if (!verifyData.success) return j({ ok: false, error: "reCAPTCHA failed", codes: verifyData["error-codes"] }, 403);
+          return j({ ok: true });
+        } catch (e) {
+          return j({ ok: false, error: "Verification error" }, 500);
+        }
+      }
+      if (path === "/api/recaptcha/sitekey" && request.method === "GET") {
+        const key = (env as unknown as Record<string, string | undefined>).RECAPTCHA_SITE_KEY || "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq";
+        return j({ ok: true, siteKey: key });
+      }
+
+      // ---- Privacy Policy --------------------------------------------------
+      if ((path === "/privacy-policy" || path === "/privacy") && request.method === "GET") {
+        const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Privacy Policy — MS-ROOMS / BestAudioRoom</title>
+<style>
+:root{--bg:#0a0a0b;--card:#111113;--border:rgba(255,255,255,.08);--text:#fff;--muted:rgba(255,255,255,.55);--accent:#7c3aed}
+*{box-sizing:border-box}body{margin:0;font-family:ui-sans-system,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:var(--text);line-height:1.6}
+a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
+.header{max-width:900px;margin:0 auto;padding:32px 20px 0;display:flex;align-items:center;gap:12px}
+.logo{width:40px;height:40px;border-radius:10px;background:rgba(0,0,0,.4);border:1px solid var(--border);display:flex;align-items:center;justify-content:center}
+.wrap{max-width:900px;margin:0 auto;padding:24px 20px 48px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px}
+h1{font-size:28px;margin:8px 0 4px}h2{font-size:18px;margin:28px 0 8px;color:#fff}h3{font-size:15px;margin:18px 0 6px;color:#e9e7ff}
+p,li{color:var(--muted);font-size:14px}ul{padding-left:18px}li{margin:4px 0}
+.badge{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.6);background:rgba(124,58,237,.15);border:1px solid rgba(124,58,237,.25);padding:4px 8px;border-radius:999px}
+.meta{font-size:12px;color:rgba(255,255,255,.35);margin-top:6px}
+.table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+.table th,.table td{border:1px solid var(--border);padding:8px 10px;text-align:left}
+.table th{background:rgba(255,255,255,.04);color:#fff}
+.footer{margin-top:24px;font-size:12px;color:rgba(255,255,255,.3);text-align:center}
+code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo"><img src="/ms-rooms-logo.svg" alt="MS-ROOMS" style="width:28px;height:28px;object-fit:contain" onerror="this.style.display='none'"/></div>
+  <div><div style="font-weight:600">MS-ROOMS</div><div style="font-size:12px;color:rgba(255,255,255,.4)">BestAudioRoom</div></div>
+</div>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">Privacy Policy</span>
+    <h1>Privacy Policy</h1>
+    <div class="meta">Effective Date: September 10, 2026 &nbsp;•&nbsp; Last Updated: September 10, 2026 &nbsp;•&nbsp; Service: <code>https://bestaudiobackend.mahmoudnabil03.workers.dev</code> &nbsp;•&nbsp; Apps: MS-ROOMS (Web, Android, iOS)</div>
+
+    <p><strong>MS-ROOMS / BestAudioRoom</strong> ("we", "us") operates audio rooms, social features, and virtual gifts. This policy explains what we collect, how we use it, and your choices. By creating an account or using MS-ROOMS you agree to this policy.</p>
+
+    <h2>1. Who we are &amp; contact</h2>
+    <p>Data controller: MS-ROOMS (BestAudioRoom). Backend hosted on <strong>Cloudflare Workers + D1</strong> (<code>bestaudiobackend.mahmoudnabil03.workers.dev</code>). Auth via <strong>Firebase (Google) project bestaudioroom</strong>.</p>
+    <p>Contact: <a href="mailto:mahmoudnabil03@gmail.com">mahmoudnabil03@gmail.com</a> / <a href="mailto:marcamgadalfonse2004@gmail.com">marcamgadalfonse2004@gmail.com</a>. For deletion requests use subject "Privacy Request".</p>
+
+    <h2>2. Information we collect</h2>
+    <table class="table">
+      <tr><th>Category</th><th>Examples</th><th>Source</th></tr>
+      <tr><td>Account &amp; identity</td><td>Firebase UID (<code>firebase_uid</code>), email, phone, display name, avatar URL, provider (google / password / phone / email-link), username, id_tag</td><td>You + Firebase Auth</td></tr>
+      <tr><td>App activity</td><td>Rooms created/joined, seats, messages/moments, follows, likes, gift sends/receives (coins spent, gems 70% to host), XP events, transactions, daily rewards, call sessions</td><td>Your use of MS-ROOMS</td></tr>
+      <tr><td>Device &amp; technical</td><td>IP (<code>CF-Connecting-IP</code>), region (<code>origin.region_code</code> for Cloud Armor), user-agent, device identifiers, crash logs</td><td>Automatically</td></tr>
+      <tr><td>Verification &amp; safety</td><td>reCAPTCHA token/response (site key <code>6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq</code>), CSRF tokens, Firebase ID token (aud=<code>bestaudioroom</code>), Cloudflare Turn/CALLS session metadata</td><td>Security checks</td></tr>
+      <tr><td>Support</td><td>Reports you submit</td><td>You</td></tr>
+    </table>
+    <p>We do <strong>not</strong> collect payment card numbers directly — recharge is handled by app stores / payment provider; we store only package/amount/status.</p>
+
+    <h2>3. How we use information</h2>
+    <ul>
+      <li>Provide audio rooms, authentication (Firebase -> D1 sync by <code>firebase_uid</code> so coins/gems/XP follow you across devices), and social features.</li>
+      <li>Security: verify Firebase ID tokens, verify reCAPTCHA on registration (<code>/api/recaptcha/verify</code>), enforce rate limiting / geo-blocking / WAF via Cloud Armor, and prevent abuse.</li>
+      <li>Personalize and improve (leaderboards, recommendations), analytics, and troubleshooting.</li>
+      <li>Communicate about updates, support, and policy changes.</li>
+      <li>Comply with law and enforce Terms.</li>
+    </ul>
+
+    <h2>4. Legal bases (EEA/UK)</h2>
+    <p>Contract (provide the service), Legitimate interests (security, improvement, anti-abuse), Consent (where you give it, e.g., optional avatar), Legal obligation.</p>
+
+    <h2>5. Sharing</h2>
+    <p>We do not sell your personal information. We share only with:</p>
+    <ul>
+      <li><strong>Service providers / processors:</strong> Cloudflare (Workers, D1, Calls/TURN, CDN), Google Firebase/Google Cloud (Auth, tokeninfo), Google reCAPTCHA.</li>
+      <li><strong>Other users:</strong> profile, room, and moment data you make public (display name, avatar, rooms, followers).</li>
+      <li><strong>Legal/safety:</strong> if required by law or to protect rights/safety.</li>
+      <li><strong>Business transfer:</strong> in merger/acquisition, with notice.</li>
+    </ul>
+
+    <h2>6. International transfers</h2>
+    <p>Data is processed on Cloudflare's global network and Google's infrastructure and may be transferred outside your country. We rely on Standard Contractual Clauses / provider safeguards where required.</p>
+
+    <h2>7. Retention</h2>
+    <ul>
+      <li>Account/D1 rows: until you delete your account (request via contact). Sessions: 30 days expiry.</li>
+      <li>Logs &amp; security events (auth_audit, transactions): up to 12 months for fraud/abuse, then anonymized or deleted.</li>
+      <li>Backups: retained per Cloudflare D1 retention.</li>
+    </ul>
+
+    <h2>8. Security</h2>
+    <p>HTTPS, HttpOnly Secure SameSite cookies for sessions, Firebase ID token verification (<code>aud=bestaudioroom</code>), CSRF protection, Cloud Armor rate limiting / geo-blocking / WAF (SQLi/XSS v33), and least-privilege D1 access. No method is 100% secure — report vulnerabilities to the contact above.</p>
+
+    <h2>9. Your rights &amp; choices</h2>
+    <ul>
+      <li>Access, correct, delete, or export your D1 data — email us or use in-app profile edit / delete.</li>
+      <li>Withdraw consent where applicable.</li>
+      <li>Object to or restrict certain processing.</li>
+      <li>EEA/UK: lodge a complaint with your supervisory authority. California: CCPA rights (access/delete/opt-out of sale — we do not sell).</li>
+    </ul>
+    <p>To delete: email from your account email requesting deletion of <code>firebase_uid</code>/email. We delete D1 user, linked rooms/seats/transactions where legally permitted within 30 days.</p>
+
+    <h2>10. Children</h2>
+    <p>MS-ROOMS is not directed to children under 13 (or 16 where applicable). We do not knowingly collect from children. If you believe a child provided data, contact us for deletion.</p>
+
+    <h2>11. Cookies &amp; similar</h2>
+    <p>We use essential cookies: <code>session</code> (30-day auth) and <code>csrf_token</code> (24h). reCAPTCHA sets Google cookies to assess bot risk. Firebase may set auth cookies. You can block non-essential cookies but login/rooms will break.</p>
+
+    <h2>12. Third-party services</h2>
+    <ul>
+      <li>Firebase Auth &amp; Google tokeninfo — <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a></li>
+      <li>Cloudflare — <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener">Cloudflare Privacy Policy</a></li>
+      <li>Google reCAPTCHA — <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy</a> &amp; <a href="https://policies.google.com/terms" target="_blank" rel="noopener">Terms</a> (reCAPTCHA use is subject to them)</li>
+    </ul>
+
+    <h2>13. Changes</h2>
+    <p>We will update the "Last Updated" date and, for material changes, notify in-app or by email. Continued use after the effective date means acceptance.</p>
+
+    <h2>14. Contact</h2>
+    <p>Email: <a href="mailto:mahmoudnabil03@gmail.com">mahmoudnabil03@gmail.com</a> &nbsp;•&nbsp; Alternative: <a href="mailto:marcamgadalfonse2004@gmail.com">marcamgadalfonse2004@gmail.com</a><br/>Service URL: <code>https://bestaudiobackend.mahmoudnabil03.workers.dev/privacy-policy</code></p>
+  </div>
+  <div class="footer">© 2026 MS-ROOMS / BestAudioRoom. This policy is provided for transparency and does not constitute legal advice.</div>
+</div>
+</body>
+</html>`;
+        return new Response(html, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "public, max-age=3600",
+            ...getCorsHeaders(origin),
+          },
+        });
+      }
+
       // ---- Root / health -------------------------------------------------
       if (path === "/" && request.method === "GET") {
         const origin = request.headers.get("Origin") || "";
@@ -272,6 +435,19 @@ if (request.method === "OPTIONS") {
             "POST /api/admin/rooms/end",
             "GET /api/turn",
             "POST /api/calls/session",
+            "GET /api/conversations",
+            "POST /api/conversations",
+            "POST /api/conversations/direct",
+            "GET /api/conversations/unread-count",
+            "GET /api/conversations/:id",
+            "POST /api/conversations/:id/participants",
+            "DELETE /api/conversations/:id/participants/:userId",
+            "GET /api/conversations/:id/messages",
+            "POST /api/conversations/:id/messages",
+            "PATCH /api/messages/:id",
+            "DELETE /api/messages/:id",
+            "POST /api/conversations/:id/read",
+            "POST /api/ai/log",
           ],
         }, 200, origin);
       }
@@ -803,6 +979,86 @@ if (request.method === "OPTIONS") {
         return j({ ok: true, room }, 201);
       }
 
+      // ---- Private 1-on-1 Call Room Creation (with coin payment) ----
+      if (path === "/api/rooms/private-call" && request.method === "POST") {
+        const body = await readJson<{
+          caller_user_id?: unknown;
+          callee_user_id?: unknown;
+          call_price_per_minute?: unknown;
+        }>(request);
+        const callerId = typeof body?.caller_user_id === "string" ? body.caller_user_id : "";
+        const calleeId = typeof body?.callee_user_id === "string" ? body.callee_user_id : "";
+        const pricePerMinute = typeof body?.call_price_per_minute === "number" ? body.call_price_per_minute : 10;
+        if (!callerId) return badRequest("caller user_id (caller_user_id) is required.");
+        if (!calleeId) return badRequest("callee_user_id is required.");
+        if (callerId === calleeId) return badRequest("Cannot call yourself.");
+        if (!Number.isInteger(pricePerMinute) || pricePerMinute < 0) return badRequest("call_price_per_minute must be a non-negative integer.");
+
+        const caller = await env.DB.prepare(`SELECT id, coins FROM users WHERE id = ?`).bind(callerId).first();
+        if (!caller) return notFound("Caller not found.");
+        const callee = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(calleeId).first();
+        if (!callee) return notFound("Callee not found.");
+
+        // Check if there's already an active private call between these users
+        const existingCall = await env.DB.prepare(
+          `SELECT id FROM rooms WHERE is_private = 1 AND status = 'live' AND 
+           ((host_user_id = ? AND call_participant_user_id = ?) OR (host_user_id = ? AND call_participant_user_id = ?))`
+        ).bind(callerId, calleeId, calleeId, callerId).first();
+        if (existingCall) return conflict("An active private call already exists between these users.");
+
+        // Check caller has enough coins for at least 1 minute
+        const callerCoins = (caller as Record<string, unknown>).coins as number;
+        if (callerCoins < pricePerMinute) return conflict("Not enough coins to start a call. Minimum 1 minute required.");
+
+        const base = `call-${Date.now()}`;
+        let slug = `${base}-${Math.random().toString(36).slice(2, 6)}`;
+        const clash = await env.DB.prepare(`SELECT id FROM rooms WHERE slug = ?`).bind(slug).first();
+        if (clash) slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
+        const id = newId("room");
+        const roomId = id;
+
+        // Create private room
+        await env.DB.prepare(
+          `INSERT INTO rooms (id, slug, title, description, host_user_id, category, status, locked, capacity, cover_color, is_private, call_participant_user_id, call_price_per_minute)
+           VALUES (?, ?, ?, ?, ?, 'Call', 'live', 1, 2, '#7c3aed', 1, ?, ?)`
+        )
+          .bind(id, slug, `Private Call`, `Private 1-on-1 call`, callerId, calleeId, pricePerMinute)
+          .run();
+
+        // Create seats for caller (host) and callee (participant)
+        await env.DB.prepare(
+          `INSERT INTO seats (room_id, seat_index, user_id, role, is_muted, joined_at)
+           VALUES (?, 0, ?, 'host', 0, CURRENT_TIMESTAMP)`
+        ).bind(roomId, callerId).run();
+        await env.DB.prepare(
+          `INSERT INTO seats (room_id, seat_index, user_id, role, is_muted, joined_at)
+           VALUES (?, 1, ?, 'speaker', 0, CURRENT_TIMESTAMP)`
+        ).bind(roomId, calleeId).run();
+
+        // Create private call session
+        const callSessionId = newId("call");
+        await env.DB.prepare(
+          `INSERT INTO private_call_sessions (id, room_id, caller_user_id, callee_user_id, price_per_minute, status)
+           VALUES (?, ?, ?, ?, ?, 'initiated')`
+        ).bind(newId("call"), roomId, callerId, calleeId, pricePerMinute).run();
+
+        // Charge caller for 1 minute upfront
+        await env.DB.prepare(`UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(pricePerMinute, callerId).run();
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'call_charge', ?, ?)`
+        ).bind(newId("tx"), callerId, roomId, -pricePerMinute, `1-on-1 call with ${(await env.DB.prepare(`SELECT display_name FROM users WHERE id = ?`).bind(calleeId).first())?.display_name ?? 'User'}`).run();
+        await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, 2, 'Started 1-on-1 call', ?)`).bind(newId("xp"), callerId, roomId).run();
+
+        // Create call transaction log
+        await env.DB.prepare(
+          `INSERT INTO call_transactions (id, call_session_id, user_id, amount, description) VALUES (?, ?, ?, ?, ?)`
+        ).bind(newId("ctxn"), newId("call"), callerId, -pricePerMinute, `Initial 1-min charge for 1-on-1 call`).run();
+
+        const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ?`).bind(id).first();
+        return j({ ok: true, room, call_session_id: newId("call") }, 201);
+      }
+
+      // ---- Room Edit (PATCH/DELETE) ---------------------------------------------------
       const roomEditMatch = path.match(/^\/api\/rooms\/([^/]+)$/);
       if (roomEditMatch && (request.method === "PATCH" || request.method === "DELETE")) {
         const slug = decodeURIComponent(roomEditMatch[1]);
@@ -1717,6 +1973,399 @@ return j({ ok: true });
       if (path === "/api/pricing" && request.method === "GET") {
         const tiers = await env.DB.prepare(`SELECT * FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
         return j({ ok: true, tiers: tiers.results ?? [] });
+      }
+
+      // ---- Private Call: Accept/Reject/End/Status --------------------------------------------------
+      if (path === "/api/rooms/private-call/accept" && request.method === "POST") {
+        const body = await readJson<{ room_id?: unknown }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        if (!roomId) return badRequest("room_id is required.");
+
+        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
+        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        const userId = (session as Record<string, unknown>).user_id as string;
+
+        const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1 AND status = 'live'`).bind(roomId).first();
+        if (!room) return notFound("Private call room not found or not active.");
+        const roomRow = room as Record<string, unknown>;
+
+        // Verify user is the callee
+        if (roomRow.call_participant_user_id !== userId) {
+          return j({ ok: false, error: "Not authorized to accept this call." }, 403);
+        }
+
+        // Update room status and call session
+        await env.DB.prepare(`UPDATE rooms SET status = 'live', call_started_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'connected', connected_at = CURRENT_TIMESTAMP WHERE room_id = ?`).bind(roomId).run();
+
+        return j({ ok: true, message: "Call accepted" });
+      }
+
+      if (path === "/api/rooms/private-call/reject" && request.method === "POST") {
+        const body = await readJson<{ room_id?: unknown }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        if (!roomId) return badRequest("room_id is required.");
+
+        const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1`).bind(roomId).first();
+        if (!room) return notFound("Private call room not found.");
+        const roomRow = room as Record<string, unknown>;
+
+        // Verify user is the callee
+        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
+        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        const userId = (session as Record<string, unknown>).user_id as string;
+        if (roomRow.call_participant_user_id !== userId) {
+          return j({ ok: false, error: "Not authorized to reject this call." }, 403);
+        }
+
+        // End the call
+        await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'rejected', ended_at = CURRENT_TIMESTAMP WHERE room_id = ?`).bind(roomId).run();
+
+        return j({ ok: true, message: "Call rejected" });
+      }
+
+      if (path === "/api/rooms/private-call/end" && request.method === "POST") {
+        const body = await readJson<{ room_id?: unknown }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        if (!roomId) return badRequest("room_id is required.");
+
+        const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1`).bind(roomId).first();
+        if (!room) return notFound("Private call room not found.");
+        const roomRow = room as Record<string, unknown>;
+
+        // Verify user is either caller or callee
+        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
+        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        const userId = (session as Record<string, unknown>).user_id as string;
+        if (roomRow.host_user_id !== userId && roomRow.call_participant_user_id !== userId) {
+          return j({ ok: false, error: "Not authorized to end this call." }, 403);
+        }
+
+        // End the call
+        await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP WHERE room_id = ?`).bind(roomId).run();
+
+        return j({ ok: true, message: "Call ended" });
+      }
+
+      if (path === "/api/rooms/private-call/status" && request.method === "GET") {
+        const roomId = url.searchParams.get("room_id") || "";
+        if (!roomId) return badRequest("room_id is required.");
+
+        const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1`).bind(roomId).first();
+        if (!room) return notFound("Private call room not found.");
+
+        const callSession = await env.DB.prepare(`SELECT * FROM private_call_sessions WHERE room_id = ?`).bind(roomId).first();
+        const caller = room.host_user_id ? await env.DB.prepare(`SELECT id, display_name, avatar_url FROM users WHERE id = ?`).bind((room as Record<string, unknown>).host_user_id).first() : null;
+        const callee = (room as Record<string, unknown>).call_participant_user_id ? await env.DB.prepare(`SELECT id, display_name, avatar_url FROM users WHERE id = ?`).bind((room as Record<string, unknown>).call_participant_user_id).first() : null;
+
+        return j({ ok: true, room, call_session: callSession, caller, callee });
+      }
+
+      // ---- Chat / Direct Messaging -------------------------------------------
+      // Privacy note: DMs are stored server-side in D1 (needed for multi-device
+      // sync + moderation). This is NOT end-to-end encrypted: the server can
+      // read message content. Never advertise E2EE for this path.
+      async function requireChatUser(): Promise<string | null> {
+        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        if (!cookieToken) return null;
+        const s = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
+        return ((s as Record<string, unknown> | null)?.user_id as string) ?? null;
+      }
+      async function isConversationMember(conversationId: string, userId: string): Promise<boolean> {
+        const m = await env.DB.prepare(`SELECT 1 AS x FROM conversation_participants WHERE conversation_id = ? AND user_id = ?`).bind(conversationId, userId).first();
+        return !!m;
+      }
+      async function hydrateConversation(conversationId: string, viewerId: string) {
+        const conversation = await env.DB.prepare(`SELECT * FROM conversations WHERE id = ?`).bind(conversationId).first();
+        if (!conversation) return null;
+        const parts = await env.DB.prepare(
+          `SELECT cp.user_id, cp.joined_at, cp.last_read_at, cp.muted, u.username, u.display_name, u.avatar_url
+           FROM conversation_participants cp JOIN users u ON u.id = cp.user_id
+           WHERE cp.conversation_id = ? ORDER BY cp.joined_at ASC`
+        ).bind(conversationId).all();
+        const participants = ((parts.results ?? []) as Array<Record<string, unknown>>).map((p) => {
+          const row = p as Record<string, unknown>;
+          return {
+            user_id: row.user_id,
+            joined_at: row.joined_at,
+            last_read_at: row.last_read_at,
+            muted: row.muted,
+            user: { id: row.user_id, username: row.username, display_name: row.display_name, avatar_url: row.avatar_url },
+          };
+        });
+        const last = await env.DB.prepare(
+          `SELECT m.*, u.username, u.display_name, u.avatar_url FROM messages m
+           JOIN users u ON u.id = m.sender_id
+           WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+           ORDER BY m.created_at DESC LIMIT 1`
+        ).bind(conversationId).first();
+        const me = ((parts.results ?? []) as Array<Record<string, unknown>>).find((p) => p.user_id === viewerId);
+        let unread_count = 0;
+        if (me?.last_read_at) {
+          const c = await env.DB.prepare(
+            `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND deleted_at IS NULL AND created_at > ?`
+          ).bind(conversationId, viewerId, me.last_read_at as string).first();
+          unread_count = Number((c as Record<string, unknown> | null)?.n ?? 0);
+        } else {
+          const c = await env.DB.prepare(
+            `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND deleted_at IS NULL`
+          ).bind(conversationId, viewerId).first();
+          unread_count = Math.min(100, Number((c as Record<string, unknown> | null)?.n ?? 0));
+        }
+        let last_message = null;
+        if (last) {
+          const l = last as Record<string, unknown>;
+          last_message = {
+            id: l.id, conversation_id: l.conversation_id, sender_id: l.sender_id,
+            content: l.content, type: l.type, reply_to_id: l.reply_to_id, metadata: l.metadata,
+            created_at: l.created_at, updated_at: l.updated_at, deleted_at: l.deleted_at,
+            sender: { id: l.sender_id, username: l.username, display_name: l.display_name, avatar_url: l.avatar_url },
+          };
+        }
+        return { ...(conversation as object), participants, last_message, unread_count };
+      }
+
+      if (path === "/api/conversations/unread-count" && request.method === "GET") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const rows = await env.DB.prepare(
+          `SELECT cp.conversation_id, cp.last_read_at FROM conversation_participants cp WHERE cp.user_id = ?`
+        ).bind(userId).all();
+        let unread_count = 0;
+        for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
+          if (r.last_read_at) {
+            const c = await env.DB.prepare(
+              `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND deleted_at IS NULL AND created_at > ?`
+            ).bind(r.conversation_id, userId, r.last_read_at as string).first();
+            unread_count += Number((c as Record<string, unknown> | null)?.n ?? 0);
+          } else {
+            const c = await env.DB.prepare(
+              `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND deleted_at IS NULL`
+            ).bind(r.conversation_id, userId).first();
+            unread_count += Math.min(100, Number((c as Record<string, unknown> | null)?.n ?? 0));
+          }
+        }
+        return j({ ok: true, unread_count });
+      }
+
+      if (path === "/api/conversations/direct" && request.method === "POST") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const body = await readJson<{ other_user_id?: unknown }>(request);
+        const otherId = typeof body?.other_user_id === "string" ? body.other_user_id : "";
+        if (!otherId) return badRequest("other_user_id is required.");
+        if (otherId === userId) return badRequest("Cannot message yourself.");
+        const other = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(otherId).first();
+        if (!other) return notFound("User not found.");
+        const existing = await env.DB.prepare(
+          `SELECT c.id FROM conversations c
+           JOIN conversation_participants p1 ON p1.conversation_id = c.id AND p1.user_id = ?
+           JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id = ?
+           WHERE c.type = 'direct'`
+        ).bind(userId, otherId).first();
+        if (existing) {
+          const full = await hydrateConversation((existing as Record<string, unknown>).id as string, userId);
+          return j({ ok: true, conversation: full });
+        }
+        const id = newId("conv");
+        await env.DB.prepare(`INSERT INTO conversations (id, type, created_by) VALUES (?, 'direct', ?)`).bind(id, userId).run();
+        await env.DB.prepare(`INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?), (?, ?)`).bind(id, userId, id, otherId).run();
+        const full = await hydrateConversation(id, userId);
+        return j({ ok: true, conversation: full }, 201);
+      }
+
+      if (path === "/api/conversations" && request.method === "GET") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const rows = await env.DB.prepare(
+          `SELECT c.* FROM conversations c JOIN conversation_participants cp ON cp.conversation_id = c.id
+           WHERE cp.user_id = ? ORDER BY c.updated_at DESC LIMIT 50`
+        ).bind(userId).all();
+        const out = [];
+        for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
+          out.push(await hydrateConversation(r.id as string, userId));
+        }
+        return j({ ok: true, conversations: out });
+      }
+
+      if (path === "/api/conversations" && request.method === "POST") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const body = await readJson<{ type?: unknown; room_id?: unknown; participant_ids?: unknown }>(request);
+        const type = body?.type === "room" ? "room" : "group";
+        const roomId = typeof body?.room_id === "string" ? body.room_id : null;
+        const ids = Array.isArray(body?.participant_ids) ? (body.participant_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        const unique = [...new Set([userId, ...ids])].slice(0, 20);
+        if (unique.length < 2) return badRequest("At least one other participant is required.");
+        const id = newId("conv");
+        await env.DB.prepare(`INSERT INTO conversations (id, type, room_id, created_by) VALUES (?, ?, ?, ?)`).bind(id, type, roomId, userId).run();
+        for (const pid of unique) {
+          const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(pid).first();
+          if (u) await env.DB.prepare(`INSERT OR IGNORE INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)`).bind(id, pid).run();
+        }
+        const full = await hydrateConversation(id, userId);
+        return j({ ok: true, conversation: full }, 201);
+      }
+
+      const convIdMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
+      if (convIdMatch && request.method === "GET") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const cid = decodeURIComponent(convIdMatch[1]);
+        if (!(await isConversationMember(cid, userId))) return j({ ok: false, error: "Not a participant." }, 403);
+        const full = await hydrateConversation(cid, userId);
+        if (!full) return notFound("Conversation not found.");
+        return j({ ok: true, conversation: full });
+      }
+
+      const convMsgMatch = path.match(/^\/api\/conversations\/([^/]+)\/messages$/);
+      if (convMsgMatch) {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const cid = decodeURIComponent(convMsgMatch[1]);
+        if (!(await isConversationMember(cid, userId))) return j({ ok: false, error: "Not a participant." }, 403);
+        if (request.method === "GET") {
+          const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 50) || 50));
+          const before = url.searchParams.get("before");
+          const rows = before
+            ? await env.DB.prepare(
+                `SELECT m.*, u.username, u.display_name, u.avatar_url FROM messages m
+                 JOIN users u ON u.id = m.sender_id
+                 WHERE m.conversation_id = ? AND m.deleted_at IS NULL AND m.created_at < ?
+                 ORDER BY m.created_at DESC LIMIT ?`
+              ).bind(cid, before, limit).all()
+            : await env.DB.prepare(
+                `SELECT m.*, u.username, u.display_name, u.avatar_url FROM messages m
+                 JOIN users u ON u.id = m.sender_id
+                 WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+                 ORDER BY m.created_at DESC LIMIT ?`
+              ).bind(cid, limit).all();
+          const messages = ((rows.results ?? []) as Array<Record<string, unknown>>).reverse().map((m) => ({
+            id: m.id, conversation_id: m.conversation_id, sender_id: m.sender_id,
+            content: m.content, type: m.type, reply_to_id: m.reply_to_id, metadata: m.metadata,
+            created_at: m.created_at, updated_at: m.updated_at, deleted_at: m.deleted_at,
+            sender: { id: m.sender_id, username: m.username, display_name: m.display_name, avatar_url: m.avatar_url },
+          }));
+          return j({ ok: true, messages });
+        }
+        if (request.method === "POST") {
+          const body = await readJson<{ content?: unknown; type?: unknown; reply_to_id?: unknown }>(request);
+          const content = typeof body?.content === "string" ? body.content.trim() : "";
+          const type = body?.type === "image" || body?.type === "audio" || body?.type === "file" ? (body.type as string) : "text";
+          const replyTo = typeof body?.reply_to_id === "string" && body.reply_to_id ? body.reply_to_id : null;
+          if (!content || content.length > 2000) return badRequest("content must be 1-2000 characters.");
+          const id = newId("msg");
+          await env.DB.prepare(
+            `INSERT INTO messages (id, conversation_id, sender_id, content, type, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(id, cid, userId, content, type, replyTo).run();
+          await env.DB.prepare(`UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(cid).run();
+          await env.DB.prepare(`UPDATE conversation_participants SET last_read_at = CURRENT_TIMESTAMP WHERE conversation_id = ? AND user_id = ?`).bind(cid, userId).run();
+          try {
+            await env.DB.prepare(`UPDATE users SET xp = xp + 1 WHERE id = ?`).bind(userId).run();
+            await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason) VALUES (?, ?, 1, 'Sent a message')`).bind(newId("xp"), userId).run();
+          } catch { /* xp is best-effort */ }
+          const row = await env.DB.prepare(
+            `SELECT m.*, u.username, u.display_name, u.avatar_url FROM messages m
+             JOIN users u ON u.id = m.sender_id WHERE m.id = ?`
+          ).bind(id).first();
+          const m = row as Record<string, unknown>;
+          return j({ ok: true, message: {
+            id: m.id, conversation_id: m.conversation_id, sender_id: m.sender_id,
+            content: m.content, type: m.type, reply_to_id: m.reply_to_id, metadata: m.metadata,
+            created_at: m.created_at, updated_at: m.updated_at, deleted_at: m.deleted_at,
+            sender: { id: m.sender_id, username: m.username, display_name: m.display_name, avatar_url: m.avatar_url },
+          } }, 201);
+        }
+        return notFound();
+      }
+
+      const convPartsMatch = path.match(/^\/api\/conversations\/([^/]+)\/participants$/);
+      if (convPartsMatch && request.method === "POST") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const cid = decodeURIComponent(convPartsMatch[1]);
+        if (!(await isConversationMember(cid, userId))) return j({ ok: false, error: "Not a participant." }, 403);
+        const body = await readJson<{ user_id?: unknown }>(request);
+        const pid = typeof body?.user_id === "string" ? body.user_id : "";
+        if (!pid) return badRequest("user_id is required.");
+        const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(pid).first();
+        if (!u) return notFound("User not found.");
+        await env.DB.prepare(`INSERT OR IGNORE INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)`).bind(cid, pid).run();
+        return j({ ok: true });
+      }
+
+      const convPartOneMatch = path.match(/^\/api\/conversations\/([^/]+)\/participants\/([^/]+)$/);
+      if (convPartOneMatch && request.method === "DELETE") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const cid = decodeURIComponent(convPartOneMatch[1]);
+        const pid = decodeURIComponent(convPartOneMatch[2]);
+        if (!(await isConversationMember(cid, userId))) return j({ ok: false, error: "Not a participant." }, 403);
+        if (pid !== userId) {
+          const conv = await env.DB.prepare(`SELECT created_by FROM conversations WHERE id = ?`).bind(cid).first();
+          if ((conv as Record<string, unknown> | null)?.created_by !== userId) {
+            return j({ ok: false, error: "Only the creator can remove others." }, 403);
+          }
+        }
+        await env.DB.prepare(`DELETE FROM conversation_participants WHERE conversation_id = ? AND user_id = ?`).bind(cid, pid).run();
+        return j({ ok: true });
+      }
+
+      if (path.match(/^\/api\/conversations\/[^/]+\/read$/) && request.method === "POST") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const cid = decodeURIComponent(path.split("/")[3]);
+        if (!(await isConversationMember(cid, userId))) return j({ ok: false, error: "Not a participant." }, 403);
+        await env.DB.prepare(`UPDATE conversation_participants SET last_read_at = CURRENT_TIMESTAMP WHERE conversation_id = ? AND user_id = ?`).bind(cid, userId).run();
+        return j({ ok: true });
+      }
+
+      const msgOneMatch = path.match(/^\/api\/messages\/([^/]+)$/);
+      if (msgOneMatch) {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const mid = decodeURIComponent(msgOneMatch[1]);
+        const msg = await env.DB.prepare(`SELECT * FROM messages WHERE id = ?`).bind(mid).first();
+        if (!msg) return notFound("Message not found.");
+        if ((msg as Record<string, unknown>).sender_id !== userId) {
+          return j({ ok: false, error: "Only the sender can edit or delete." }, 403);
+        }
+        if (request.method === "PATCH") {
+          const body = await readJson<{ content?: unknown }>(request);
+          const content = typeof body?.content === "string" ? body.content.trim() : "";
+          if (!content || content.length > 2000) return badRequest("content must be 1-2000 characters.");
+          await env.DB.prepare(`UPDATE messages SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(content, mid).run();
+          return j({ ok: true });
+        }
+        if (request.method === "DELETE") {
+          await env.DB.prepare(`UPDATE messages SET deleted_at = CURRENT_TIMESTAMP, content = '' WHERE id = ?`).bind(mid).run();
+          return j({ ok: true });
+        }
+        return notFound();
+      }
+
+      // ---- AI usage metrics (persisted; powers dashboards) ---------------------
+      if (path === "/api/ai/log" && request.method === "POST") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        try {
+          await env.DB.prepare(
+            `CREATE TABLE IF NOT EXISTS ai_usage_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, feature TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', latency_ms INTEGER NOT NULL DEFAULT 0, ok INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`
+          ).run();
+        } catch { /* exists */ }
+        const body = await readJson<{ feature?: unknown; model?: unknown; latency_ms?: unknown; ok?: unknown }>(request);
+        const feature = typeof body?.feature === "string" ? body.feature.slice(0, 40) : "unknown";
+        const model = typeof body?.model === "string" ? body.model.slice(0, 80) : "gemini-2.5-flash";
+        const latency = typeof body?.latency_ms === "number" ? Math.max(0, Math.floor(body.latency_ms)) : 0;
+        const ok = body?.ok === false || body?.ok === 0 ? 0 : 1;
+        await env.DB.prepare(`INSERT INTO ai_usage_events (id, user_id, feature, model, latency_ms, ok) VALUES (?, ?, ?, ?, ?, ?)`)
+          .bind(newId("ai"), userId, feature, model, latency, ok).run();
+        return j({ ok: true });
       }
 
       return notFound();

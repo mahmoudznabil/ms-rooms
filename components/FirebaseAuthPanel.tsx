@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   auth,
   googleProvider,
@@ -15,6 +15,8 @@ import {
 } from "@/lib/firebase";
 import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
+import { getSiteKey, loadRecaptchaScript, verifyRecaptchaToken } from "@/lib/recaptcha";
+import { logAuthEvent } from "@/lib/metrics";
 
 export default function FirebaseAuthPanel() {
   const [email, setEmail] = useState("");
@@ -27,6 +29,9 @@ export default function FirebaseAuthPanel() {
   const [showPhone, setShowPhone] = useState(false);
   const [showLink, setShowLink] = useState(false);
   const [phoneConfirm, setPhoneConfirm] = useState<import("firebase/auth").ConfirmationResult | null>(null);
+  const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
+  const recaptchaWidgetId = useRef<number | null>(null);
+  const siteKey = getSiteKey();
 
   useEffect(() => {
     if (isSignInWithEmailLink(auth, window.location.href)) {
@@ -48,6 +53,27 @@ export default function FirebaseAuthPanel() {
     }
   }, []);
 
+  // Load reCAPTCHA widget for registration (site key: 6LdgXbQt... )
+  useEffect(() => {
+    let cancelled = false;
+    loadRecaptchaScript().then(() => {
+      if (cancelled || !window.grecaptcha) return;
+      const el = document.getElementById("register-recaptcha");
+      if (el && recaptchaWidgetId.current === null) {
+        try {
+          // Clear previous render
+          el.innerHTML = "";
+          recaptchaWidgetId.current = window.grecaptcha.render(el, {
+            sitekey: siteKey,
+            callback: (t: string) => setRecaptchaToken(t),
+            "expired-callback": () => setRecaptchaToken(null),
+          });
+        } catch {}
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [siteKey]);
+
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
     const { user } = await syncFirebaseUser(fbUser);
     useSession.setState({ user, ready: true, authError: null });
@@ -58,19 +84,31 @@ export default function FirebaseAuthPanel() {
     try {
       const cred = await signInWithPopup(auth, googleProvider);
       await afterFirebase(cred.user);
+      logAuthEvent("google", "success");
       setMsg("Signed in — your coins, XP and Gems follow you.");
-    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    } catch (e: unknown) { logAuthEvent("google", "failure", e instanceof Error ? e.message : undefined); setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   const handleEmail = async (create: boolean) => {
     setBusy(true); setErr(null); setMsg(null);
     try {
+      if (create) {
+        const token = recaptchaToken || window.grecaptcha?.getResponse(recaptchaWidgetId.current ?? undefined) || "";
+        if (!token) throw new Error("Please complete the reCAPTCHA to register.");
+        const ok = await verifyRecaptchaToken(token);
+        if (!ok) throw new Error("reCAPTCHA verification failed — try again.");
+      }
       const cred = create
         ? await createUserWithEmailAndPassword(auth, email.trim(), password)
         : await signInWithEmailAndPassword(auth, email.trim(), password);
       await afterFirebase(cred.user);
+      logAuthEvent("email", "success");
       setMsg(create ? "Account created." : "Signed in.");
-    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+      if (create && window.grecaptcha && recaptchaWidgetId.current !== null) {
+        try { window.grecaptcha.reset(recaptchaWidgetId.current); } catch {}
+        setRecaptchaToken(null);
+      }
+    } catch (e: unknown) { logAuthEvent("email", "failure", e instanceof Error ? e.message : undefined); setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   const handleSendLink = async () => {
@@ -98,6 +136,7 @@ export default function FirebaseAuthPanel() {
     try {
       const cred = await phoneConfirm.confirm(code.trim());
       await afterFirebase(cred.user);
+      logAuthEvent("phone", "success");
       setMsg("Phone verified.");
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
@@ -131,8 +170,13 @@ export default function FirebaseAuthPanel() {
         <div className="grid grid-cols-2 gap-2">
           <button onClick={() => handleEmail(false)} disabled={busy || !email || !password}
             className="rounded-xl bg-white/5 py-3 text-sm font-medium text-white hover:bg-white/10 disabled:opacity-30">Sign in</button>
-          <button onClick={() => handleEmail(true)} disabled={busy || !email || password.length < 6}
+          <button onClick={() => handleEmail(true)} disabled={busy || !email || password.length < 6 || !recaptchaToken}
             className="rounded-xl bg-white py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-30">Create account</button>
+        </div>
+        <div className="mt-3">
+          <p className="mb-2 text-[11px] text-white/30">Complete reCAPTCHA to register:</p>
+          <div id="register-recaptcha" className="flex justify-center" />
+          {!recaptchaToken && <p className="mt-1 text-center text-[10px] text-white/20">Required for Create account</p>}
         </div>
       </div>
 

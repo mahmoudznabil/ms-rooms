@@ -12,11 +12,29 @@ export class ApiError extends Error {
   }
 }
 
+let csrfToken: string | null = null;
+async function getCsrfToken(): Promise<string | null> {
+  if (csrfToken) return csrfToken;
+  try {
+    const r = await fetch(`${API_BASE}/api/csrf`, { credentials: "include" });
+    const d = (await r.json()) as { csrf_token?: string };
+    if (d?.csrf_token) csrfToken = d.csrf_token;
+  } catch {}
+  return csrfToken;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const needsCsrf = ["POST", "PATCH", "DELETE", "PUT"].includes(method);
+  let csrfHeader: Record<string, string> = {};
+  if (needsCsrf) {
+    const t = await getCsrfToken();
+    if (t) csrfHeader["X-CSRF-Token"] = t;
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...csrfHeader, ...(init?.headers ?? {}) },
   });
   const data = (await res.json().catch(() => null)) as (T & { ok?: boolean; error?: string }) | null;
   if (!res.ok || !data || (data as { ok?: boolean }).ok === false) {
@@ -52,6 +70,9 @@ export interface ApiRoomRow {
   speaker_count: number;
   cover_color: string;
   status?: string;
+  is_private?: number;
+  call_participant_user_id?: string | null;
+  call_price_per_minute?: number;
 }
 
 export interface ApiSeat {
@@ -62,6 +83,7 @@ export interface ApiSeat {
   joined_at: string | null;
   display_name: string | null;
   username: string | null;
+  avatar_url: string | undefined;
 }
 
 export interface GiftCatalogItem {
@@ -184,7 +206,7 @@ export async function muteSeat(slug: string, index: number, is_muted: boolean): 
   });
 }
 
-export async function login(username: string): Promise<{ user: ApiUser; token: string }> {
+export async function login(username: string): Promise<{ user: ApiUser }> {
   return req(`/api/auth/login`, { method: "POST", body: JSON.stringify({ username }) });
 }
 
@@ -403,4 +425,98 @@ export async function replyTicket(id: string, input: { message: string; adminTok
   const headers: Record<string, string> = {};
   if (input.adminToken) headers.Authorization = `Bearer ${input.adminToken}`;
   await req(`/api/support/tickets/${encodeURIComponent(id)}/reply`, { method: "POST", headers, body: JSON.stringify({ message: input.message, user_id: input.user_id }) });
+}
+
+// ---- Chat/Messaging ----
+export interface Conversation {
+  id: string;
+  type: 'direct' | 'group' | 'room';
+  room_id: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationParticipant {
+  conversation_id: string;
+  user_id: string;
+  joined_at: string;
+  last_read_at: string | null;
+  muted: number;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  content: string;
+  type: 'text' | 'image' | 'audio' | 'file' | 'system';
+  reply_to_id: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  sender?: { id: string; username: string; display_name: string; avatar_url: string | null };
+}
+
+export interface ConversationWithParticipants extends Conversation {
+  participants: Array<{
+    user_id: string;
+    joined_at: string;
+    last_read_at: string | null;
+    muted: number;
+    user: { id: string; username: string; display_name: string; avatar_url: string | null };
+  }>;
+  last_message: Message | null;
+  unread_count: number;
+}
+
+export async function listConversations(): Promise<{ conversations: Array<ConversationWithParticipants> }> {
+  return req(`/api/conversations`, { cache: "no-store" });
+}
+
+export async function getOrCreateDirectConversation(otherUserId: string): Promise<{ conversation: ConversationWithParticipants }> {
+  return req(`/api/conversations/direct`, { method: "POST", body: JSON.stringify({ other_user_id: otherUserId }) });
+}
+
+export async function createConversation(input: { type: 'group' | 'room'; room_id?: string; participant_ids: string[]; title?: string }): Promise<{ conversation: Conversation }> {
+  return req(`/api/conversations`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function getConversation(conversationId: string): Promise<{ conversation: ConversationWithParticipants }> {
+  return req(`/api/conversations/${encodeURIComponent(conversationId)}`, { cache: "no-store" });
+}
+
+export async function addParticipant(conversationId: string, userId: string): Promise<void> {
+  await req(`/api/conversations/${encodeURIComponent(conversationId)}/participants`, { method: "POST", body: JSON.stringify({ user_id: userId }) });
+}
+
+export async function removeParticipant(conversationId: string, userId: string): Promise<void> {
+  await req(`/api/conversations/${encodeURIComponent(conversationId)}/participants/${encodeURIComponent(userId)}`, { method: "DELETE" });
+}
+
+export async function listMessages(conversationId: string, limit = 50, before?: string): Promise<{ messages: Message[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', before);
+  return req(`/api/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`, { cache: "no-store" });
+}
+
+export async function sendMessage(input: { conversation_id: string; content: string; type?: 'text' | 'image' | 'audio' | 'file'; reply_to_id?: string }): Promise<{ message: Message }> {
+  return req(`/api/conversations/${encodeURIComponent(input.conversation_id)}/messages`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateMessage(messageId: string, content: string): Promise<void> {
+  await req(`/api/messages/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify({ content }) });
+}
+
+export async function deleteMessage(messageId: string): Promise<void> {
+  await req(`/api/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+}
+
+export async function markConversationRead(conversationId: string): Promise<void> {
+  await req(`/api/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST" });
+}
+
+export async function getUnreadCount(): Promise<{ unread_count: number }> {
+  return req(`/api/conversations/unread-count`, { cache: "no-store" });
 }

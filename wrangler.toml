@@ -15,6 +15,11 @@ preview_database_id = "local-best-audio-room"
 # account is currently blocked from creating new Pages projects
 # (API code 8000030). Asset requests (/, /room, /_next/*) serve static
 # files; /api/* and other unmatched routes fall through to the Worker below.
+[vars]
+# reCAPTCHA v2 site key (public) — used for registration bot protection
+# Secret key must be set via `wrangler secret put RECAPTCHA_SECRET_KEY` (never commit)
+RECAPTCHA_SITE_KEY = "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq"
+
 [assets]
 directory = "./out"
 not_found_handling = "404-page"

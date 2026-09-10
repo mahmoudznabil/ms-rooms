@@ -9,10 +9,11 @@ import { API_BASE, ApiError } from "@/lib/api";
  * Firebase is the identity (phone/email/Google), D1 is the source of truth keyed by firebase_uid.
  * The Worker verifies the ID token via google tokeninfo and upserts the D1 row atomically.
  */
-export async function syncFirebaseUser(firebaseUser: User): Promise<{ user: import("@/lib/api").ApiUser; token: string }> {
+export async function syncFirebaseUser(firebaseUser: User): Promise<{ user: import("@/lib/api").ApiUser }> {
   const idToken = await firebaseUser.getIdToken(true);
   const res = await fetch(`${API_BASE}/api/auth/firebase`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
     body: JSON.stringify({
       firebase_uid: firebaseUser.uid,
@@ -23,22 +24,23 @@ export async function syncFirebaseUser(firebaseUser: User): Promise<{ user: impo
       provider: firebaseUser.providerData[0]?.providerId ?? "firebase",
     }),
   });
-  const data = (await res.json().catch(() => null)) as { ok?: boolean; user?: import("@/lib/api").ApiUser; token?: string; error?: string } | null;
-  if (!res.ok || !data?.ok || !data.user || !data.token) {
+  const data = (await res.json().catch(() => null)) as { ok?: boolean; user?: import("@/lib/api").ApiUser; error?: string } | null;
+  if (!res.ok || !data?.ok || !data.user) {
     throw new ApiError(data?.error ?? `Firebase sync failed (${res.status})`, res.status);
   }
-  return { user: data.user, token: data.token };
+  return { user: data.user };
 }
 
-export async function syncIdToken(idToken: string, profile: { firebase_uid: string; email?: string | null; phone?: string | null; display_name?: string | null; avatar_url?: string | null }): Promise<{ user: import("@/lib/api").ApiUser; token: string }> {
+export async function syncIdToken(idToken: string, profile: { firebase_uid: string; email?: string | null; phone?: string | null; display_name?: string | null; avatar_url?: string | null }): Promise<{ user: import("@/lib/api").ApiUser }> {
   const res = await fetch(`${API_BASE}/api/auth/firebase`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
     body: JSON.stringify(profile),
   });
-  const data = (await res.json().catch(() => null)) as { ok?: boolean; user?: import("@/lib/api").ApiUser; token?: string; error?: string } | null;
-  if (!res.ok || !data?.ok || !data.user || !data.token) {
+  const data = (await res.json().catch(() => null)) as { ok?: boolean; user?: import("@/lib/api").ApiUser; error?: string } | null;
+  if (!res.ok || !data?.ok || !data.user) {
     throw new ApiError(data?.error ?? `Firebase sync failed (${res.status})`, res.status);
   }
-  return { user: data.user, token: data.token };
+  return { user: data.user };
 }

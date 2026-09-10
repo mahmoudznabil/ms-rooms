@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { fetchUser, login as apiLogin, me as apiMe, type ApiUser } from "@/lib/api";
+import { API_BASE, fetchUser, login as apiLogin, me as apiMe, type ApiUser } from "@/lib/api";
 
 interface SessionState {
   user: ApiUser | null;
@@ -42,7 +42,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   logout: () => {
     // Call backend logout to clear server session and cookie
-    fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
+    fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).catch(() => undefined);
     // Also sign out Firebase so the next device needs fresh credentials
     try {
       import("@/lib/firebase").then(({ auth, signOut }) => signOut(auth).catch(() => undefined));

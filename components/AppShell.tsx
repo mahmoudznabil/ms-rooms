@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset } from "lucide-react";
+import { Coins, Home, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { levelForXp } from "@/lib/levels";
 import LoginView from "@/components/LoginView";
@@ -16,6 +16,7 @@ const NAV = [
   { href: "/moments", label: "Moments", icon: Sparkles },
   { href: "/rankings", label: "Rankings", icon: Trophy },
   { href: "/wallet", label: "Wallet", icon: Wallet },
+  { href: "/messages", label: "Messages", icon: MessageCircle },
   { href: "/search", label: "Search", icon: Search },
   { href: "/support", label: "Support", icon: Headset },
   { href: "/admin", label: "Admin", icon: Shield },
@@ -132,6 +133,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <span className="font-black tracking-tight">MS-ROOMS</span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link href="/messages" aria-label="Messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+              <MessageCircle size={16} />
+            </Link>
             <Link href="/search" aria-label="Search" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Search size={16} />
             </Link>
