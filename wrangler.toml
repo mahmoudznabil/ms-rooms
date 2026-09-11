@@ -9,6 +9,12 @@ binding = "DB"
 database_name = "best-audio-room"
 database_id = "d600133d-804e-4203-83cb-5166d35d4ae3"
 
+# Cloudflare Calls credentials (SFU) + Realtime TURN — set via `wrangler secret put`
+#   CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN (SFU sessions/new)
+#   TURN_KEY_ID, TURN_API_TOKEN (rtc.live.cloudflare.com ICE servers)
+# Do NOT define them under [vars] — [vars] would shadow the secrets with
+# literal strings. Worker reads them from env at runtime.
+
 # Frontend: the Next.js static export in ./out is served from this same
 # Worker (Cloudflare's recommended Workers Static Assets path), because this
 # account is currently blocked from creating new Pages projects
@@ -19,6 +25,11 @@ database_id = "d600133d-804e-4203-83cb-5166d35d4ae3"
 # Secret key must be set via `wrangler secret put RECAPTCHA_SECRET_KEY` (never commit)
 RECAPTCHA_SITE_KEY = "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq"
 
+# Frontend: the Next.js static export in ./out is served from this same
+# Worker (Cloudflare's recommended Workers Static Assets path), because this
+# account is currently blocked from creating new Pages projects
+# (API code 8000030). Asset requests (/, /room, /_next/*) serve static
+# files; /api/* and other unmatched routes fall through to the Worker below.
 [assets]
 directory = "./out"
 not_found_handling = "404-page"

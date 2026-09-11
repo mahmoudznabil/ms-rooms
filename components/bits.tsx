@@ -18,6 +18,28 @@ export function UserAvatar({
 }) {
   const tier = tierForLevel(levelForXp(xp));
   const initial = (name.trim().slice(0, 1) || "?").toUpperCase();
+  const isPhoto =
+    !!avatarUrl &&
+    (avatarUrl.startsWith("http://") ||
+      avatarUrl.startsWith("https://") ||
+      avatarUrl.startsWith("data:image/") ||
+      avatarUrl.startsWith("blob:"));
+  if (isPhoto) {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-extrabold text-white"
+        style={{
+          width: size,
+          height: size,
+          boxShadow: showFrame ? `0 0 0 2px #0d0d12, 0 0 0 4px ${FRAME_RING[tier]}` : undefined,
+        }}
+        aria-hidden
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={avatarUrl as string} alt="" width={size} height={size} className="h-full w-full object-cover" />
+      </span>
+    );
+  }
   return (
     <span
       className="inline-flex shrink-0 items-center justify-center rounded-full font-extrabold text-white"

@@ -2,14 +2,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Mic, Search, UserCheck, UserPlus, Users } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Mic, Search, UserCheck, UserPlus, Users, MessageCircle, Phone, Eye, Video } from "lucide-react";
 import { follow, searchAll, unfollow, type ApiRoomRow, type ApiUser } from "@/lib/api";
+import { placeCall } from "@/lib/calls";
 import { useSession } from "@/stores/useSession";
 import { EmptyState, UserAvatar } from "@/components/bits";
 import { formatCount } from "@/lib/rooms";
 
 export default function SearchPage() {
   const user = useSession((s) => s.user);
+  const router = useRouter();
   const [q, setQ] = useState("");
   const [rooms, setRooms] = useState<ApiRoomRow[]>([]);
   const [users, setUsers] = useState<ApiUser[]>([]);
@@ -17,6 +20,7 @@ export default function SearchPage() {
   const [searched, setSearched] = useState(false);
   const [following, setFollowing] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [callingId, setCallingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -56,6 +60,14 @@ export default function SearchPage() {
       setFollowing((f) => ({ ...f, [id]: isFollowing }));
       setNotice(e instanceof Error ? e.message : "Follow failed.");
     }
+  };
+
+  const startCall = async (peerId: string, peerName: string, media: "audio" | "video") => {
+    if (!user || callingId) return;
+    setCallingId(`${peerId}:${media}`);
+    const err = await placeCall(peerId, user.id, media, router);
+    setCallingId(null);
+    if (err) setNotice(`${peerName}: ${err}`);
   };
 
   return (
@@ -109,21 +121,60 @@ export default function SearchPage() {
             ) : (
               <ul className="mt-2 space-y-2">
                 {users.map((u) => (
-                  <li key={u.id} className="flex items-center gap-2.5 rounded-2xl border border-white/10 bg-[#15151d] p-3">
-                    <UserAvatar name={u.display_name} avatarUrl={u.avatar_url} xp={u.xp} size={36} />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1 truncate text-sm font-extrabold">{u.display_name} {u.id_tag && <span className="rounded bg-white/10 px-1.5 py-0.5 text-xs font-bold text-white/60">{u.id_tag}</span>}</span>
-                      <span className="block text-xs text-white/40">@{u.username} • {u.id}</span>
-                    </span>
-                    <button
-                      onClick={() => void toggleFollow(u.id)}
-                      className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition ${
-                        following[u.id] ? "bg-white/10 text-white/70" : "bg-white text-black"
-                      }`}
-                    >
-                      {following[u.id] ? <UserCheck size={13} /> : <UserPlus size={13} />}
-                      {following[u.id] ? "Following" : "Follow"}
-                    </button>
+                  <li key={u.id} className="rounded-2xl border border-white/10 bg-[#15151d] p-3">
+                    <div className="flex items-center gap-2.5">
+                      <Link href={`/profile?u=${encodeURIComponent(u.username)}`} aria-label={`View ${u.display_name}`}>
+                        <UserAvatar name={u.display_name} avatarUrl={u.avatar_url} xp={u.xp} size={40} />
+                      </Link>
+                      <span className="min-w-0 flex-1">
+                        <Link href={`/profile?u=${encodeURIComponent(u.username)}`} className="block truncate text-sm font-extrabold hover:underline">
+                          {u.display_name}{" "}
+                          {u.id_tag && <span className="rounded bg-white/10 px-1.5 py-0.5 text-xs font-bold text-white/60">{u.id_tag}</span>}
+                        </Link>
+                        <span className="block truncate text-xs text-white/40">@{u.username}</span>
+                      </span>
+                      <button
+                        onClick={() => void toggleFollow(u.id)}
+                        className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition ${
+                          following[u.id] ? "bg-white/10 text-white/70" : "bg-white text-black"
+                        }`}
+                      >
+                        {following[u.id] ? <UserCheck size={13} /> : <UserPlus size={13} />}
+                        {following[u.id] ? "Following" : "Follow"}
+                      </button>
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <Link
+                        href={`/profile?u=${encodeURIComponent(u.username)}`}
+                        className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
+                      >
+                        <Eye size={13} /> View profile
+                      </Link>
+                      <Link
+                        href={`/messages?userId=${encodeURIComponent(u.id)}`}
+                        className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
+                      >
+                        <MessageCircle size={13} /> Message
+                      </Link>
+                      <button
+                        onClick={() => void startCall(u.id, u.display_name, "audio")}
+                        disabled={callingId === `${u.id}:audio`}
+                        aria-label={`Voice call ${u.display_name}`}
+                        title="Voice call"
+                        className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-violet-500/20 py-2 text-xs font-bold text-violet-200 transition hover:bg-violet-500/30 disabled:opacity-40"
+                      >
+                        <Phone size={13} /> {callingId === `${u.id}:audio` ? "Calling…" : "Call"}
+                      </button>
+                      <button
+                        onClick={() => void startCall(u.id, u.display_name, "video")}
+                        disabled={callingId === `${u.id}:video`}
+                        aria-label={`Video call ${u.display_name}`}
+                        title="Video call"
+                        className="flex items-center justify-center rounded-xl bg-violet-500/20 px-3 py-2 text-violet-200 transition hover:bg-violet-500/30 disabled:opacity-40"
+                      >
+                        <Video size={13} />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>

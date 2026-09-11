@@ -12,12 +12,18 @@ interface Env {
   // Typed as `any` to avoid requiring @cloudflare/workers-types.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DB: any;
-  // Cloudflare Calls (Realtime SFU + TURN). Set via `wrangler secret put`.
-  // When absent, /api/turn and /api/calls/session report `configured: false`
-  // and clients run in local preview mode. Nothing leaves Cloudflare.
+  // Cloudflare Calls SFU. Set via `wrangler secret put`.
+  // When absent, /api/calls/session reports `configured: false`
+  // and clients run in local preview mode.
   CALLS_ACCOUNT_ID?: string;
   CALLS_APP_ID?: string;
   CALLS_API_TOKEN?: string;
+  // Cloudflare Realtime TURN (separate from Calls SFU). Set via `wrangler secret put`.
+  // TURN_KEY_ID = Realtime TURN key ID, TURN_API_TOKEN = TURN API token (Bearer).
+  // When absent, /api/turn falls back to legacy Calls turn_keys if CALLS_* exist,
+  // otherwise reports `configured: false`. Nothing leaves Cloudflare.
+  TURN_KEY_ID?: string;
+  TURN_API_TOKEN?: string;
   // Firebase Admin (optional): if set, Worker verifies ID tokens with the Admin SDK service account.
   // Otherwise it falls back to google tokeninfo verification (no secrets needed).
   FIREBASE_PROJECT_ID?: string;
@@ -435,6 +441,17 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
             "POST /api/admin/rooms/end",
             "GET /api/turn",
             "POST /api/calls/session",
+            "POST /api/rooms/private-call",
+            "POST /api/rooms/private-call/accept",
+            "POST /api/rooms/private-call/reject",
+            "POST /api/rooms/private-call/end",
+            "POST /api/rooms/private-call/cancel",
+            "POST /api/rooms/private-call/missed",
+            "GET /api/rooms/private-call/status",
+            "GET /api/calls",
+            "GET /api/calls/incoming",
+            "GET /api/calls/missed-count",
+            "POST /api/calls/seen",
             "GET /api/conversations",
             "POST /api/conversations",
             "POST /api/conversations/direct",
@@ -610,11 +627,40 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         return notFound();
       }
 
+      // Username availability check for FB/IG-style renames.
+      // NOTE: must sit BEFORE the generic /api/users/:id GET match below,
+      // otherwise "check-username" would be treated as a user id.
+      if (path === "/api/users/check-username" && request.method === "GET") {
+        const name = (url.searchParams.get("username") ?? "").trim();
+        if (!/^[A-Za-z0-9_.-]{2,24}$/.test(name)) {
+          return j({ ok: true, available: false, reason: "Username must be 2-24 chars: letters, numbers, _ . -" });
+        }
+        const taken = await env.DB.prepare(`SELECT id FROM users WHERE username = ? COLLATE NOCASE`).bind(name).first();
+        const excludeId = url.searchParams.get("exclude_id") ?? "";
+        if (taken && (taken as Record<string, unknown>).id !== excludeId) {
+          return j({ ok: true, available: false, reason: "That username is taken." });
+        }
+        return j({ ok: true, available: true });
+      }
+
       // ---- Users -----------------------------------------------------------
+      // Lookup accepts id, username (case-insensitive), or id_tag so
+      // /profile/<username> links from search resolve by handle.
+      async function resolveUser(key: string): Promise<Record<string, unknown> | null> {
+        const k = key.trim();
+        if (!k) return null;
+        let u = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(k).first();
+        if (u) return u as Record<string, unknown>;
+        u = await env.DB.prepare(`SELECT * FROM users WHERE username = ? COLLATE NOCASE`).bind(k).first();
+        if (u) return u as Record<string, unknown>;
+        u = await env.DB.prepare(`SELECT * FROM users WHERE id_tag = ? COLLATE NOCASE`).bind(k).first();
+        if (u) return u as Record<string, unknown>;
+        return null;
+      }
       const userMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (userMatch && request.method === "GET") {
         const id = decodeURIComponent(userMatch[1]);
-        const user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
+        const user = await resolveUser(id);
         if (!user) return notFound("User not found.");
         return j({ ok: true, user });
       }
@@ -985,10 +1031,12 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           caller_user_id?: unknown;
           callee_user_id?: unknown;
           call_price_per_minute?: unknown;
+          media?: unknown;
         }>(request);
         const callerId = typeof body?.caller_user_id === "string" ? body.caller_user_id : "";
         const calleeId = typeof body?.callee_user_id === "string" ? body.callee_user_id : "";
         const pricePerMinute = typeof body?.call_price_per_minute === "number" ? body.call_price_per_minute : 10;
+        const media = body?.media === "video" ? "video" : "audio";
         if (!callerId) return badRequest("caller user_id (caller_user_id) is required.");
         if (!calleeId) return badRequest("callee_user_id is required.");
         if (callerId === calleeId) return badRequest("Cannot call yourself.");
@@ -1001,10 +1049,10 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
 
         // Check if there's already an active private call between these users
         const existingCall = await env.DB.prepare(
-          `SELECT id FROM rooms WHERE is_private = 1 AND status = 'live' AND 
-           ((host_user_id = ? AND call_participant_user_id = ?) OR (host_user_id = ? AND call_participant_user_id = ?))`
+          `SELECT s.id FROM private_call_sessions s WHERE s.status IN ('initiated', 'ringing', 'connected') AND
+           ((s.caller_user_id = ? AND s.callee_user_id = ?) OR (s.caller_user_id = ? AND s.callee_user_id = ?))`
         ).bind(callerId, calleeId, calleeId, callerId).first();
-        if (existingCall) return conflict("An active private call already exists between these users.");
+        if (existingCall) return conflict("A call is already active between you two.");
 
         // Check caller has enough coins for at least 1 minute
         const callerCoins = (caller as Record<string, unknown>).coins as number;
@@ -1035,12 +1083,14 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
            VALUES (?, 1, ?, 'speaker', 0, CURRENT_TIMESTAMP)`
         ).bind(roomId, calleeId).run();
 
-        // Create private call session
+        // Create private call session — starts RINGING so the callee's
+        // incoming-call UI appears (the old code left it 'initiated',
+        // which no client ever polled for, so calls never rang).
         const callSessionId = newId("call");
         await env.DB.prepare(
-          `INSERT INTO private_call_sessions (id, room_id, caller_user_id, callee_user_id, price_per_minute, status)
-           VALUES (?, ?, ?, ?, ?, 'initiated')`
-        ).bind(newId("call"), roomId, callerId, calleeId, pricePerMinute).run();
+          `INSERT INTO private_call_sessions (id, room_id, caller_user_id, callee_user_id, price_per_minute, media, status, started_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'ringing', CURRENT_TIMESTAMP)`
+        ).bind(callSessionId, roomId, callerId, calleeId, pricePerMinute, media).run();
 
         // Charge caller for 1 minute upfront
         await env.DB.prepare(`UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(pricePerMinute, callerId).run();
@@ -1049,13 +1099,13 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         ).bind(newId("tx"), callerId, roomId, -pricePerMinute, `1-on-1 call with ${(await env.DB.prepare(`SELECT display_name FROM users WHERE id = ?`).bind(calleeId).first())?.display_name ?? 'User'}`).run();
         await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, 2, 'Started 1-on-1 call', ?)`).bind(newId("xp"), callerId, roomId).run();
 
-        // Create call transaction log
+        // Create call transaction log (references the real session id)
         await env.DB.prepare(
           `INSERT INTO call_transactions (id, call_session_id, user_id, amount, description) VALUES (?, ?, ?, ?, ?)`
-        ).bind(newId("ctxn"), newId("call"), callerId, -pricePerMinute, `Initial 1-min charge for 1-on-1 call`).run();
+        ).bind(newId("ctxn"), callSessionId, callerId, -pricePerMinute, `Initial 1-min charge for 1-on-1 call`).run();
 
         const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ?`).bind(id).first();
-        return j({ ok: true, room, call_session_id: newId("call") }, 201);
+        return j({ ok: true, room, call_session_id: callSessionId, media }, 201);
       }
 
       // ---- Room Edit (PATCH/DELETE) ---------------------------------------------------
@@ -1121,7 +1171,10 @@ return j({ ok: true, ended: true });
 
       const socialMatch = path.match(/^\/api\/users\/([^/]+)\/social$/);
       if (socialMatch && request.method === "GET") {
-        const id = decodeURIComponent(socialMatch[1]);
+        const rawKey = decodeURIComponent(socialMatch[1]);
+        const resolved = await resolveUser(rawKey);
+        if (!resolved) return notFound("User not found.");
+        const id = resolved.id as string;
         const viewer = url.searchParams.get("viewer_id") ?? "";
         const counts = await env.DB.prepare(
           `SELECT (SELECT COUNT(*) FROM follows WHERE followee_id = ?) AS followers,
@@ -1161,10 +1214,11 @@ return j({ ok: true, ended: true });
       }
 
       // ---- Profile -------------------------------------------------------------------------
+      // Uses resolveUser() above (id, username case-insensitive, or id_tag).
       const profileMatch = path.match(/^\/api\/users\/([^/]+)\/profile$/);
       if (profileMatch && request.method === "GET") {
         const id = decodeURIComponent(profileMatch[1]);
-        const user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
+        const user = await resolveUser(id);
         if (!user) return notFound("User not found.");
         const stats = await env.DB.prepare(
           `SELECT (SELECT COUNT(*) FROM follows WHERE followee_id = ?) AS followers,
@@ -1177,30 +1231,52 @@ return j({ ok: true, ended: true });
                   (SELECT COALESCE(SUM(-t.amount), 0) FROM transactions t
                    WHERE t.user_id = ? AND t.type = 'gift_sent') AS gifts_sent`
         )
-          .bind(id, id, id, id, id, id)
+          .bind(user.id, user.id, user.id, user.id, user.id, user.id)
           .first();
         return j({ ok: true, user, stats: stats ?? {} });
       }
 
+      // Username availability check for FB/IG-style renames.
+      // (Handler lives above, before the generic /api/users/:id GET match.)
       const userPatchMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (userPatchMatch && request.method === "PATCH") {
         const id = decodeURIComponent(userPatchMatch[1]);
-        const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(id).first();
-        if (!user) return notFound("User not found.");
-        const body = await readJson<{ display_name?: unknown; bio?: unknown; avatar_url?: unknown }>(request);
+        const found = await resolveUser(id);
+        if (!found) return notFound("User not found.");
+        const realId = found.id as string;
+        const body = await readJson<{ display_name?: unknown; bio?: unknown; avatar_url?: unknown; username?: unknown }>(request);
         const displayName = typeof body?.display_name === "string" ? body.display_name.trim() : null;
         const bio = typeof body?.bio === "string" ? body.bio.trim().slice(0, 160) : null;
-        const avatar = typeof body?.avatar_url === "string" ? body.avatar_url.trim().slice(0, 200) : null;
+        // avatar_url: https URL, data:image:... upload (client-resized), or a color id.
+        const avatar = typeof body?.avatar_url === "string" ? body.avatar_url.trim().slice(0, 150000) : null;
+        const username = typeof body?.username === "string" ? body.username.trim() : null;
         if (displayName !== null && (displayName.length < 2 || displayName.length > 24)) {
           return badRequest("Display name must be 2-24 characters.");
         }
+        if (username !== null) {
+          if (!/^[A-Za-z0-9_.-]{2,24}$/.test(username)) {
+            return badRequest("Username must be 2-24 chars: letters, numbers, _ . - (no spaces).");
+          }
+          const clash = await env.DB.prepare(`SELECT id FROM users WHERE username = ? COLLATE NOCASE`).bind(username).first();
+          if (clash && (clash as Record<string, unknown>).id !== realId) {
+            return conflict("That username is taken. Try another.");
+          }
+        }
+        if (avatar !== null) {
+          const okAvatar =
+            avatar.length === 0 ||
+            avatar.startsWith("http://") || avatar.startsWith("https://") ||
+            avatar.startsWith("data:image/") || avatar.startsWith("blob:") ||
+            /^(violet|ocean|sunset|forest|midnight|aurora|default)$/.test(avatar);
+          if (!okAvatar) return badRequest("Avatar must be an image URL, an uploaded photo, or a color.");
+        }
         await env.DB.prepare(
           `UPDATE users SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio),
-           avatar_url = COALESCE(?, avatar_url), updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+           avatar_url = COALESCE(?, avatar_url), username = COALESCE(?, username), updated_at = CURRENT_TIMESTAMP WHERE id = ?`
         )
-          .bind(displayName, bio, avatar, id)
+          .bind(displayName, bio, avatar, username, realId)
           .run();
-        const updatedUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
+        const updatedUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(realId).first();
         return j({ ok: true, user: updatedUser });
       }
 
@@ -1527,18 +1603,68 @@ return j({
         return j({ ok: true, id }, 201);
       }
 
-      // ---- Cloudflare Calls TURN (NAT traversal, Cloudflare-only) ------------------
+      // ---- Cloudflare Realtime TURN (NAT traversal, Cloudflare-only) ------------
+      // Primary: Realtime TURN API — POST rtc.live.cloudflare.com/v1/turn/keys/:id/credentials/generate-ice-servers
+      // with Bearer TURN_API_TOKEN. Returns { iceServers: RTCIceServer[] } which we
+      // forward verbatim (plus a flattened turn:{urls,username,credential} for old clients).
+      // Fallback: legacy Calls turn_keys (CALLS_*), for accounts without a TURN key.
       if (path === "/api/turn" && request.method === "GET") {
-        const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN } = env;
-        if (!CALLS_ACCOUNT_ID || !CALLS_APP_ID || !CALLS_API_TOKEN) {
+        const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN, TURN_KEY_ID, TURN_API_TOKEN } = env;
+        const hasRealtimeTurn =
+          typeof TURN_KEY_ID === "string" && TURN_KEY_ID.length > 0 && !TURN_KEY_ID.startsWith("@") &&
+          typeof TURN_API_TOKEN === "string" && TURN_API_TOKEN.length > 0 && !TURN_API_TOKEN.startsWith("@");
+        const hasCallsTurn =
+          typeof CALLS_ACCOUNT_ID === "string" && CALLS_ACCOUNT_ID.length > 0 && !CALLS_ACCOUNT_ID.startsWith("@") &&
+          typeof CALLS_APP_ID === "string" && CALLS_APP_ID.length > 0 && !CALLS_APP_ID.startsWith("@") &&
+          typeof CALLS_API_TOKEN === "string" && CALLS_API_TOKEN.length > 0 && !CALLS_API_TOKEN.startsWith("@");
+        if (!hasRealtimeTurn && !hasCallsTurn) {
           return j({
           ok: true,
           configured: false,
           turn: null,
+          iceServers: null,
           setup:
-            "Calls not configured. Run: wrangler secret put CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN. Clients use local preview mic until then.",
+            "TURN not configured. Run: wrangler secret put TURN_KEY_ID, TURN_API_TOKEN (Realtime TURN) and CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN (SFU). Clients use local preview mic until then.",
         });
         }
+        // 1) Preferred: Realtime TURN key (what you created as `bestaudio-turn`).
+        if (hasRealtimeTurn) {
+          try {
+            const res = await fetch(
+              `https://rtc.live.cloudflare.com/v1/turn/keys/${TURN_KEY_ID}/credentials/generate-ice-servers`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${TURN_API_TOKEN}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ ttl: 86400 }),
+              }
+            );
+            const payload = (await res.json()) as {
+              iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
+            };
+            const iceServers = Array.isArray(payload.iceServers) ? payload.iceServers : null;
+            if (!res.ok || !iceServers || iceServers.length === 0) {
+              return j({ ok: false, configured: true, error: "TURN credential request failed.", detail: payload ?? null }, 502);
+            }
+            // Flatten TURN entry (with username/credential) for backwards-compat clients.
+            const turnEntry = iceServers.find((s) => s.username && s.credential) ?? null;
+            const urls = turnEntry ? (Array.isArray(turnEntry.urls) ? turnEntry.urls : [turnEntry.urls]) : [];
+            return j({
+              ok: true,
+              configured: true,
+              iceServers,
+              turn:
+                turnEntry != null
+                  ? { urls, username: turnEntry.username as string, credential: turnEntry.credential as string }
+                  : null,
+            });
+          } catch (err) {
+            return j({ ok: false, configured: true, error: err instanceof Error ? err.message : "TURN error." }, 502);
+          }
+        }
+        // 2) Legacy fallback: Calls turn_keys (deprecated, kept for compat).
         try {
           const res = await fetch(
             `https://api.cloudflare.com/client/v4/accounts/${CALLS_ACCOUNT_ID}/calls/turn_keys`,
@@ -1562,11 +1688,13 @@ return j({
           if (!res.ok || !payload.success || !username || !credential) {
             return j({ ok: false, configured: true, error: "TURN key request failed.", detail: payload.errors ?? null }, 502);
           }
+          const urls = ["turn:turn.cloudflare.com:3478", "turns:turn.cloudflare.com:5349"];
           return j({
             ok: true,
             configured: true,
+            iceServers: [{ urls }, { urls, username, credential }],
             turn: {
-              urls: ["turn:turn.cloudflare.com:3478", "turns:turn.cloudflare.com:5349"],
+              urls,
               username,
               credential,
             },
@@ -1579,7 +1707,8 @@ return j({
       // ---- Cloudflare Calls SFU session broker ---------------------------------------
       if (path === "/api/calls/session" && request.method === "POST") {
         const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN } = env;
-        if (!CALLS_ACCOUNT_ID || !CALLS_APP_ID || !CALLS_API_TOKEN) {
+        const isPlaceholder = (v: unknown) => typeof v !== "string" || v.length === 0 || v.startsWith("@");
+        if (isPlaceholder(CALLS_ACCOUNT_ID) || isPlaceholder(CALLS_APP_ID) || isPlaceholder(CALLS_API_TOKEN)) {
           return j(
             { ok: false, configured: false, error: "Calls not configured. Client should use preview mic mode." },
             501
@@ -1981,10 +2110,8 @@ return j({ ok: true });
         const roomId = typeof body?.room_id === "string" ? body.room_id : "";
         if (!roomId) return badRequest("room_id is required.");
 
-        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
-        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
-        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
-        const userId = (session as Record<string, unknown>).user_id as string;
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
 
         const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1 AND status = 'live'`).bind(roomId).first();
         if (!room) return notFound("Private call room not found or not active.");
@@ -1997,9 +2124,10 @@ return j({ ok: true });
 
         // Update room status and call session
         await env.DB.prepare(`UPDATE rooms SET status = 'live', call_started_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
-        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'connected', connected_at = CURRENT_TIMESTAMP WHERE room_id = ?`).bind(roomId).run();
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'connected', connected_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?`).bind(roomId).run();
+        const sess = await env.DB.prepare(`SELECT s.*, r.slug AS room_slug FROM private_call_sessions s JOIN rooms r ON r.id = s.room_id WHERE s.room_id = ?`).bind(roomId).first();
 
-        return j({ ok: true, message: "Call accepted" });
+        return j({ ok: true, message: "Call accepted", room_slug: (sess as Record<string, unknown> | null)?.room_slug ?? null, media: (sess as Record<string, unknown> | null)?.media ?? "audio" });
       }
 
       if (path === "/api/rooms/private-call/reject" && request.method === "POST") {
@@ -2012,10 +2140,8 @@ return j({ ok: true });
         const roomRow = room as Record<string, unknown>;
 
         // Verify user is the callee
-        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
-        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
-        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
-        const userId = (session as Record<string, unknown>).user_id as string;
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
         if (roomRow.call_participant_user_id !== userId) {
           return j({ ok: false, error: "Not authorized to reject this call." }, 403);
         }
@@ -2037,10 +2163,8 @@ return j({ ok: true });
         const roomRow = room as Record<string, unknown>;
 
         // Verify user is either caller or callee
-        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
-        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
-        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
-        const userId = (session as Record<string, unknown>).user_id as string;
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
         if (roomRow.host_user_id !== userId && roomRow.call_participant_user_id !== userId) {
           return j({ ok: false, error: "Not authorized to end this call." }, 403);
         }
@@ -2064,6 +2188,156 @@ return j({ ok: true });
         const callee = (room as Record<string, unknown>).call_participant_user_id ? await env.DB.prepare(`SELECT id, display_name, avatar_url FROM users WHERE id = ?`).bind((room as Record<string, unknown>).call_participant_user_id).first() : null;
 
         return j({ ok: true, room, call_session: callSession, caller, callee });
+      }
+
+      // Session user for call endpoints. Guards the missing-cookie case BEFORE
+      // binding (D1 throws D1_TYPE_ERROR on undefined bind values).
+      async function sessionUserId(): Promise<string | null> {
+        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
+        if (!cookieToken) return null;
+        const s = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
+        return ((s as Record<string, unknown> | null)?.user_id as string) ?? null;
+      }
+
+      // Caller hangs up while still ringing → callee stops ringing (cancelled).
+      if (path === "/api/rooms/private-call/cancel" && request.method === "POST") {
+        const body = await readJson<{ room_id?: unknown }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        if (!roomId) return badRequest("room_id is required.");
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1`).bind(roomId).first();
+        if (!room) return notFound("Private call room not found.");
+        if ((room as Record<string, unknown>).host_user_id !== userId) {
+          return j({ ok: false, error: "Only the caller can cancel." }, 403);
+        }
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'cancelled', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE room_id = ? AND status IN ('initiated', 'ringing')`).bind(roomId).run();
+        await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
+        return j({ ok: true, message: "Call cancelled" });
+      }
+
+      // Callee lets it ring out (or app timeout) → missed call for the recents log.
+      if (path === "/api/rooms/private-call/missed" && request.method === "POST") {
+        const body = await readJson<{ room_id?: unknown }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        if (!roomId) return badRequest("room_id is required.");
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        const room = await env.DB.prepare(`SELECT host_user_id, call_participant_user_id FROM rooms WHERE id = ? AND is_private = 1`).bind(roomId).first();
+        if (!room) return notFound("Private call room not found.");
+        const rr = room as Record<string, unknown>;
+        if (rr.host_user_id !== userId && rr.call_participant_user_id !== userId) {
+          return j({ ok: false, error: "Not part of this call." }, 403);
+        }
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'missed', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE room_id = ? AND status IN ('initiated', 'ringing')`).bind(roomId).run();
+        await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
+        return j({ ok: true, message: "Marked missed" });
+      }
+
+      // ---- Calls tab (recents, incoming ringing, missed badge) ---------------------------
+      // Shared rule: stale ringing (>75s, nobody picked up) expires to 'missed'
+      // so neither side rings forever and recents stay truthful.
+      async function expireStaleRinging(): Promise<void> {
+        try {
+          const stale = await env.DB.prepare(
+            `SELECT room_id FROM private_call_sessions
+             WHERE status IN ('initiated', 'ringing') AND created_at < datetime('now', '-75 seconds') LIMIT 20`
+          ).all();
+          for (const r of ((stale.results ?? []) as Array<Record<string, unknown>>)) {
+            await env.DB.prepare(`UPDATE private_call_sessions SET status = 'missed', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE room_id = ? AND status IN ('initiated', 'ringing')`).bind(r.room_id).run();
+            await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'live'`).bind(r.room_id).run();
+          }
+        } catch { /* expiry is best-effort */ }
+      }
+
+      // Recents: every call I'm part of, newest first, with both peers.
+      if (path === "/api/calls" && request.method === "GET") {
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        await expireStaleRinging();
+        const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 30) || 30));
+        const rows = await env.DB.prepare(
+          `SELECT s.id, s.room_id, s.caller_user_id, s.callee_user_id, s.price_per_minute,
+                  s.status, s.media, s.started_at, s.connected_at, s.ended_at, s.created_at,
+                  r.slug AS room_slug,
+                  c.username AS caller_username, c.display_name AS caller_name, c.avatar_url AS caller_avatar,
+                  e.username AS callee_username, e.display_name AS callee_name, e.avatar_url AS callee_avatar
+           FROM private_call_sessions s
+           JOIN rooms r ON r.id = s.room_id
+           JOIN users c ON c.id = s.caller_user_id
+           JOIN users e ON e.id = s.callee_user_id
+           WHERE s.caller_user_id = ? OR s.callee_user_id = ?
+           ORDER BY s.created_at DESC LIMIT ?`
+        ).bind(userId, userId, limit).all();
+        const calls = ((rows.results ?? []) as Array<Record<string, unknown>>).map((s) => ({
+          id: s.id,
+          room_id: s.room_id,
+          room_slug: s.room_slug,
+          direction: s.caller_user_id === userId ? "out" : "in",
+          status: s.status,
+          media: s.media ?? "audio",
+          price_per_minute: s.price_per_minute,
+          started_at: s.started_at,
+          connected_at: s.connected_at,
+          ended_at: s.ended_at,
+          created_at: s.created_at,
+          peer: s.caller_user_id === userId
+            ? { id: s.callee_user_id, username: s.callee_username, display_name: s.callee_name, avatar_url: s.callee_avatar }
+            : { id: s.caller_user_id, username: s.caller_username, display_name: s.caller_name, avatar_url: s.caller_avatar },
+        }));
+        return j({ ok: true, calls });
+      }
+
+      // Ringing right now where I'm the callee — polled by the global incoming-call UI.
+      if (path === "/api/calls/incoming" && request.method === "GET") {
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        await expireStaleRinging();
+        const rows = await env.DB.prepare(
+          `SELECT s.id, s.room_id, s.media, s.created_at, r.slug AS room_slug,
+                  c.id AS caller_id, c.username AS caller_username, c.display_name AS caller_name, c.avatar_url AS caller_avatar
+           FROM private_call_sessions s
+           JOIN rooms r ON r.id = s.room_id
+           JOIN users c ON c.id = s.caller_user_id
+           WHERE s.callee_user_id = ? AND s.status IN ('initiated', 'ringing') AND r.status = 'live'
+           ORDER BY s.created_at DESC LIMIT 5`
+        ).bind(userId).all();
+        const incoming = ((rows.results ?? []) as Array<Record<string, unknown>>).map((s) => ({
+          id: s.id,
+          room_id: s.room_id,
+          room_slug: s.room_slug,
+          media: s.media ?? "audio",
+          created_at: s.created_at,
+          caller: { id: s.caller_id, username: s.caller_username, display_name: s.caller_name, avatar_url: s.caller_avatar },
+        }));
+        return j({ ok: true, incoming });
+      }
+
+      // Missed-call badge count (resets when the Calls tab is opened).
+      if (path === "/api/calls/missed-count" && request.method === "GET") {
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        await expireStaleRinging();
+        try {
+          await env.DB.prepare(`ALTER TABLE users ADD COLUMN last_calls_seen TEXT`).run();
+        } catch { /* exists */ }
+        const row = await env.DB.prepare(
+          `SELECT COUNT(*) AS n FROM private_call_sessions
+           WHERE callee_user_id = ? AND status = 'missed'
+             AND created_at > COALESCE((SELECT last_calls_seen FROM users WHERE id = ?), '1970-01-01')`
+        ).bind(userId, userId).first();
+        return j({ ok: true, missed: Number((row as Record<string, unknown> | null)?.n ?? 0) });
+      }
+
+      // Opening the Calls tab clears the missed badge.
+      if (path === "/api/calls/seen" && request.method === "POST") {
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+        try {
+          await env.DB.prepare(`ALTER TABLE users ADD COLUMN last_calls_seen TEXT`).run();
+        } catch { /* exists */ }
+        await env.DB.prepare(`UPDATE users SET last_calls_seen = CURRENT_TIMESTAMP WHERE id = ?`).bind(userId).run();
+        return j({ ok: true });
       }
 
       // ---- Chat / Direct Messaging -------------------------------------------

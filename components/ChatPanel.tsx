@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Send, Sparkles, Languages, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Check, CheckCheck, Phone, Send, Sparkles, Languages, Video, X } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import {
+  getConversation,
   listConversations,
   getOrCreateDirectConversation,
   listMessages,
@@ -12,6 +14,7 @@ import {
   type ConversationWithParticipants,
   type Message,
 } from "@/lib/api";
+import { placeCall } from "@/lib/calls";
 import { aiModerateContent, aiTranslate, aiSummarizeConversation, aiSuggestReplies } from "@/lib/ai";
 import { logChatEvent } from "@/lib/metrics";
 
@@ -23,8 +26,10 @@ interface ChatPanelProps {
 
 export default function ChatPanel({ userId, conversationId: initialId, onClose }: ChatPanelProps) {
   const user = useSession((s) => s.user);
+  const router = useRouter();
   const [conversations, setConversations] = useState<ConversationWithParticipants[]>([]);
   const [activeId, setActiveId] = useState<string | null>(initialId ?? null);
+  const [activeConv, setActiveConv] = useState<ConversationWithParticipants | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -62,8 +67,12 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
     setError(null);
     setLoading(true);
     try {
-      const { messages } = await listMessages(id, 50);
+      const [{ messages }, conv] = await Promise.all([
+        listMessages(id, 50),
+        getConversation(id).catch(() => null),
+      ]);
       setMessages(messages);
+      if (conv) setActiveConv(conv.conversation);
       void markConversationRead(id).catch(() => undefined);
       logChatEvent("open_conversation", { conversation_id: id });
     } catch (e) {
@@ -84,6 +93,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
           const { conversation } = await getOrCreateDirectConversation(userId);
           if (!cancelled) {
             setActiveId(conversation.id);
+            setActiveConv(conversation);
             const { messages } = await listMessages(conversation.id, 50);
             if (!cancelled) {
               setMessages(messages);
@@ -266,7 +276,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
                         <span className="block truncate text-xs text-white/45">{c.last_message?.content ?? "No messages yet"}</span>
                       </span>
                       {c.unread_count > 0 && (
-                        <span className="rounded-full bg-violet-500 px-2 py-0.5 text-xs font-bold">{c.unread_count}</span>
+                        <span className="rounded-full bg-violet-500 px-2 py-0.5 text-xs font-bold">{c.unread_count > 99 ? "99+" : c.unread_count}</span>
                       )}
                     </button>
                   </li>
@@ -280,16 +290,37 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
   }
 
   // Thread view
+  const others = (activeConv?.participants ?? []).filter((p) => p.user_id !== user?.id);
+  const isDirect = activeConv != null && activeConv.type === "direct" && others.length === 1;
+  const threadPeer = isDirect ? others[0] : null;
+  const peerLastRead = threadPeer?.last_read_at ? new Date(threadPeer.last_read_at).getTime() : 0;
+
+  const callPeer = async (media: "audio" | "video") => {
+    if (!user || !threadPeer) return;
+    const err = await placeCall(threadPeer.user_id, user.id, media, router);
+    if (err) setNotice(err);
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-white/10 p-3">
-        <button onClick={() => { setActiveId(null); void loadList(); }} aria-label="Back to conversations" className="rounded-full p-1.5 text-white/60 hover:bg-white/10 hover:text-white">
+        <button onClick={() => { setActiveId(null); setActiveConv(null); void loadList(); }} aria-label="Back to conversations" className="rounded-full p-1.5 text-white/60 hover:bg-white/10 hover:text-white">
           <ArrowLeft size={16} />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold">Conversation</p>
+          <p className="truncate text-sm font-bold">{threadPeer ? threadPeer.user.display_name : "Conversation"}</p>
           <p className="text-xs text-white/40">{messages.length} messages</p>
         </div>
+        {threadPeer && (
+          <>
+            <button onClick={() => void callPeer("audio")} aria-label="Voice call" title="Voice call" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+              <Phone size={15} />
+            </button>
+            <button onClick={() => void callPeer("video")} aria-label="Video call" title="Video call" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+              <Video size={15} />
+            </button>
+          </>
+        )}
         <button onClick={handleSummarize} disabled={summarizing || messages.length === 0} className="flex items-center gap-1 rounded-full bg-white/5 px-3 py-1.5 text-xs font-bold text-white/70 hover:bg-white/10 disabled:opacity-40">
           <Sparkles size={13} /> {summarizing ? "…" : "Summary"}
         </button>
@@ -322,6 +353,8 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
         {messages.map((m) => {
           const mine = m.sender_id === user.id;
           const translated = translations[m.id];
+          // Standard 1:1 ticks: ✓ sent (on server), ✓✓ seen (peer read past it).
+          const seen = mine && threadPeer != null && peerLastRead > 0 && new Date(m.created_at).getTime() <= peerLastRead;
           return (
             <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-sm ${mine ? "bg-white text-black" : "bg-white/10 text-white/90"}`}>
@@ -332,6 +365,17 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
                   <span className="text-[10px] opacity-50">
                     {new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
+                  {mine && threadPeer != null && (
+                    seen ? (
+                      <span className="flex items-center gap-0.5 text-[10px] font-bold text-sky-600" aria-label="Seen">
+                        <CheckCheck size={11} /> Seen
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-0.5 text-[10px] opacity-50" aria-label="Sent">
+                        <Check size={11} /> Sent
+                      </span>
+                    )
+                  )}
                   <button onClick={() => void handleTranslate(m)} disabled={translatingId === m.id} className="flex items-center gap-0.5 text-[10px] font-bold opacity-60 hover:opacity-100 disabled:opacity-30">
                     <Languages size={10} /> {translated ? "Original" : translatingId === m.id ? "…" : "Translate"}
                   </button>

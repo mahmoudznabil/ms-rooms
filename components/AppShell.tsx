@@ -1,19 +1,22 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle } from "lucide-react";
+import { Coins, Home, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle } from "lucide-react";
 import { useSession } from "@/stores/useSession";
+import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
 import LoginView from "@/components/LoginView";
 import ServerCheckinModal from "@/components/ServerCheckinModal";
+import IncomingCallGate from "@/components/IncomingCallGate";
 import RightRail from "@/components/RightRail";
 import { UserAvatar } from "@/components/bits";
 
 const NAV = [
   { href: "/", label: "Home", icon: Home },
   { href: "/moments", label: "Moments", icon: Sparkles },
+  { href: "/calls", label: "Calls", icon: Phone },
   { href: "/rankings", label: "Rankings", icon: Trophy },
   { href: "/wallet", label: "Wallet", icon: Wallet },
   { href: "/messages", label: "Messages", icon: MessageCircle },
@@ -22,6 +25,15 @@ const NAV = [
   { href: "/admin", label: "Admin", icon: Shield },
   { href: "/profile", label: "Profile", icon: User },
 ];
+
+function MissedBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="ml-auto rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
 
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
@@ -56,6 +68,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const missed = useCalls((s) => s.missed);
+  const refreshMissed = useCalls((s) => s.refreshMissed);
+  useEffect(() => {
+    if (!user) return;
+    void refreshMissed();
+    const t = setInterval(() => void refreshMissed(), 30000);
+    return () => clearInterval(t);
+  }, [user, refreshMissed]);
+
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -72,8 +93,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }
 
   const publicPaths = ["/", "/login"];
-  if (!user && !publicPaths.includes(pathname)) return <LoginView />;
-  // Landing (/) is public — let guests see the portfolio and still offer login CTA inside it
+  // Signed OUT: no sidebar / topbar / tabs / rail — the public landing brings
+  // its own top nav and /login is self-contained. The chrome only exists
+  // once you're signed in.
+  if (!user) {
+    if (!publicPaths.includes(pathname)) return <LoginView />;
+    return <div className="mx-auto w-full max-w-5xl px-4 pb-10">{children}</div>;
+  }
   const visibleNav = NAV.filter((n) => n.href !== "/admin" || isAdmin);
   // Direct /admin access without admin token → show admin login page, but hide tab from public nav
 
@@ -99,6 +125,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             >
               <n.icon size={17} />
               {n.label}
+              {n.href === "/calls" && <MissedBadge count={missed} />}
             </Link>
           ))}
         </nav>
@@ -133,6 +160,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <span className="font-black tracking-tight">MS-ROOMS</span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link href="/calls" aria-label="Calls" className="relative rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+              <Phone size={16} />
+              {missed > 0 && (
+                <span className="absolute -right-1 -top-1 rounded-full bg-red-500 px-1 text-[9px] font-black text-white">
+                  {missed > 9 ? "9+" : missed}
+                </span>
+              )}
+            </Link>
             <Link href="/messages" aria-label="Messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <MessageCircle size={16} />
             </Link>
@@ -159,12 +194,26 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         {/* Mobile bottom tabs */}
         <nav className="app-tabs" aria-label="Primary">
-          <TabLink href="/" label="Home" icon={<Home size={20} />} active={isActive(pathname, "/") && pathname === "/"} />
-          <TabLink href="/moments" label="Moments" icon={<Sparkles size={20} />} active={pathname.startsWith("/moments")} />
+          <TabLink href="/" label="Home" icon={<Home size={20} />} active={pathname === "/"} />
+          <TabLink
+            href="/calls"
+            label="Calls"
+            icon={
+              <span className="relative">
+                <Phone size={20} />
+                {missed > 0 && (
+                  <span className="absolute -right-2 -top-1.5 rounded-full bg-red-500 px-1 text-[9px] font-black leading-tight text-white">
+                    {missed > 9 ? "9+" : missed}
+                  </span>
+                )}
+              </span>
+            }
+            active={pathname.startsWith("/calls") || pathname.startsWith("/call")}
+          />
           <Link href="/create" aria-label="Create room" className="app-tabs-create">
             <Plus size={22} />
           </Link>
-          <TabLink href="/rankings" label="Ranks" icon={<Trophy size={20} />} active={pathname.startsWith("/rankings")} />
+          <TabLink href="/moments" label="Moments" icon={<Sparkles size={20} />} active={pathname.startsWith("/moments")} />
           <TabLink href="/profile" label="Me" icon={<User size={20} />} active={pathname.startsWith("/profile")} />
         </nav>
       </div>
@@ -175,6 +224,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <ServerCheckinModal />
+      <Suspense fallback={null}>
+        <IncomingCallGate />
+      </Suspense>
     </div>
   );
 }

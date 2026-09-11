@@ -82,6 +82,8 @@ function RoomViewInner() {
   const [room, setRoom] = useState<ApiRoomRow | null>(null);
   const [seats, setSeats] = useState<ApiSeat[]>([]);
   const [missing, setMissing] = useState(false);
+  const [loadingRoom, setLoadingRoom] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<GiftCatalogItem[]>([]);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
@@ -125,9 +127,19 @@ function RoomViewInner() {
 
   // Initial load: room detail + gift catalog + follow state.
   useEffect(() => {
-    if (!slug || !user) return;
+    if (!slug) {
+      setLoadingRoom(false);
+      return;
+    }
+    if (!user) {
+      setLoadingRoom(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
+      setLoadingRoom(true);
+      setMissing(false);
+      setLoadError(null);
       try {
         const detail = await fetchRoomDetail(slug);
         if (cancelled) return;
@@ -148,10 +160,18 @@ function RoomViewInner() {
           }
         }
       } catch (e) {
-        if (!cancelled && e instanceof ApiError && e.status === 404) setMissing(true);
-        if (!cancelled && !(e instanceof ApiError)) {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) {
+          setMissing(true);
+        } else if (e instanceof ApiError) {
+          setLoadError(e.message);
+          pushMsg({ user: "System", text: "Could not load this room. Check your connection.", kind: "system" });
+        } else {
+          setLoadError("Could not load this room. Check your connection.");
           pushMsg({ user: "System", text: "Could not load this room. Check your connection.", kind: "system" });
         }
+      } finally {
+        if (!cancelled) setLoadingRoom(false);
       }
       try {
         const cat = await giftCatalog();
@@ -282,7 +302,7 @@ function RoomViewInner() {
       if (data.ok) {
         setIncomingCall(null);
         setCallState('connected');
-        router.push(`/room?slug=${room.slug}`);
+        router.push(`/call?room=${room.slug}`);
       } else {
         alert(data.error || "Failed to accept call");
       }
@@ -325,7 +345,7 @@ function RoomViewInner() {
       const data = await res.json();
       if (data.ok) {
         setCallState('ended');
-        router.push("/");
+        router.push("/calls");
       } else {
         alert(data.error || "Failed to end call");
       }
@@ -334,7 +354,71 @@ function RoomViewInner() {
     }
   };
 
-  if (!user) return <Spinner />;
+  if (!slug) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <p className="text-4xl">🔗</p>
+        <h1 className="mt-3 text-xl font-black">Invalid room link</h1>
+        <p className="mt-1 text-sm text-white/50">This link is missing a room. Browse live rooms instead.</p>
+        <div className="mt-5 flex justify-center gap-2">
+          <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to lobby</Link>
+          <Link href="/create" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Create a room</Link>
+        </div>
+      </div>
+    );
+  }
+  if (!user) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <p className="text-4xl">🎙️</p>
+        <h1 className="mt-3 text-xl font-black">Sign in to join the room</h1>
+        <p className="mt-1 text-sm text-white/50">Voice rooms need an account so your coins, gifts and XP follow you.</p>
+        <div className="mt-5 flex justify-center gap-2">
+          <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Sign up / Log in</Link>
+          <Link href="/lobby" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Browse rooms</Link>
+        </div>
+      </div>
+    );
+  }
+  if (loadingRoom) return <Spinner />;
+  if (missing || loadError) {
+    return (
+      <div className="mx-auto max-w-md py-16 text-center">
+        <p className="text-4xl">{missing ? "👻" : "📡"}</p>
+        <h1 className="mt-3 text-xl font-black">{missing ? "Room not found" : "Couldn't load this room"}</h1>
+        <p className="mt-1 text-sm text-white/50">
+          {missing
+            ? `No live room matches “${slug}”. It may have ended or the link is wrong.`
+            : (loadError ?? "Check your connection and try again.")}
+        </p>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to lobby</Link>
+          <button
+            onClick={() => {
+              setLoadingRoom(true);
+              setMissing(false);
+              setLoadError(null);
+              fetchRoomDetail(slug)
+                .then((detail) => {
+                  setRoom(detail.room);
+                  setSeats(detail.seats);
+                  setLoadingRoom(false);
+                })
+                .catch((e) => {
+                  if (e instanceof ApiError && e.status === 404) setMissing(true);
+                  else setLoadError(e instanceof Error ? e.message : "Could not load this room.");
+                  setLoadingRoom(false);
+                });
+            }}
+            className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15"
+          >
+            Try again
+          </button>
+          <Link href="/create" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Create a room</Link>
+        </div>
+      </div>
+    );
+  }
   if (!room) return <Spinner />;
 
   const showFx = (emoji: string, name: string, from: string, effect: string) => {
@@ -620,7 +704,7 @@ function RoomViewInner() {
                   });
                   const data = await res.json();
                   if (data.ok && data.room) {
-                    router.push(`/room?slug=${data.room.slug}`);
+                    router.push(`/call?room=${data.room.slug}`);
                   } else {
                     alert(data.error || "Failed to start call");
                   }

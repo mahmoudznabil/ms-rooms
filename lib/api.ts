@@ -220,9 +220,14 @@ export async function fetchUser(id: string): Promise<{ user: ApiUser }> {
 
 export async function patchUser(
   id: string,
-  patch: { display_name?: string; bio?: string; avatar_url?: string }
+  patch: { display_name?: string; bio?: string; avatar_url?: string; username?: string }
 ): Promise<{ user: ApiUser }> {
   return req(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export async function checkUsername(username: string, exclude_id?: string): Promise<{ available: boolean; reason?: string }> {
+  const q = `/api/users/check-username?username=${encodeURIComponent(username)}${exclude_id ? `&exclude_id=${encodeURIComponent(exclude_id)}` : ""}`;
+  return req(q, { cache: "no-store" });
 }
 
 export interface ProfileStats {
@@ -519,4 +524,106 @@ export async function markConversationRead(conversationId: string): Promise<void
 
 export async function getUnreadCount(): Promise<{ unread_count: number }> {
   return req(`/api/conversations/unread-count`, { cache: "no-store" });
+}
+
+// ---- Voice/Video calls (Calls tab rules: recents, ringing, missed) ----
+export type CallMedia = "audio" | "video";
+export type CallStatus =
+  | "initiated" | "ringing" | "connected" | "ended"
+  | "failed" | "cancelled" | "rejected" | "missed";
+export type CallDirection = "in" | "out";
+
+export interface CallPeer {
+  id: string;
+  username: string;
+  display_name: string;
+  avatar_url: string | null;
+}
+
+export interface CallItem {
+  id: string;
+  room_id: string;
+  room_slug: string;
+  direction: CallDirection;
+  status: CallStatus;
+  media: CallMedia;
+  price_per_minute: number;
+  started_at: string | null;
+  connected_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  peer: CallPeer;
+}
+
+export interface IncomingCall {
+  id: string;
+  room_id: string;
+  room_slug: string;
+  media: CallMedia;
+  created_at: string;
+  caller: CallPeer;
+}
+
+export async function startCall(peerId: string, callerId: string, media: CallMedia = "audio"): Promise<{ room: ApiRoomRow; call_session_id: string; media: CallMedia }> {
+  if (!callerId) throw new ApiError("Sign in to call.", 401);
+  return req(`/api/rooms/private-call`, {
+    method: "POST",
+    body: JSON.stringify({ caller_user_id: callerId, callee_user_id: peerId, call_price_per_minute: 10, media }),
+  });
+}
+
+export async function callRecents(limit = 30): Promise<{ calls: CallItem[] }> {
+  return req(`/api/calls?limit=${limit}`, { cache: "no-store" });
+}
+
+export async function incomingCalls(): Promise<{ incoming: IncomingCall[] }> {
+  return req(`/api/calls/incoming`, { cache: "no-store" });
+}
+
+export async function missedCallCount(): Promise<{ missed: number }> {
+  return req(`/api/calls/missed-count`, { cache: "no-store" });
+}
+
+export async function markCallsSeen(): Promise<void> {
+  await req(`/api/calls/seen`, { method: "POST" });
+}
+
+export async function acceptCallRoom(roomId: string): Promise<{ room_slug: string | null; media: CallMedia }> {
+  return req(`/api/rooms/private-call/accept`, { method: "POST", body: JSON.stringify({ room_id: roomId }) });
+}
+
+export async function rejectCallRoom(roomId: string): Promise<void> {
+  await req(`/api/rooms/private-call/reject`, { method: "POST", body: JSON.stringify({ room_id: roomId }) });
+}
+
+export async function endCallRoom(roomId: string): Promise<void> {
+  await req(`/api/rooms/private-call/end`, { method: "POST", body: JSON.stringify({ room_id: roomId }) });
+}
+
+export async function cancelCallRoom(roomId: string): Promise<void> {
+  await req(`/api/rooms/private-call/cancel`, { method: "POST", body: JSON.stringify({ room_id: roomId }) });
+}
+
+export async function markCallMissed(roomId: string): Promise<void> {
+  await req(`/api/rooms/private-call/missed`, { method: "POST", body: JSON.stringify({ room_id: roomId }) });
+}
+
+export interface PrivateCallStatus {
+  room: ApiRoomRow & { host_user_id?: string; call_participant_user_id?: string | null; status?: string };
+  call_session: {
+    id: string;
+    status: CallStatus;
+    media: CallMedia;
+    caller_user_id: string;
+    callee_user_id: string;
+    connected_at?: string | null;
+    ended_at?: string | null;
+    created_at?: string;
+  } | null;
+  caller: { id: string; display_name: string; avatar_url: string | null } | null;
+  callee: { id: string; display_name: string; avatar_url: string | null } | null;
+}
+
+export async function privateCallStatus(roomId: string): Promise<PrivateCallStatus> {
+  return req(`/api/rooms/private-call/status?room_id=${encodeURIComponent(roomId)}`, { cache: "no-store" });
 }

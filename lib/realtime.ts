@@ -23,6 +23,7 @@ export interface TurnConfig {
   urls: string[];
   username: string | null;
   credential: string | null;
+  iceServers: RTCIceServer[] | null;
   setupHint: string | null;
 }
 
@@ -33,14 +34,17 @@ export async function getTurnConfig(): Promise<TurnConfig> {
     ok: boolean;
     configured?: boolean;
     turn?: { urls: string[]; username: string; credential: string } | null;
+    iceServers?: RTCIceServer[] | null;
     setup?: string;
   };
   if (!data.ok) throw new Error("turn endpoint returned an error");
+  const iceServers = Array.isArray(data.iceServers) && data.iceServers.length > 0 ? data.iceServers : null;
   return {
-    configured: data.configured === true && data.turn != null,
+    configured: data.configured === true && (iceServers != null || data.turn != null),
     urls: data.turn?.urls ?? [],
     username: data.turn?.username ?? null,
     credential: data.turn?.credential ?? null,
+    iceServers,
     setupHint: data.setup ?? null,
   };
 }
@@ -128,10 +132,15 @@ export function useCloudflareVoice(roomSlug: string) {
       tick();
 
       // Cloudflare path: TURN for NAT traversal + Calls SFU session.
+      // Backend returns `iceServers` verbatim from
+      // rtc.live.cloudflare.com/.../generate-ice-servers (STUN + TURN entries).
+      // Pass them straight to RTCPeerConnection.
       let iceServers: RTCIceServer[] = [];
       try {
         const turn = await getTurnConfig();
-        if (turn.configured && turn.urls.length > 0) {
+        if (turn.configured && turn.iceServers && turn.iceServers.length > 0) {
+          iceServers = turn.iceServers;
+        } else if (turn.configured && turn.urls.length > 0) {
           iceServers = [
             {
               urls: turn.urls,
@@ -172,4 +181,141 @@ export function useCloudflareVoice(roomSlug: string) {
   }, [micOn, roomSlug, stopAll]);
 
   return { status, micOn, level, error, toggleMic, leave: stopAll };
+}
+
+// ---------------------------------------------------------------------------
+// 1:1 call media session (voice + video).
+//
+// Unlike the room hook above (mic preview + optional SFU), a call MUST render
+// the remote party: we expose `remoteStream` (attach to <audio>/<video>) and
+// `localStream` (self preview / PiP). Signalling reuses the same Worker
+// broker (POST /api/calls/session) — the SDP simply carries video when the
+// local stream has a camera track.
+export type CallPhase = "idle" | "joining" | "live" | "ended" | "error";
+
+export function useCallSession(roomSlug: string, withVideo: boolean) {
+  const [phase, setPhase] = useState<CallPhase>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(withVideo);
+  const [videoMode, setVideoMode] = useState(withVideo);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [connection, setConnection] = useState<string>("new");
+  const [liveSince, setLiveSince] = useState<number | null>(null);
+
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const withVideoRef = useRef(withVideo);
+  withVideoRef.current = withVideo;
+
+  const teardown = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    pcRef.current?.close();
+    pcRef.current = null;
+    setLocalStream(null);
+    setRemoteStream(null);
+    setLiveSince(null);
+  }, []);
+
+  useEffect(() => teardown, [teardown]);
+
+  const join = useCallback(async (wantVideo: boolean) => {
+    teardown();
+    setError(null);
+    setPhase("joining");
+    setVideoMode(wantVideo);
+    setCamOn(wantVideo);
+    setMicOn(true);
+    try {
+      // Friendly pre-permission errors (standard rule: never fail silently).
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error("This browser can't access the microphone. Try Chrome, Edge, or Safari.");
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: wantVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false,
+      });
+      streamRef.current = stream;
+      setLocalStream(stream);
+
+      let iceServers: RTCIceServer[] = [];
+      try {
+        const turn = await getTurnConfig();
+        if (turn.configured && turn.iceServers && turn.iceServers.length > 0) {
+          iceServers = turn.iceServers;
+        } else if (turn.configured && turn.urls.length > 0) {
+          iceServers = [{ urls: turn.urls, username: turn.username ?? undefined, credential: turn.credential ?? undefined }];
+        }
+      } catch {
+        iceServers = [];
+      }
+
+      const pc = new RTCPeerConnection({ iceServers });
+      pcRef.current = pc;
+      const remote = new MediaStream();
+      setRemoteStream(remote);
+      pc.ontrack = (ev) => {
+        ev.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
+      };
+      pc.onconnectionstatechange = () => setConnection(pc.connectionState);
+      stream.getAudioTracks().forEach((t) => pc.addTrack(t, stream));
+      stream.getVideoTracks().forEach((t) => pc.addTrack(t, stream));
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: wantVideo });
+      await pc.setLocalDescription(offer);
+      const answer = await postCallsSession(offer.sdp ?? "", roomSlug);
+      if (!answer) throw new Error("Voice service isn't configured yet. Try again later.");
+      await pc.setRemoteDescription({ type: "answer", sdp: answer });
+      setPhase("live");
+      setLiveSince(Date.now());
+    } catch (e) {
+      teardown();
+      if (e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError")) {
+        setError(
+          wantVideo
+            ? "Camera/mic blocked. Tap the camera icon in the address bar, allow access, then rejoin."
+            : "Microphone blocked. Tap the mic icon in the address bar, allow access, then rejoin."
+        );
+      } else if (e instanceof DOMException && e.name === "NotFoundError") {
+        setError(wantVideo ? "No camera or microphone found on this device." : "No microphone found on this device.");
+      } else {
+        setError(e instanceof Error ? e.message : "Could not join the call.");
+      }
+      setPhase("error");
+    }
+  }, [roomSlug, teardown]);
+
+  const toggleMic = useCallback(() => {
+    const s = streamRef.current;
+    if (!s) return;
+    const next = !micOn;
+    s.getAudioTracks().forEach((t) => {
+      t.enabled = next;
+    });
+    setMicOn(next);
+  }, [micOn]);
+
+  const toggleCam = useCallback(() => {
+    const s = streamRef.current;
+    const videoTracks = s?.getVideoTracks() ?? [];
+    // Voice call → turning the camera on rejoins with video (clean SDP).
+    if (videoTracks.length === 0 && !videoMode) {
+      void join(true);
+      return;
+    }
+    const next = !camOn;
+    videoTracks.forEach((t) => {
+      t.enabled = next;
+    });
+    setCamOn(next);
+  }, [camOn, videoMode, join]);
+
+  const leave = useCallback(() => {
+    teardown();
+    setPhase("ended");
+  }, [teardown]);
+
+  return { phase, error, micOn, camOn, videoMode, localStream, remoteStream, connection, liveSince, join, toggleMic, toggleCam, leave };
 }
