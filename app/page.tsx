@@ -41,35 +41,36 @@ export default function Home() {
 
   const isAuthed = !!user;
   const authCta = isAuthed ? (
-    <Link href="/lobby" className="shrink-0 rounded-full bg-white px-5 py-2 text-sm font-bold text-black transition hover:bg-white/85">
+    <Link href="/lobby" className="shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-2 text-xs font-bold text-black transition hover:bg-white/85 sm:px-5 sm:text-sm">
       Go to Lobby <ArrowRight size={14} className="ml-1 inline" />
     </Link>
   ) : (
-    <Link href="/login" className="shrink-0 rounded-full bg-white px-5 py-2 text-sm font-bold text-black transition hover:bg-white/85">
+    <Link href="/login" className="shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-2 text-xs font-bold text-black transition hover:bg-white/85 sm:px-5 sm:text-sm">
       Sign Up / Log In
     </Link>
   );
 
   return (
-    <div className="space-y-10 pb-6">
-      {/* Cloud-style top strip: logo + auth CTA grouped top-LEFT, nav right */}
-      <header className="sticky top-0 z-20 -mx-4 border-b border-white/5 bg-[#0d0d12]/90 px-4 py-2.5 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center gap-3">
-          <span className="flex items-center gap-2">
+    <div className="w-full pb-6">
+      {/* Cloud-style top strip: full-width on all devices, inner content capped */}
+      <header className="sticky left-0 right-0 top-0 z-20 w-full border-b border-white/5 bg-[#0d0d12]/90 py-2.5 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-4 sm:gap-3">
+          <span className="flex shrink-0 items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg bg-black/40 object-contain ring-1 ring-white/10" />
             <span className="hidden text-sm font-black tracking-tight sm:inline">MS-ROOMS</span>
           </span>
           {authCta}
-          <nav className="ml-auto flex items-center gap-1 text-sm font-semibold text-white/55" aria-label="Landing">
-            <Link href="#features-top" className="hidden rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white sm:inline">Why play</Link>
-            <Link href="#features" className="hidden rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white sm:inline">Features</Link>
-            <Link href="/wallet" className="rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white">Pricing</Link>
-            <Link href="#download" className="rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white">Download</Link>
+          <nav className="ml-auto flex min-w-0 shrink items-center gap-0.5 text-sm font-semibold text-white/55 sm:gap-1" aria-label="Landing">
+            <Link href="#features-top" className="hidden shrink-0 rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white sm:inline">Why play</Link>
+            <Link href="#features" className="hidden shrink-0 rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white sm:inline">Features</Link>
+            <Link href="/wallet" className="shrink-0 whitespace-nowrap rounded-full px-2 py-1.5 hover:bg-white/5 hover:text-white sm:px-3">Pricing</Link>
+            <Link href="#download" className="shrink-0 whitespace-nowrap rounded-full px-2 py-1.5 hover:bg-white/5 hover:text-white sm:px-3">Download</Link>
           </nav>
         </div>
       </header>
 
+      <div className="mx-auto w-full max-w-5xl space-y-10 px-4 pt-6">
       {/* Hero — what it is + why to sign up and play */}
       <section id="features-top" className="relative overflow-hidden rounded-3xl border border-white/10 bg-[#15151d] p-6 sm:p-10">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:24px_24px] opacity-30" aria-hidden />
@@ -257,6 +258,7 @@ export default function Home() {
           <Shield size={12} /> © MS-ROOMS — portfolio + live voice. Built web-first.
         </p>
       </footer>
+      </div>
     </div>
   );
 }

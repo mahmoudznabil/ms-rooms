@@ -98,7 +98,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // once you're signed in.
   if (!user) {
     if (!publicPaths.includes(pathname)) return <LoginView />;
-    return <div className="mx-auto w-full max-w-5xl px-4 pb-10">{children}</div>;
+    // Full-width wrapper so the public landing header can span edge-to-edge
+    // on all devices; inner pages constrain their own content width.
+    return <div className="w-full pb-10">{children}</div>;
   }
   const visibleNav = NAV.filter((n) => n.href !== "/admin" || isAdmin);
   // Direct /admin access without admin token → show admin login page, but hide tab from public nav

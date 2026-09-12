@@ -12,7 +12,7 @@
   "dependencies": {
     "@genkit-ai/googleai": "^1.28.0",
     "@livekit/components-react": "2.9.24",
-    "firebase": "^12.19.0",
+    "firebase": "12.16.0",
     "genkit": "^1.42.0",
     "livekit-client": "2.22.2",
     "lucide-react": "1.41.0",

@@ -12,11 +12,14 @@ import {
   sendSignInLinkToEmail,
   isSignInWithEmailLink,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   onAuthStateChanged,
   setPersistence,
   browserLocalPersistence,
   type User,
+  type Auth,
 } from "firebase/auth";
 
 function env(name: string, fallback: string): string {
@@ -37,7 +40,11 @@ const firebaseConfig = {
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const firebaseApp = app;
-export const auth = getAuth(app);
+// getAuth() touches the Auth component registry, which is not registered in
+// the Node bundle during Next.js static prerender (/_not-found etc.) —
+// that crashed the export build. Auth is only ever used in the browser
+// (click handlers / effects), so init it lazily on the client.
+export const auth: Auth = typeof window !== "undefined" ? getAuth(app) : ({} as Auth);
 
 // Persist session across tabs/restarts (fixes refresh/new-tab session loss)
 if (typeof window !== "undefined") {
@@ -107,8 +114,12 @@ export {
   sendSignInLinkToEmail,
   isSignInWithEmailLink,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   onAuthStateChanged,
+  setPersistence,
+  browserLocalPersistence,
 };
 export type { User };
 

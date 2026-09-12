@@ -23,10 +23,39 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const { user } = await apiMe();
       set({ user, ready: true, authError: null });
+      return;
     } catch {
-      // No valid session — start logged out
-      set({ user: null, ready: true });
+      // No D1 session — but Firebase may still hold the identity (redirect
+      // sign-in return, expired cookie, fresh tab). Re-mint silently.
     }
+    try {
+      const [{ auth }, { syncFirebaseUser }] = await Promise.all([
+        import("@/lib/firebase"),
+        import("@/lib/firebase-sync"),
+      ]);
+      const fbUser = await new Promise<import("@/lib/firebase").User | null>((resolve) => {
+        try {
+          const unsub = auth.onAuthStateChanged((u) => {
+            try { unsub(); } catch {}
+            resolve(u);
+          });
+          setTimeout(() => {
+            try { unsub(); } catch {}
+            resolve(auth.currentUser);
+          }, 4000);
+        } catch {
+          resolve(auth.currentUser);
+        }
+      });
+      if (fbUser) {
+        const { user } = await syncFirebaseUser(fbUser);
+        set({ user, ready: true, authError: null });
+        return;
+      }
+    } catch {
+      // Fall through to logged-out below.
+    }
+    set({ user: null, ready: true });
   },
 
   login: async (username: string) => {

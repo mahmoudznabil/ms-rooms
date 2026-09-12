@@ -12,11 +12,30 @@ import {
   isSignInWithEmailLink,
   signInWithEmailLink,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
 } from "@/lib/firebase";
 import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
 import { getSiteKey, loadRecaptchaScript, verifyRecaptchaToken } from "@/lib/recaptcha";
 import { logAuthEvent } from "@/lib/metrics";
+
+function formatAuthError(e: unknown): string {
+  const err = e as { code?: string; message?: string; customData?: unknown };
+  const code = err?.code ?? "";
+  const msg = err?.message ?? String(e);
+  try {
+    console.error("[auth]", code, msg, (err?.customData ?? e) as unknown);
+  } catch {}
+  if (
+    code === "auth/internal-error" ||
+    msg.includes("internal-error") ||
+    msg.includes("Database is closing")
+  ) {
+    return `${msg} (code: ${code || "auth/internal-error"}). Usually: popup blocked, 3rd-party cookies/adblock, domain missing from Firebase Authorized Domains, or Firebase JS 12.17+ popup bug — redirect fallback runs automatically, or run: npm i firebase@12.16.0.`;
+  }
+  return code ? `${msg} (code: ${code})` : msg;
+}
 
 export default function FirebaseAuthPanel() {
   const [email, setEmail] = useState("");
@@ -47,7 +66,7 @@ export default function FirebaseAuthPanel() {
             window.history.replaceState({}, "", window.location.pathname);
             setMsg("Signed in — progress restored across devices.");
           })
-          .catch((e: Error) => setErr(e.message))
+          .catch((e: unknown) => setErr(formatAuthError(e)))
           .finally(() => setBusy(false));
       }
     }
@@ -79,14 +98,98 @@ export default function FirebaseAuthPanel() {
     useSession.setState({ user, ready: true, authError: null });
   };
 
+  // Completes signInWithRedirect fallback (popup blocked / internal-error path).
+  // A sessionStorage flag marks that WE started a redirect, so a return with
+  // no credential becomes a visible error instead of a silent login loop.
+  useEffect(() => {
+    let cancelled = false;
+    let expectRedirect = false;
+    try {
+      expectRedirect = sessionStorage.getItem("msrooms_google_redirect") === "1";
+    } catch {}
+    if (expectRedirect) {
+      setBusy(true);
+      setMsg("Completing Google sign-in…");
+    }
+    getRedirectResult(auth)
+      .then(async (res) => {
+        try {
+          sessionStorage.removeItem("msrooms_google_redirect");
+        } catch {}
+        if (cancelled) return;
+        if (!res?.user) {
+          if (expectRedirect) {
+            setErr(
+              "Google returned without a credential (code: auth/redirect-incomplete). Usually third-party cookies blocked the return — allow them for this site, or use email sign-in. Retrying keeps you on this page."
+            );
+          }
+          return;
+        }
+        setBusy(true);
+        try {
+          await afterFirebase(res.user);
+          logAuthEvent("google", "success");
+          setMsg("Signed in — your coins, XP and Gems follow you.");
+        } catch (e: unknown) {
+          logAuthEvent("google", "failure", e instanceof Error ? e.message : undefined);
+          setErr(formatAuthError(e));
+        } finally {
+          if (!cancelled) setBusy(false);
+        }
+      })
+      .catch((e: unknown) => {
+        try {
+          sessionStorage.removeItem("msrooms_google_redirect");
+        } catch {}
+        if (!cancelled) {
+          setBusy(false);
+          setErr(formatAuthError(e));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleGoogle = async () => {
     setBusy(true); setErr(null); setMsg(null);
     try {
+      // NOTE: signInWithPopup must be the first await — it has to run inside
+      // the click gesture or Chrome blocks the popup (instant internal-error).
+      // Persistence is already set at module load in lib/firebase.ts.
       const cred = await signInWithPopup(auth, googleProvider);
       await afterFirebase(cred.user);
       logAuthEvent("google", "success");
       setMsg("Signed in — your coins, XP and Gems follow you.");
-    } catch (e: unknown) { logAuthEvent("google", "failure", e instanceof Error ? e.message : undefined); setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code ?? "";
+      const msg = e instanceof Error ? e.message : String(e);
+      const popupBroken =
+        code === "auth/internal-error" ||
+        code === "auth/popup-blocked" ||
+        code === "auth/popup-closed-by-user" ||
+        code === "auth/network-request-failed" ||
+        code === "auth/cancelled-popup-request" ||
+        msg.includes("internal-error") ||
+        msg.includes("Database is closing");
+      if (popupBroken) {
+        try {
+          setMsg("Popup failed — redirecting to Google…");
+          try {
+            sessionStorage.setItem("msrooms_google_redirect", "1");
+          } catch {}
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (e2: unknown) {
+          logAuthEvent("google", "failure", e2 instanceof Error ? e2.message : undefined);
+          setErr(formatAuthError(e2));
+        }
+      } else {
+        logAuthEvent("google", "failure", e instanceof Error ? e.message : undefined);
+        setErr(formatAuthError(e));
+      }
+    } finally { setBusy(false); }
   };
 
   const handleEmail = async (create: boolean) => {
@@ -108,7 +211,7 @@ export default function FirebaseAuthPanel() {
         try { window.grecaptcha.reset(recaptchaWidgetId.current); } catch {}
         setRecaptchaToken(null);
       }
-    } catch (e: unknown) { logAuthEvent("email", "failure", e instanceof Error ? e.message : undefined); setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    } catch (e: unknown) { logAuthEvent("email", "failure", e instanceof Error ? e.message : undefined); setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
   const handleSendLink = async () => {
@@ -117,7 +220,7 @@ export default function FirebaseAuthPanel() {
       await sendSignInLinkToEmail(auth, email.trim(), { url: `${window.location.origin}/login`, handleCodeInApp: true });
       window.localStorage.setItem("emailForSignIn", email.trim());
       setMsg("Link sent — check your inbox.");
-    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
   const handleSendCode = async () => {
@@ -127,7 +230,7 @@ export default function FirebaseAuthPanel() {
       const conf = await signInWithPhoneNumber(auth, phone.trim(), verifier);
       setPhoneConfirm(conf);
       setMsg("Code sent — enter it below.");
-    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
   const handleVerifyCode = async () => {
@@ -138,7 +241,7 @@ export default function FirebaseAuthPanel() {
       await afterFirebase(cred.user);
       logAuthEvent("phone", "success");
       setMsg("Phone verified.");
-    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
   return (
