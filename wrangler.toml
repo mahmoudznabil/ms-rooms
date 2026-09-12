@@ -2,6 +2,17 @@ name = "bestaudiobackend"
 main = "workers/backend.ts"
 compatibility_date = "2026-09-07"
 
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
 # Production D1 database on Cloudflare ONLY — no local D1.
 # All `wrangler d1 execute` runs must use --remote against database_id below.
 [[d1_databases]]
