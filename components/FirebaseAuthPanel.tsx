@@ -9,6 +9,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendSignInLinkToEmail,
+  sendPasswordResetEmail,
   isSignInWithEmailLink,
   signInWithEmailLink,
   signInWithPopup,
@@ -19,6 +20,13 @@ import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
 import { getSiteKey, loadRecaptchaScript, verifyRecaptchaToken } from "@/lib/recaptcha";
 import { logAuthEvent } from "@/lib/metrics";
+
+// GitHub login principles, MS-ROOMS theme: one narrow column, a bordered
+// action card with labeled fields, a secondary card that switches modes,
+// quiet alternatives below. Email+password and phone (SMS code) are the
+// primary methods; Google is a secondary button. (Firebase has no
+// phone+password concept — phone numbers sign in via SMS code.)
+type Mode = "signin" | "create" | "phone";
 
 function formatAuthError(e: unknown): string {
   const err = e as { code?: string; message?: string; customData?: unknown };
@@ -47,7 +55,16 @@ function formatAuthError(e: unknown): string {
   return code ? `${full} (code: ${code})` : full;
 }
 
+const inputCls =
+  "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/25 focus:border-violet-400/60 focus:outline-none focus:ring-1 focus:ring-violet-400/30";
+const labelCls = "mb-1.5 block text-sm font-semibold text-white/85";
+const primaryBtn =
+  "w-full rounded-lg bg-white py-2 text-sm font-semibold text-black transition hover:bg-white/85 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40";
+const secondaryBtn =
+  "flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/5 py-2 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-40";
+
 export default function FirebaseAuthPanel() {
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
@@ -55,12 +72,17 @@ export default function FirebaseAuthPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [showPhone, setShowPhone] = useState(false);
-  const [showLink, setShowLink] = useState(false);
   const [phoneConfirm, setPhoneConfirm] = useState<import("firebase/auth").ConfirmationResult | null>(null);
   const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
   const recaptchaWidgetId = useRef<number | null>(null);
   const siteKey = getSiteKey();
+
+  const switchMode = (m: Mode) => {
+    setErr(null);
+    setMsg(null);
+    setPhoneConfirm(null);
+    setMode(m);
+  };
 
   useEffect(() => {
     if (isSignInWithEmailLink(auth, window.location.href)) {
@@ -82,26 +104,31 @@ export default function FirebaseAuthPanel() {
     }
   }, []);
 
-  // Load reCAPTCHA widget for registration (site key: 6LdgXbQt... )
+  // Registration reCAPTCHA widget (site key: 6LdgXbQt...). Rendered when the
+  // create-account card mounts; the node remounts on mode switches, so a
+  // stale widget id is dropped and rendered fresh.
   useEffect(() => {
+    if (mode !== "create") return;
     let cancelled = false;
     loadRecaptchaScript().then(() => {
       if (cancelled || !window.grecaptcha) return;
       const el = document.getElementById("register-recaptcha");
-      if (el && recaptchaWidgetId.current === null) {
-        try {
-          // Clear previous render
-          el.innerHTML = "";
-          recaptchaWidgetId.current = window.grecaptcha.render(el, {
-            sitekey: siteKey,
-            callback: (t: string) => setRecaptchaToken(t),
-            "expired-callback": () => setRecaptchaToken(null),
-          });
-        } catch {}
-      }
+      if (!el) return;
+      try {
+        if (recaptchaWidgetId.current !== null) {
+          try { window.grecaptcha.reset(recaptchaWidgetId.current); } catch {}
+          recaptchaWidgetId.current = null;
+        }
+        el.innerHTML = "";
+        recaptchaWidgetId.current = window.grecaptcha.render(el, {
+          sitekey: siteKey,
+          callback: (t: string) => setRecaptchaToken(t),
+          "expired-callback": () => setRecaptchaToken(null),
+        });
+      } catch {}
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [siteKey]);
+  }, [siteKey, mode]);
 
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
     const { user } = await syncFirebaseUser(fbUser);
@@ -233,7 +260,23 @@ export default function FirebaseAuthPanel() {
     } catch (e: unknown) { logAuthEvent("email", "failure", e instanceof Error ? e.message : undefined); setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
+  const handleForgot = async () => {
+    if (!email.trim()) {
+      setErr("Enter your email address above, then use Forgot password?.");
+      return;
+    }
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setMsg("Password reset link sent — check your inbox.");
+    } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
+  };
+
   const handleSendLink = async () => {
+    if (!email.trim()) {
+      setErr("Enter your email address above first.");
+      return;
+    }
     setBusy(true); setErr(null); setMsg(null);
     try {
       await sendSignInLinkToEmail(auth, email.trim(), { url: `${window.location.origin}/login`, handleCodeInApp: true });
@@ -263,85 +306,148 @@ export default function FirebaseAuthPanel() {
     } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
+  const canSubmitPassword = email.trim().length > 0 && (mode === "signin" ? password.length > 0 : password.length >= 6);
+  const needRecaptcha = mode === "create" && !recaptchaToken;
+
   return (
-    <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#111113] p-6 shadow-2xl">
-      <div className="text-center">
-        <h2 className="text-lg font-semibold text-white">Sign in to MS-ROOMS</h2>
-        <p className="mt-1 text-xs text-white/40">Your progress follows you on every device.</p>
-      </div>
+    <div className="w-full">
+      <h1 className="mt-4 text-center text-2xl font-light text-white">
+        {mode === "create" ? "Create your account" : mode === "phone" ? "Sign in with phone" : "Sign in to MS-ROOMS"}
+      </h1>
 
-      <button onClick={handleGoogle} disabled={busy}
-        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-white py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-50">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#4285F4] text-xs font-bold text-white">G</span>
-        Continue with Google
-      </button>
-
-      <div className="my-5 flex items-center gap-3">
-        <div className="h-px flex-1 bg-white/10" />
-        <span className="text-xs text-white/25">or continue with email</span>
-        <div className="h-px flex-1 bg-white/10" />
-      </div>
-
-      <div className="space-y-3">
-        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address"
-          type="email"
-          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white placeholder:text-white/25 focus:border-white/15 focus:outline-none focus:ring-1 focus:ring-white/10" />
-        <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password"
-          type="password"
-          className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-sm text-white placeholder:text-white/25 focus:border-white/15 focus:outline-none focus:ring-1 focus:ring-white/10" />
-        <div className="grid grid-cols-2 gap-2">
-          <button onClick={() => handleEmail(false)} disabled={busy || !email || !password}
-            className="rounded-xl bg-white/5 py-3 text-sm font-medium text-white hover:bg-white/10 disabled:opacity-30">Sign in</button>
-          <button onClick={() => handleEmail(true)} disabled={busy || !email || password.length < 6 || !recaptchaToken}
-            className="rounded-xl bg-white py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-30">Create account</button>
+      {err && (
+        <div role="alert" className="mt-4 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {err}
         </div>
-        <div className="mt-3">
-          <p className="mb-2 text-[11px] text-white/30">Complete reCAPTCHA to register:</p>
-          <div id="register-recaptcha" className="flex justify-center" />
-          {!recaptchaToken && <p className="mt-1 text-center text-[10px] text-white/20">Required for Create account</p>}
+      )}
+      {msg && !err && (
+        <div className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+          {msg}
         </div>
-      </div>
+      )}
 
-      <div className="mt-4 flex justify-center gap-4 text-xs">
-        <button onClick={() => setShowPhone((v) => !v)} className="text-white/40 hover:text-white/70 hover:underline">Phone</button>
-        <span className="text-white/10">•</span>
-        <button onClick={() => setShowLink((v) => !v)} className="text-white/40 hover:text-white/70 hover:underline">Email link</button>
-      </div>
-
-      {showPhone && (
-        <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
-          <p className="text-xs text-white/40">Phone sign-in — same identity on web & Android.</p>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+15551234567" type="tel"
-            className="mt-2 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-white placeholder:text-white/25 focus:outline-none" />
-          {!phoneConfirm ? (
-            <button onClick={handleSendCode} disabled={busy || !phone}
-              className="mt-2 w-full rounded-xl bg-white/10 py-2.5 text-sm font-medium text-white hover:bg-white/15 disabled:opacity-40">Send code</button>
-          ) : (
-            <div className="mt-2 space-y-2">
-              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" inputMode="numeric"
-                className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-white placeholder:text-white/25 focus:outline-none" />
-              <button onClick={handleVerifyCode} disabled={busy || !code}
-                className="w-full rounded-xl bg-white py-2.5 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-40">Verify</button>
+      {mode !== "phone" ? (
+        <div className="mt-4 rounded-lg border border-white/10 bg-[#15151d] p-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleEmail(mode === "create");
+            }}
+          >
+            <div>
+              <label htmlFor="auth-email" className={labelCls}>Email address</label>
+              <input
+                id="auth-email" value={email} onChange={(e) => setEmail(e.target.value)}
+                type="email" autoComplete="email" placeholder="you@example.com"
+                className={inputCls} />
             </div>
-          )}
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <label htmlFor="auth-password" className="!mb-0 block text-sm font-semibold text-white/85">Password</label>
+                {mode === "signin" && (
+                  <button type="button" onClick={() => void handleForgot()} disabled={busy}
+                    className="text-xs text-violet-300 hover:underline disabled:opacity-40">
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <input
+                id="auth-password" value={password} onChange={(e) => setPassword(e.target.value)}
+                type="password" autoComplete={mode === "create" ? "new-password" : "current-password"}
+                className={inputCls} />
+              {mode === "create" && (
+                <p className="mt-1.5 text-xs text-white/35">At least 6 characters.</p>
+              )}
+            </div>
+            {mode === "create" && (
+              <div className="mt-3">
+                <div id="register-recaptcha" className="flex justify-center" />
+                {needRecaptcha && (
+                  <p className="mt-1.5 text-center text-xs text-white/35">Complete the reCAPTCHA to create your account.</p>
+                )}
+              </div>
+            )}
+            <div className="mt-4">
+              <button type="submit" disabled={busy || !canSubmitPassword || needRecaptcha} className={primaryBtn}>
+                {busy ? (mode === "create" ? "Creating account…" : "Signing in…") : mode === "create" ? "Create account" : "Sign in"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-white/10 bg-[#15151d] p-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void (phoneConfirm ? handleVerifyCode() : handleSendCode());
+            }}
+          >
+            <div>
+              <label htmlFor="auth-phone" className={labelCls}>Phone number</label>
+              <input
+                id="auth-phone" value={phone} onChange={(e) => setPhone(e.target.value)}
+                type="tel" autoComplete="tel" placeholder="+15551234567"
+                className={inputCls} />
+              <p className="mt-1.5 text-xs text-white/35">We text you a code — no password needed for phones.</p>
+            </div>
+            {phoneConfirm && (
+              <div className="mt-3">
+                <label htmlFor="auth-code" className={labelCls}>Verification code</label>
+                <input
+                  id="auth-code" value={code} onChange={(e) => setCode(e.target.value)}
+                  inputMode="numeric" autoComplete="one-time-code" placeholder="123456"
+                  className={inputCls} />
+              </div>
+            )}
+            <div className="mt-4">
+              <button
+                type="submit"
+                disabled={busy || (!phoneConfirm && !phone.trim()) || (!!phoneConfirm && !code.trim())}
+                className={primaryBtn}>
+                {busy ? "Working…" : phoneConfirm ? "Verify" : "Send code"}
+              </button>
+            </div>
+          </form>
           <div id="recaptcha-container" />
         </div>
       )}
 
-      {showLink && (
-        <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
-          <p className="text-xs text-white/40">We’ll send a passwordless link — open it on any device.</p>
-          <button onClick={handleSendLink} disabled={busy || !email}
-            className="mt-2 w-full rounded-xl bg-white/10 py-2.5 text-sm font-medium text-white hover:bg-white/15 disabled:opacity-40">Send link</button>
-        </div>
-      )}
+      <div className="mt-4 rounded-lg border border-white/10 px-4 py-3.5 text-center text-sm text-white/60">
+        {mode === "signin" && (
+          <>New to MS-ROOMS? <button onClick={() => switchMode("create")} className="font-semibold text-violet-300 hover:underline">Create an account</button></>
+        )}
+        {mode === "create" && (
+          <>Already have an account? <button onClick={() => switchMode("signin")} className="font-semibold text-violet-300 hover:underline">Sign in</button></>
+        )}
+        {mode === "phone" && (
+          <>Prefer email? <button onClick={() => switchMode("signin")} className="font-semibold text-violet-300 hover:underline">Back to sign in</button></>
+        )}
+      </div>
 
-      {msg && <p className="mt-4 rounded-xl bg-emerald-500/10 px-3 py-2 text-center text-xs text-emerald-200">{msg}</p>}
-      {err && <p className="mt-4 rounded-xl bg-red-500/10 px-3 py-2 text-center text-xs text-red-300">{err}</p>}
+      <div className="my-4 flex items-center gap-3">
+        <div className="h-px flex-1 bg-white/10" />
+        <span className="text-xs text-white/25">or continue with</span>
+        <div className="h-px flex-1 bg-white/10" />
+      </div>
 
-      <p className="mt-5 text-center text-[10px] leading-relaxed text-white/20">
-        Firebase verifies, Worker verifies <code className="rounded bg-white/10 px-1 py-0.5">aud=bestaudioroom</code> → D1. Coins/Gems/XP server-side.
-      </p>
+      <button onClick={() => void handleGoogle()} disabled={busy} className={secondaryBtn}>
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#4285F4] text-xs font-bold text-white">G</span>
+        Continue with Google
+      </button>
+
+      <div className="mt-3 text-center text-xs text-white/40">
+        {mode !== "phone" && (
+          <button onClick={() => switchMode("phone")} className="hover:text-white/70 hover:underline">Use phone instead</button>
+        )}
+        {mode === "signin" && (
+          <>
+            <span className="mx-2 text-white/10">•</span>
+            <button onClick={() => void handleSendLink()} disabled={busy} className="hover:text-white/70 hover:underline disabled:opacity-40">
+              Email me a sign-in link
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

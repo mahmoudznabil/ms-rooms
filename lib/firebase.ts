@@ -10,6 +10,7 @@ import {
   createUserWithEmailAndPassword as _createUserWithEmailAndPassword,
   signInWithEmailLink as _signInWithEmailLink,
   sendSignInLinkToEmail as _sendSignInLinkToEmail,
+  sendPasswordResetEmail as _sendPasswordResetEmail,
   isSignInWithEmailLink as _isSignInWithEmailLink,
   signInWithPopup as _signInWithPopup,
   signInWithRedirect as _signInWithRedirect,
@@ -180,6 +181,10 @@ export function signInWithEmailLink(...args: Parameters<typeof _signInWithEmailL
 export function sendSignInLinkToEmail(...args: Parameters<typeof _sendSignInLinkToEmail>) {
   throwIfAuthBroken();
   return _sendSignInLinkToEmail(...args);
+}
+export function sendPasswordResetEmail(...args: Parameters<typeof _sendPasswordResetEmail>) {
+  throwIfAuthBroken();
+  return _sendPasswordResetEmail(...args);
 }
 export function isSignInWithEmailLink(...args: Parameters<typeof _isSignInWithEmailLink>) {
   if (authInitError) return false;
