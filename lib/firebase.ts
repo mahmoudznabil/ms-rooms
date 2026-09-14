@@ -2,20 +2,20 @@
 
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import {
-  getAuth,
+  getAuth as _getAuth,
   GoogleAuthProvider,
   RecaptchaVerifier,
-  signInWithPhoneNumber,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signInWithEmailLink,
-  sendSignInLinkToEmail,
-  isSignInWithEmailLink,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
-  signOut,
-  onAuthStateChanged,
+  signInWithPhoneNumber as _signInWithPhoneNumber,
+  signInWithEmailAndPassword as _signInWithEmailAndPassword,
+  createUserWithEmailAndPassword as _createUserWithEmailAndPassword,
+  signInWithEmailLink as _signInWithEmailLink,
+  sendSignInLinkToEmail as _sendSignInLinkToEmail,
+  isSignInWithEmailLink as _isSignInWithEmailLink,
+  signInWithPopup as _signInWithPopup,
+  signInWithRedirect as _signInWithRedirect,
+  getRedirectResult as _getRedirectResult,
+  signOut as _signOut,
+  onAuthStateChanged as _onAuthStateChanged,
   setPersistence,
   browserLocalPersistence,
   type User,
@@ -44,11 +44,62 @@ export const firebaseApp = app;
 // the Node bundle during Next.js static prerender (/_not-found etc.) —
 // that crashed the export build. Auth is only ever used in the browser
 // (click handlers / effects), so init it lazily on the client.
-export const auth: Auth = typeof window !== "undefined" ? getAuth(app) : ({} as Auth);
+//
+// Hardening: the repo currently has TWO copies of @firebase/component
+// (nested 0.7.3 under @firebase/auth vs hoisted 0.7.5) and the webpack alias
+// in next.config.ts does not apply under Turbopack — so getAuth() can throw
+// "Component auth has not been registered yet" at module load. Because every
+// page statically bundles this module (layout → AppShell → LoginView →
+// FirebaseAuthPanel), that used to kill the whole app chunk during hydration
+// and freeze the page on "Tuning the frequency…" forever. Never let init take
+// the app down: fall back to a logged-out stub so boot() always reaches
+// ready:true, and surface the real error only when sign-in is attempted.
+let authInitError: unknown = null;
 
-// Persist session across tabs/restarts (fixes refresh/new-tab session loss)
-if (typeof window !== "undefined") {
-  setPersistence(auth, browserLocalPersistence).catch(() => undefined);
+function brokenAuthStub(): Auth {
+  const noop = () => undefined;
+  return {
+    currentUser: null,
+    onAuthStateChanged: ((next: (u: null) => void) => {
+      try {
+        setTimeout(() => {
+          try {
+            next(null);
+          } catch {}
+        }, 0);
+      } catch {}
+      return noop;
+    }) as unknown as Auth["onAuthStateChanged"],
+  } as Auth;
+}
+
+function initAuth(): Auth {
+  if (typeof window === "undefined") return {} as Auth;
+  try {
+    const a = _getAuth(app);
+    // Persist session across tabs/restarts (fixes refresh/new-tab session loss)
+    try {
+      setPersistence(a, browserLocalPersistence).catch(() => undefined);
+    } catch {}
+    return a;
+  } catch (e) {
+    authInitError = e;
+    try {
+      console.error("[firebase] auth init failed, running logged-out:", e);
+    } catch {}
+    return brokenAuthStub();
+  }
+}
+
+export const auth: Auth = initAuth();
+
+/** Non-null when auth fell back to the logged-out stub (see above). */
+export function getAuthInitError(): unknown {
+  return authInitError;
+}
+
+function throwIfAuthBroken(): void {
+  if (authInitError) throw authInitError;
 }
 
 export const googleProvider = new GoogleAuthProvider();
@@ -106,21 +157,65 @@ export async function getFirebaseAIModel(modelName = "gemini-2.5-flash") {
   return getGenerativeModel(ai, { model: modelName });
 }
 
-export {
-  signInWithPhoneNumber,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signInWithEmailLink,
-  sendSignInLinkToEmail,
-  isSignInWithEmailLink,
-  signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
-  signOut,
-  onAuthStateChanged,
-  setPersistence,
-  browserLocalPersistence,
-};
+// Wrapped re-exports: same names/signatures as firebase/auth, but if auth
+// init failed (stub mode) they fail fast with the REAL init error instead of
+// cryptic downstream crashes. Read-only probes degrade gracefully so boot()
+// and the redirect-return effect always complete.
+export function signInWithPhoneNumber(...args: Parameters<typeof _signInWithPhoneNumber>) {
+  throwIfAuthBroken();
+  return _signInWithPhoneNumber(...args);
+}
+export function signInWithEmailAndPassword(...args: Parameters<typeof _signInWithEmailAndPassword>) {
+  throwIfAuthBroken();
+  return _signInWithEmailAndPassword(...args);
+}
+export function createUserWithEmailAndPassword(...args: Parameters<typeof _createUserWithEmailAndPassword>) {
+  throwIfAuthBroken();
+  return _createUserWithEmailAndPassword(...args);
+}
+export function signInWithEmailLink(...args: Parameters<typeof _signInWithEmailLink>) {
+  throwIfAuthBroken();
+  return _signInWithEmailLink(...args);
+}
+export function sendSignInLinkToEmail(...args: Parameters<typeof _sendSignInLinkToEmail>) {
+  throwIfAuthBroken();
+  return _sendSignInLinkToEmail(...args);
+}
+export function isSignInWithEmailLink(...args: Parameters<typeof _isSignInWithEmailLink>) {
+  if (authInitError) return false;
+  return _isSignInWithEmailLink(...args);
+}
+export function signInWithPopup(...args: Parameters<typeof _signInWithPopup>) {
+  throwIfAuthBroken();
+  return _signInWithPopup(...args);
+}
+export function signInWithRedirect(...args: Parameters<typeof _signInWithRedirect>) {
+  throwIfAuthBroken();
+  return _signInWithRedirect(...args);
+}
+export async function getRedirectResult(...args: Parameters<typeof _getRedirectResult>) {
+  if (authInitError) return null;
+  return _getRedirectResult(...args);
+}
+export function signOut(...args: Parameters<typeof _signOut>) {
+  if (authInitError) return Promise.resolve();
+  return _signOut(...args);
+}
+export function onAuthStateChanged(...args: Parameters<typeof _onAuthStateChanged>) {
+  if (authInitError) {
+    const cb = args[1] as unknown as (u: null) => void;
+    try {
+      setTimeout(() => {
+        try {
+          cb(null);
+        } catch {}
+      }, 0);
+    } catch {}
+    return () => undefined;
+  }
+  return (_onAuthStateChanged as (...a: unknown[]) => unknown)(...args) as ReturnType<typeof _onAuthStateChanged>;
+}
+export { setPersistence, browserLocalPersistence };
 export type { User };
 
 // Email link helpers: must use same origin URL
