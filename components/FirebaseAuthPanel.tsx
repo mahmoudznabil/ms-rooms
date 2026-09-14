@@ -119,8 +119,15 @@ export default function FirebaseAuthPanel() {
         if (cancelled) return;
         if (!res?.user) {
           if (expectRedirect) {
+            let popupErr = "";
+            try {
+              popupErr = sessionStorage.getItem("msrooms_google_popup_error") ?? "";
+              sessionStorage.removeItem("msrooms_google_popup_error");
+            } catch {}
             setErr(
-              "Google returned without a credential (code: auth/redirect-incomplete). Usually third-party cookies blocked the return — allow them for this site, or use email sign-in. Retrying keeps you on this page."
+              `Google returned without a credential (code: auth/redirect-incomplete).` +
+              (popupErr ? ` Popup had failed first with: ${popupErr}.` : "") +
+              ` If that says auth/unauthorized-domain, add bestaudiobackend.mahmoudnabil03.workers.dev under Firebase Console → Authentication → Settings → Authorized domains. Otherwise allow third-party cookies for this site, or use email sign-in.`
             );
           }
           return;
@@ -175,10 +182,12 @@ export default function FirebaseAuthPanel() {
         msg.includes("Database is closing");
       if (popupBroken) {
         try {
-          setMsg("Popup failed — redirecting to Google…");
+          const popupCode = (code || msg).slice(0, 200);
           try {
             sessionStorage.setItem("msrooms_google_redirect", "1");
+            sessionStorage.setItem("msrooms_google_popup_error", popupCode);
           } catch {}
+          setMsg(`Popup failed (${popupCode}) — redirecting to Google…`);
           await signInWithRedirect(auth, googleProvider);
           return;
         } catch (e2: unknown) {
