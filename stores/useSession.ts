@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { API_BASE, fetchUser, login as apiLogin, me as apiMe, type ApiUser } from "@/lib/api";
+import { API_BASE, fetchUser, login as apiLogin, me as apiMe, ApiError, type ApiUser } from "@/lib/api";
 
 interface SessionState {
   user: ApiUser | null;
@@ -52,7 +52,13 @@ export const useSession = create<SessionState>((set, get) => ({
         set({ user, ready: true, authError: null });
         return;
       }
-    } catch {
+    } catch (e) {
+      // A 403 ban must be visible (not a silent logout): apiMe and the
+      // Firebase re-sync both refuse banned users with "has been banned".
+      if (e instanceof ApiError && e.status === 403 && /ban/i.test(e.message)) {
+        set({ user: null, ready: true, authError: e.message });
+        return;
+      }
       // Fall through to logged-out below.
     }
     set({ user: null, ready: true });

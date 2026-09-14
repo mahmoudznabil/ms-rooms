@@ -7,10 +7,11 @@ import {
 } from "lucide-react";
 import {
   adminLogin, adminMe, adminRecharge, adminTransactions, adminLookupUsers,
+  adminBanUser, adminPromoteUser,
   adminStats, listTickets, adminFirebaseLogin, adminTeamList, adminTeamCreate,
   adminTeamRemove, listReports, resolveReport, adminEndRoom, updateTicketStatus,
   ticketDetail, replyTicket, fetchRooms,
-  type AdminUser,
+  type AdminUser, type ApiUser,
 } from "@/lib/api";
 import { auth, googleProvider, signInWithPopup } from "@/lib/firebase";
 import { Field, inputCls } from "@/components/bits";
@@ -223,7 +224,7 @@ function OverviewTab({ token, isMaster }: { token: string; isMaster: boolean }) 
 
 function UsersTab({ token }: { token: string }) {
   const [q, setQ] = useState("");
-  const [found, setFound] = useState<Array<{ id: string; username: string; display_name: string; coins: number; gems: number; xp: number }>>([]);
+  const [found, setFound] = useState<ApiUser[]>([]);
   const [target, setTarget] = useState("");
   const [action, setAction] = useState("ADD_COINS");
   const [amount, setAmount] = useState(1000);
@@ -231,15 +232,67 @@ function UsersTab({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [modBusy, setModBusy] = useState<string | null>(null);
+  const [promoteRole, setPromoteRole] = useState<"support" | "finance">("support");
 
   const search = async () => {
     setErr(null);
     try {
       const r = await adminLookupUsers(token, q.trim());
-      setFound(r.users as unknown as typeof found);
+      setFound(r.users);
       if (r.users.length === 0) setErr("No users match.");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const refreshRow = async (id: string) => {
+    try {
+      const r = await adminLookupUsers(token, id);
+      const fresh = r.users.find((u) => u.id === id);
+      if (fresh) setFound((prev) => prev.map((u) => (u.id === id ? fresh : u)));
+    } catch {}
+  };
+
+  const banUser = async (u: ApiUser, banned: boolean) => {
+    let reason = "";
+    if (banned) {
+      const r = window.prompt(`Ban @${u.username}? Optional reason:`, "");
+      if (r === null) return;
+      reason = r.trim().slice(0, 200);
+    }
+    setModBusy(u.id + (banned ? ":ban" : ":unban"));
+    setErr(null);
+    setMsg(null);
+    try {
+      await adminBanUser(token, { user_id: u.id, banned, reason });
+      setMsg(banned ? `@${u.username} banned — sessions killed immediately.` : `@${u.username} unbanned.`);
+      await refreshRow(u.id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setModBusy(null);
+    }
+  };
+
+  const promoteUser = async (u: ApiUser) => {
+    const needsPassword = !u.firebase_uid;
+    let password = "";
+    if (needsPassword) {
+      const p = window.prompt(`@${u.username} has no Google identity linked. Set an initial admin password (8-100 chars):`, "");
+      if (p === null) return;
+      password = p;
+    }
+    setModBusy(u.id + ":promote");
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await adminPromoteUser(token, { user_id: u.id, role: promoteRole, password: password || undefined });
+      setMsg(`@${u.username} is now an admin (${r.admin_username}, ${r.role})${r.firebase_login ? " — signs in with Google." : " — share the password securely."}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setModBusy(null);
     }
   };
 
@@ -264,19 +317,50 @@ function UsersTab({ token }: { token: string }) {
       <h2 className="flex items-center gap-1.5 text-sm font-bold"><Search size={14} /> Find user</h2>
       <div className="mt-2 flex gap-2">
         <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
-          placeholder="User ID or username" className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none" />
+          placeholder="User ID, @username, or ID tag" className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none" />
         <button onClick={() => void search()} className="shrink-0 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-black">Search</button>
       </div>
       {found.length > 0 && (
         <ul className="mt-3 space-y-1.5">
-          {found.map((u) => (
-            <li key={u.id} className={`flex items-center justify-between gap-2 rounded-2xl px-3 py-2 text-sm ${target === u.id ? "bg-violet-500/20" : "bg-white/[0.04]"}`}>
-              <span className="min-w-0 truncate">{u.display_name} <span className="text-white/40">@{u.username}</span>
-                <span className="block text-xs text-white/45">{u.coins} coins · {u.gems} gems · {u.xp} XP</span>
-              </span>
-              <button onClick={() => setTarget(u.id)} className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-bold text-black">Select</button>
-            </li>
-          ))}
+          {found.map((u) => {
+            const isBanned = Number(u.banned ?? 0) === 1;
+            return (
+              <li key={u.id} className={`rounded-2xl px-3 py-2 text-sm ${target === u.id ? "bg-violet-500/20" : "bg-white/[0.04]"} ${isBanned ? "ring-1 ring-red-500/40" : ""}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate">
+                    {u.display_name} <span className="text-white/40">@{u.username}</span>
+                    {u.id_tag && <span className="ml-1.5 rounded-full bg-white/10 px-2 py-0.5 font-mono text-[10px] text-white/60">{u.id_tag}</span>}
+                    {isBanned && <span className="ml-1.5 rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-300">BANNED</span>}
+                    <span className="block truncate text-xs text-white/45">
+                      {u.coins} coins · {u.gems} gems · {u.xp} XP{u.provider ? ` · ${u.provider}` : ""}
+                      {(u.email || u.phone) ? ` · ${u.email ?? u.phone}` : ""}
+                    </span>
+                    {isBanned && u.ban_reason && <span className="block truncate text-xs text-red-300/70">Reason: {u.ban_reason}</span>}
+                  </span>
+                  <button onClick={() => setTarget(u.id)} className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-bold text-black">Select</button>
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => void banUser(u, !isBanned)}
+                    disabled={modBusy !== null}
+                    className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold disabled:opacity-40 ${isBanned ? "bg-emerald-500/20 text-emerald-200" : "bg-red-500/20 text-red-200"}`}>
+                    {modBusy === u.id + (isBanned ? ":unban" : ":ban") ? "…" : isBanned ? "Unban" : "Ban"}
+                  </button>
+                  <select value={promoteRole} onChange={(e) => setPromoteRole(e.target.value as "support" | "finance")}
+                    className="shrink-0 rounded-full border border-white/10 bg-[#15151d] px-2 py-1 text-xs text-white/70 focus:outline-none">
+                    <option value="support">support</option>
+                    <option value="finance">finance</option>
+                  </select>
+                  <button
+                    onClick={() => void promoteUser(u)}
+                    disabled={modBusy !== null}
+                    className="shrink-0 rounded-full bg-violet-500/20 px-3 py-1 text-xs font-bold text-violet-200 disabled:opacity-40">
+                    {modBusy === u.id + ":promote" ? "…" : "Make admin"}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
       <div className="mt-4 grid grid-cols-2 gap-3">

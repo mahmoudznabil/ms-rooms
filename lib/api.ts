@@ -54,6 +54,12 @@ export interface ApiUser {
   xp: number;
   level?: number;
   id_tag?: string;
+  email?: string | null;
+  phone?: string | null;
+  provider?: string | null;
+  firebase_uid?: string | null;
+  banned?: number;
+  ban_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -377,6 +383,12 @@ export async function adminTransactions(token: string, limit = 50): Promise<{ tr
 }
 export async function adminLookupUsers(token: string, q: string): Promise<{ users: ApiUser[] }> {
   return req(`/api/admin/users?q=${encodeURIComponent(q)}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
+export async function adminBanUser(token: string, input: { user_id: string; banned: boolean; reason?: string }): Promise<{ user_id: string; banned: boolean }> {
+  return req(`/api/admin/users/ban`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function adminPromoteUser(token: string, input: { user_id: string; role: "support" | "finance"; password?: string }): Promise<{ admin_id: string; admin_username: string; role: string; firebase_login: boolean }> {
+  return req(`/api/admin/users/promote`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
 }
 export async function adminStats(token: string): Promise<{ stats: Record<string, unknown>; pricing: Array<Record<string, unknown>> }> {
   return req(`/api/admin/stats`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });

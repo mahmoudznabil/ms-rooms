@@ -91,6 +91,10 @@ function newId(prefix: string): string {
   return `${prefix}-${r}`;
 }
 
+// Set once per isolate after the users identity columns/index exist, so we
+// don't re-run DDL on every request.
+let userIdentitySchemaReady = false;
+
 // ---- Firebase ID token verification (security layer) ----
 // Project: bestaudioroom (628489866765) — web app 1:628489866765:web:a75db602122ef083700f44
 // No admin secret required: we try Google tokeninfo, but fall back to JWT payload check so
@@ -657,6 +661,70 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         if (u) return u as Record<string, unknown>;
         return null;
       }
+
+      // ---- Universal outside-ID: every user row carries a stable unique `id`
+      // plus a human-readable unique `id_tag` (BASE#NNNN), no matter how they
+      // signed up (username, Google, email/password, phone). Admins find, ban
+      // and promote users by id, username, or id_tag.
+      async function ensureUserIdentityColumns(): Promise<void> {
+        if (userIdentitySchemaReady) return;
+        for (const ddl of [
+          "ALTER TABLE users ADD COLUMN id_tag TEXT",
+          "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0",
+          "ALTER TABLE users ADD COLUMN ban_reason TEXT",
+        ]) {
+          try {
+            await env.DB.prepare(ddl).run();
+          } catch {
+            // column already exists
+          }
+        }
+        try {
+          await env.DB.prepare(
+            `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_id_tag ON users(id_tag) WHERE id_tag IS NOT NULL`
+          ).run();
+        } catch {}
+        // One-time backfill for rows created before id_tag existed.
+        try {
+          const rows = await env.DB
+            .prepare(`SELECT id, username FROM users WHERE id_tag IS NULL OR id_tag = '' LIMIT 1000`)
+            .all();
+          for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
+            const base = ((r.username as string) || "user").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "user";
+            const stem = (base.toUpperCase().replace(/[^A-Z0-9]/g, "") || "USER").slice(0, 8);
+            for (let i = 0; i < 5; i++) {
+              const tag = `${stem}#${Math.floor(1000 + Math.random() * 9000)}`;
+              try {
+                await env.DB.prepare(`UPDATE users SET id_tag = ? WHERE id = ? AND (id_tag IS NULL OR id_tag = '')`).bind(tag, r.id).run();
+                break;
+              } catch {}
+            }
+          }
+        } catch {}
+        userIdentitySchemaReady = true;
+      }
+
+      async function makeUniqueIdTag(base: string): Promise<string> {
+        const stem = ((base || "user").toUpperCase().replace(/[^A-Z0-9]/g, "") || "USER").slice(0, 8);
+        for (let i = 0; i < 8; i++) {
+          const tag = `${stem}#${Math.floor(1000 + Math.random() * 9000)}`;
+          const taken = await env.DB.prepare(`SELECT id FROM users WHERE id_tag = ?`).bind(tag).first();
+          if (!taken) return tag;
+        }
+        return `${stem}#${Date.now().toString(36).toUpperCase().slice(-6)}`;
+      }
+
+      async function backfillIdentity(userId: string): Promise<void> {
+        const row = (await env.DB.prepare(`SELECT id, username, id_tag FROM users WHERE id = ?`).bind(userId).first()) as Record<string, unknown> | null;
+        if (!row || row.id_tag) return;
+        const base = ((row.username as string) || "user").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "user";
+        for (let i = 0; i < 5; i++) {
+          try {
+            await env.DB.prepare(`UPDATE users SET id_tag = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND (id_tag IS NULL OR id_tag = '')`).bind(await makeUniqueIdTag(base), userId).run();
+            return;
+          } catch {}
+        }
+      }
       const userMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (userMatch && request.method === "GET") {
         const id = decodeURIComponent(userMatch[1]);
@@ -769,17 +837,19 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         if (!/^[A-Za-z0-9 _.-]{2,24}$/.test(username)) {
           return badRequest("username must be 2-24 chars (letters, numbers, space, _ . -).");
         }
+        await ensureUserIdentityColumns();
         let user = await env.DB.prepare(`SELECT * FROM users WHERE username = ? COLLATE NOCASE`)
           .bind(username)
           .first();
         if (!user) {
           const slug = username.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "guest";
           const id = `user-${slug}-${Math.floor(Math.random() * 1e6)}`;
+          const idTag = await makeUniqueIdTag(slug);
           await env.DB.prepare(
-            `INSERT INTO users (id, username, display_name, bio, coins, xp)
-             VALUES (?, ?, ?, '', 100, 0)`
+            `INSERT INTO users (id, username, display_name, bio, coins, xp, id_tag)
+             VALUES (?, ?, ?, '', 100, 0, ?)`
           )
-            .bind(id, username, username)
+            .bind(id, username, username, idTag)
             .run();
           user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
         }
@@ -809,6 +879,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         const token = cookieToken || headerToken;
         
         if (!token) return badRequest("Missing session token.");
+        await ensureUserIdentityColumns();
         const user = await env.DB.prepare(
           `SELECT u.* FROM users u JOIN sessions s ON s.user_id = u.id
            WHERE s.id = ? AND s.expires_at > datetime('now')`
@@ -816,7 +887,26 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           .bind(token)
           .first();
         if (!user) return j({ ok: false, error: "Invalid or expired session." }, 401);
-        return j({ ok: true, user });
+        const meRow = user as Record<string, unknown>;
+        if (!meRow.id_tag) {
+          await backfillIdentity(meRow.id as string);
+          const fresh = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(meRow.id).first();
+          if (fresh) return bannedOrUser(fresh as Record<string, unknown>);
+        }
+        return bannedOrUser(meRow);
+      }
+
+      // Shared: banned users get their sessions wiped and a 403, everyone
+      // else passes through. Defined here so /api/auth/me uses it.
+      async function bannedOrUser(row: Record<string, unknown>): Promise<Response> {
+        if (Number(row.banned ?? 0) === 1) {
+          try {
+            await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(row.id).run();
+          } catch {}
+          const reason = (row.ban_reason as string) || "";
+          return j({ ok: false, error: `This account has been banned.${reason ? ` Reason: ${reason}` : ""}` }, 403);
+        }
+        return j({ ok: true, user: row });
       }
 
       // ---- Logout ----
@@ -843,6 +933,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       if (path === "/api/auth/firebase" && request.method === "POST") {
         const idToken = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         if (!idToken) return json({ ok: false, error: "Missing Firebase ID token." }, 401);
+        await ensureUserIdentityColumns();
         const verified = await verifyFirebaseIdToken(idToken);
         if (!verified) return json({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
         const body = await readJson<{
@@ -895,7 +986,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           const base = (displayName || email?.split("@")[0] || phone || "user").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "user";
           const id = `user-${base}-${Math.floor(Math.random() * 1e6)}`;
           const username = `${base}_${Math.random().toString(36).slice(2, 6)}`.slice(0, 20);
-          const idTag = `${base.slice(0, 8).toUpperCase()}#${Math.floor(1000 + Math.random() * 9000)}`;
+          const idTag = await makeUniqueIdTag(base);
           await env.DB.prepare(
             `INSERT INTO users (id, username, display_name, avatar_url, frame_style, id_tag, email, phone, firebase_uid, provider, bio, coins, xp, streak)
              VALUES (?, ?, ?, ?, 'default', ?, ?, ?, ?, ?, '', 100, 0, 0)`
@@ -917,6 +1008,11 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(row.id).first();
         }
         const userId = (user as Record<string, unknown>).id as string;
+        // Banned users never get a fresh session (also enforced in /api/auth/me).
+        if (Number((user as Record<string, unknown>).banned ?? 0) === 1) {
+          const reason = ((user as Record<string, unknown>).ban_reason as string) || "";
+          return j({ ok: false, error: `This account has been banned.${reason ? ` Reason: ${reason}` : ""}` }, 403);
+        }
         const token = `sess_${newId("t").replace("t-", "")}`;
         await env.DB.prepare(`INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, datetime('now', '+30 days'))`).bind(token, userId).run();
         try {
@@ -2023,10 +2119,81 @@ return j({
         const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         const adm = await getAdminFromToken(token);
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        await ensureUserIdentityColumns();
         const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
         const like = `%${q}%`;
-        const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ? OR email LIKE ? LIMIT 10`).bind(like, like, like, q, like).all() : await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp FROM users ORDER BY updated_at DESC LIMIT 10`).all();
+        const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone, provider, banned, ban_reason, firebase_uid, created_at FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ? OR email LIKE ? OR phone LIKE ? LIMIT 10`).bind(like, like, like, q, like, like).all() : await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone, provider, banned, ban_reason, firebase_uid, created_at FROM users ORDER BY updated_at DESC LIMIT 10`).all();
         return j({ ok: true, users: rows.results ?? [] });
+      }
+
+      // ---- User moderation: ban / unban (master_admin only). Banning wipes
+      // all live sessions immediately; enforcement lives in /api/auth/me and
+      // /api/auth/firebase so banned users can't re-mint.
+      if (path === "/api/admin/users/ban" && request.method === "POST") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        await ensureUserIdentityColumns();
+        const body = await readJson<{ user_id?: unknown; banned?: unknown; reason?: unknown }>(request);
+        const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+        const banned = body?.banned === true;
+        const reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 200) : "";
+        if (!key) return badRequest("user_id (id, username, or id_tag) is required.");
+        const target = await resolveUser(key);
+        if (!target) return notFound("User not found.");
+        const targetId = (target as Record<string, unknown>).id as string;
+        await env.DB.prepare(`UPDATE users SET banned = ?, ban_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .bind(banned ? 1 : 0, banned ? reason : null, targetId)
+          .run();
+        if (banned) {
+          try {
+            await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(targetId).run();
+          } catch {}
+        }
+        return j({ ok: true, user_id: targetId, banned });
+      }
+
+      // ---- Upgrade an app user to the admin team (master_admin only).
+      // Creates an admin_users row (support/finance). Login works via their
+      // linked Firebase Google identity; if they have none, the master sets
+      // an initial password instead (stored hashed, like team accounts).
+      if (path === "/api/admin/users/promote" && request.method === "POST") {
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = await getAdminFromToken(token);
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        await ensureUserIdentityColumns();
+        const body = await readJson<{ user_id?: unknown; role?: unknown; password?: unknown }>(request);
+        const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+        const role = typeof body?.role === "string" ? body.role : "";
+        const password = typeof body?.password === "string" ? body.password : "";
+        if (!key) return badRequest("user_id (id, username, or id_tag) is required.");
+        if (role !== "support" && role !== "finance") return badRequest("role must be support or finance.");
+        const target = await resolveUser(key);
+        if (!target) return notFound("User not found.");
+        const t = target as Record<string, unknown>;
+        const adminUsername = ((t.username as string) || `user_${(t.id as string).slice(0, 8)}`).toLowerCase().replace(/[^a-z0-9_.-]/g, "").slice(0, 20) || `user_${(t.id as string).slice(-6)}`;
+        const dupe = await env.DB.prepare(`SELECT id FROM admin_users WHERE username = ? COLLATE NOCASE`).bind(adminUsername).first();
+        if (dupe) return conflict("An admin account with that username already exists.");
+        const firebaseUid = (t.firebase_uid as string) || null;
+        let passwordHash = "DISABLED-FIREBASE-ONLY";
+        if (!firebaseUid) {
+          if (password.length < 8 || password.length > 100) {
+            return badRequest("This user has no Google identity linked — set an initial password (8-100 chars).");
+          }
+          passwordHash = await sha256hex(password);
+        } else if (password) {
+          if (password.length < 8 || password.length > 100) return badRequest("password must be 8-100 characters.");
+          passwordHash = await sha256hex(password);
+        }
+        const adminId = newId("admin");
+        await env.DB.prepare(
+          `INSERT INTO admin_users (id, username, display_name, role, password_hash, firebase_uid) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+          .bind(adminId, adminUsername, ((t.display_name as string) || (t.username as string) || adminUsername).slice(0, 40), role, passwordHash, firebaseUid)
+          .run();
+        return j({ ok: true, admin_id: adminId, admin_username: adminUsername, role, firebase_login: !!firebaseUid }, 201);
       }
 
       if (path === "/api/admin/stats" && request.method === "GET") {
