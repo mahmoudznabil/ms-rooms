@@ -24,6 +24,16 @@ function formatAuthError(e: unknown): string {
   const err = e as { code?: string; message?: string; customData?: unknown };
   const code = err?.code ?? "";
   const msg = err?.message ?? String(e);
+  // auth/internal-error wraps the REAL cause (e.g. API-key referrer block).
+  // Surface it so the banner diagnoses itself.
+  let detail = "";
+  try {
+    const cd = err?.customData as { message?: string } | undefined;
+    if (cd?.message && cd.message !== msg) detail = cd.message;
+    else if (cd && typeof cd === "object") detail = JSON.stringify(cd);
+  } catch {}
+  if (detail) detail = detail.slice(0, 250);
+  const full = detail ? `${msg} | detail: ${detail}` : msg;
   try {
     console.error("[auth]", code, msg, (err?.customData ?? e) as unknown);
   } catch {}
@@ -32,9 +42,9 @@ function formatAuthError(e: unknown): string {
     msg.includes("internal-error") ||
     msg.includes("Database is closing")
   ) {
-    return `${msg} (code: ${code || "auth/internal-error"}). Usually: popup blocked, 3rd-party cookies/adblock, domain missing from Firebase Authorized Domains, or Firebase JS 12.17+ popup bug — redirect fallback runs automatically, or run: npm i firebase@12.16.0.`;
+    return `${full} (code: ${code || "auth/internal-error"}). Usually: popup blocked, 3rd-party cookies/adblock, domain missing from Firebase Authorized Domains, or Firebase JS 12.17+ popup bug — redirect fallback runs automatically, or run: npm i firebase@12.16.0.`;
   }
-  return code ? `${msg} (code: ${code})` : msg;
+  return code ? `${full} (code: ${code})` : full;
 }
 
 export default function FirebaseAuthPanel() {
