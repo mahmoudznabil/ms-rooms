@@ -32,6 +32,7 @@
     "typescript": "5.9.3"
   },
   "overrides": {
-    "@firebase/component": "0.7.5"
+    "@firebase/component": "0.7.5",
+    "@firebase/app": "0.16.2"
   }
 }
