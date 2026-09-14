@@ -74,6 +74,7 @@ export default function FirebaseAuthPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [phoneConfirm, setPhoneConfirm] = useState<import("firebase/auth").ConfirmationResult | null>(null);
   const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
+  const [recaptchaError, setRecaptchaError] = useState<string | null>(null);
   const recaptchaWidgetId = useRef<number | null>(null);
   const siteKey = getSiteKey();
 
@@ -110,6 +111,7 @@ export default function FirebaseAuthPanel() {
   useEffect(() => {
     if (mode !== "create") return;
     let cancelled = false;
+    setRecaptchaError(null);
     loadRecaptchaScript().then(() => {
       if (cancelled || !window.grecaptcha) return;
       const el = document.getElementById("register-recaptcha");
@@ -125,8 +127,14 @@ export default function FirebaseAuthPanel() {
           callback: (t: string) => setRecaptchaToken(t),
           "expired-callback": () => setRecaptchaToken(null),
         });
-      } catch {}
-    }).catch(() => {});
+      } catch {
+        if (!cancelled) setRecaptchaError("Security check couldn't start — reload the page and try again.");
+      }
+    }).catch(() => {
+      // Script blocked (usually an ad-blocker on google.com) — the button
+      // would otherwise stay disabled forever with no explanation.
+      if (!cancelled) setRecaptchaError("Security check couldn't load — an ad-blocker may be blocking google.com. Disable it for this site, then reopen this page.");
+    });
     return () => { cancelled = true; };
   }, [siteKey, mode]);
 
@@ -361,9 +369,17 @@ export default function FirebaseAuthPanel() {
             </div>
             {mode === "create" && (
               <div className="mt-3">
-                <div id="register-recaptcha" className="flex justify-center" />
-                {needRecaptcha && (
-                  <p className="mt-1.5 text-center text-xs text-white/35">Complete the reCAPTCHA to create your account.</p>
+                {recaptchaError ? (
+                  <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200">
+                    {recaptchaError}
+                  </p>
+                ) : (
+                  <>
+                    <div id="register-recaptcha" className="flex justify-center" />
+                    {needRecaptcha && (
+                      <p className="mt-1.5 text-center text-xs text-white/35">Complete the reCAPTCHA to create your account.</p>
+                    )}
+                  </>
                 )}
               </div>
             )}

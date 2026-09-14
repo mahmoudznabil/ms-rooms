@@ -43,13 +43,22 @@ export function loadRecaptchaScript(): Promise<void> {
 }
 
 export async function verifyRecaptchaToken(token: string): Promise<boolean> {
-  // Client delegates verification to Worker so secret never leaks
+  // Client delegates verification to Worker so secret never leaks.
+  // Bounded with a timeout: a stalled network must never freeze the UI.
   const { API_BASE } = await import("@/lib/api");
-  const res = await fetch(`${API_BASE}/api/recaptcha/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/recaptcha/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (e) {
+    throw new Error(e instanceof DOMException && e.name === "TimeoutError"
+      ? "Verification timed out — check your connection and try again."
+      : "Could not reach the verification server — check your connection and try again.");
+  }
   const data = await res.json().catch(() => null) as { ok?: boolean } | null;
   return !!data?.ok;
 }

@@ -11,19 +11,28 @@ import { API_BASE, ApiError } from "@/lib/api";
  */
 export async function syncFirebaseUser(firebaseUser: User): Promise<{ user: import("@/lib/api").ApiUser }> {
   const idToken = await firebaseUser.getIdToken(true);
-  const res = await fetch(`${API_BASE}/api/auth/firebase`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-    body: JSON.stringify({
-      firebase_uid: firebaseUser.uid,
-      email: firebaseUser.email ?? null,
-      phone: firebaseUser.phoneNumber ?? null,
-      display_name: firebaseUser.displayName ?? null,
-      avatar_url: firebaseUser.photoURL ?? null,
-      provider: firebaseUser.providerData[0]?.providerId ?? "firebase",
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/firebase`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({
+        firebase_uid: firebaseUser.uid,
+        email: firebaseUser.email ?? null,
+        phone: firebaseUser.phoneNumber ?? null,
+        display_name: firebaseUser.displayName ?? null,
+        avatar_url: firebaseUser.photoURL ?? null,
+        provider: firebaseUser.providerData[0]?.providerId ?? "firebase",
+      }),
+      // Bounded: a stalled sync must surface an error, never spin forever.
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (e) {
+    throw new ApiError(e instanceof DOMException && e.name === "TimeoutError"
+      ? "Account sync timed out — check your connection and try signing in again."
+      : "Could not reach the server — check your connection and try signing in again.", 0);
+  }
   const data = (await res.json().catch(() => null)) as { ok?: boolean; user?: import("@/lib/api").ApiUser; error?: string } | null;
   if (!res.ok || !data?.ok || !data.user) {
     throw new ApiError(data?.error ?? `Firebase sync failed (${res.status})`, res.status);
