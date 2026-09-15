@@ -18,7 +18,7 @@ import {
 } from "@/lib/firebase";
 import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
-import { getSiteKey, loadRecaptchaScript, verifyRecaptchaToken } from "@/lib/recaptcha";
+import { getSiteKey, getSiteKeyAsync, loadRecaptchaScript, verifyRecaptchaToken } from "@/lib/recaptcha";
 import { logAuthEvent } from "@/lib/metrics";
 
 // GitHub login principles, MS-ROOMS theme: one narrow column, a bordered
@@ -113,12 +113,15 @@ export default function FirebaseAuthPanel() {
     let cancelled = false;
     setRecaptchaError(null);
     setRecaptchaToken(null);
-    loadRecaptchaScript().then(() => {
+    loadRecaptchaScript().then(async () => {
       if (cancelled || !window.grecaptcha) return;
       if (typeof window.grecaptcha.render !== "function") {
         if (!cancelled) setRecaptchaError("Security check was blocked (grecaptcha.render is not a function) — an ad-blocker, Brave Shields, or private DNS may be neutering google.com/recaptcha. Allow it for this site, then reopen this page.");
         return;
       }
+      // Server-authoritative key: rotations apply without a rebuild.
+      const key = await getSiteKeyAsync();
+      if (cancelled) return;
       const el = document.getElementById("register-recaptcha");
       if (!el) return;
       try {
@@ -128,7 +131,7 @@ export default function FirebaseAuthPanel() {
         }
         el.innerHTML = "";
         recaptchaWidgetId.current = window.grecaptcha.render(el, {
-          sitekey: siteKey,
+          sitekey: key,
           callback: (t: string) => setRecaptchaToken(t),
           "expired-callback": () => setRecaptchaToken(null),
         });

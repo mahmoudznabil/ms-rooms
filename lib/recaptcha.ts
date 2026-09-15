@@ -25,6 +25,21 @@ export function getSiteKey(): string {
   return SITE_KEY || EXPO_SITE_KEY;
 }
 
+/** Server-authoritative site key with baked-in fallback. The Worker serves
+ *  the current key at /api/recaptcha/sitekey, so rotating keys never needs
+ *  a frontend rebuild — the bundle can't go stale. */
+let serverKey: string | null = null;
+export async function getSiteKeyAsync(): Promise<string> {
+  if (serverKey) return serverKey;
+  try {
+    const { API_BASE } = await import("@/lib/api");
+    const res = await fetch(`${API_BASE}/api/recaptcha/sitekey`, { signal: AbortSignal.timeout(8000) });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; siteKey?: string } | null;
+    if (data?.ok && data.siteKey) serverKey = data.siteKey;
+  } catch {}
+  return serverKey ?? getSiteKey();
+}
+
 /** True only for the REAL library — blockers inject a neutered `grecaptcha`
  *  stub without `render`, which must not count as loaded. */
 export function isRecaptchaReady(): boolean {
