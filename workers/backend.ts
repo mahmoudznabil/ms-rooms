@@ -982,7 +982,10 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         if (!user && phone) {
           user = await env.DB.prepare(`SELECT * FROM users WHERE phone = ?`).bind(phone).first();
         }
+        // First-run signal for the onboarding tour (fresh row created below).
+        let isNew = false;
         if (!user) {
+          isNew = true;
           const base = (displayName || email?.split("@")[0] || phone || "user").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "user";
           const id = `user-${base}-${Math.floor(Math.random() * 1e6)}`;
           const username = `${base}_${Math.random().toString(36).slice(2, 6)}`.slice(0, 20);
@@ -1021,7 +1024,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         // Set HttpOnly cookie
         const cookieHeaders = getCorsHeaders(origin);
         cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
-        return new Response(JSON.stringify({ ok: true, user }), {
+        return new Response(JSON.stringify({ ok: true, user, isNew }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
         });

@@ -9,6 +9,7 @@ import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
 import LoginView from "@/components/LoginView";
 import ServerCheckinModal from "@/components/ServerCheckinModal";
+import OnboardingTour from "@/components/OnboardingTour";
 import IncomingCallGate from "@/components/IncomingCallGate";
 import RightRail from "@/components/RightRail";
 import { UserAvatar } from "@/components/bits";
@@ -46,6 +47,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const user = useSession((s) => s.user);
   const boot = useSession((s) => s.boot);
   const [isAdmin, setIsAdmin] = useState(false);
+  // First-run tour: only brand-new signups (panel sets the session flag on
+  // fresh account creation), once per user. Consumers never see admin.
+  const [showTour, setShowTour] = useState(false);
   // Only Marc + Mahmoud see Admin — hidden from public
   const ADMIN_ALLOW = ["mahmoudnabil03@gmail.com", "marc@ms-rooms.app", "marc@gmail.com", "marc@msrooms.app"];
   useEffect(() => {
@@ -67,6 +71,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
     void boot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    try {
+      const fresh = sessionStorage.getItem("msrooms_new_signup") === "1";
+      const done = localStorage.getItem(`msrooms_tour_${user.id}`);
+      if (fresh && !done) setShowTour(true);
+    } catch {}
+  }, [user]);
+
+  const finishTour = () => {
+    try {
+      if (user) localStorage.setItem(`msrooms_tour_${user.id}`, "1");
+      sessionStorage.removeItem("msrooms_new_signup");
+    } catch {}
+    setShowTour(false);
+  };
 
   const missed = useCalls((s) => s.missed);
   const refreshMissed = useCalls((s) => s.refreshMissed);
@@ -226,6 +247,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <ServerCheckinModal />
+      {showTour && user && <OnboardingTour user={user} onDone={finishTour} />}
       <Suspense fallback={null}>
         <IncomingCallGate />
       </Suspense>

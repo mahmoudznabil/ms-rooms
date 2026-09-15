@@ -127,8 +127,13 @@ export default function FirebaseAuthPanel() {
           callback: (t: string) => setRecaptchaToken(t),
           "expired-callback": () => setRecaptchaToken(null),
         });
-      } catch {
-        if (!cancelled) setRecaptchaError("Security check couldn't start — reload the page and try again.");
+      } catch (e: unknown) {
+        // render() throws for a misconfigured key (wrong type/domains) — show
+        // Google's own message so the fix is obvious instead of a dead button.
+        if (!cancelled) {
+          const why = e instanceof Error && e.message ? ` (${e.message.slice(0, 140)})` : "";
+          setRecaptchaError(`Security check couldn't start${why} — reload the page and try again.`);
+        }
       }
     }).catch(() => {
       // Script blocked (usually an ad-blocker on google.com) — the button
@@ -139,8 +144,14 @@ export default function FirebaseAuthPanel() {
   }, [siteKey, mode]);
 
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
-    const { user } = await syncFirebaseUser(fbUser);
+    const { user, isNew } = await syncFirebaseUser(fbUser);
     useSession.setState({ user, ready: true, authError: null });
+    // First-run onboarding tour (AppShell picks this up after redirect).
+    if (isNew) {
+      try {
+        sessionStorage.setItem("msrooms_new_signup", "1");
+      } catch {}
+    }
   };
 
   // Completes signInWithRedirect fallback (popup blocked / internal-error path).
