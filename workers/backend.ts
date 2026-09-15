@@ -256,7 +256,7 @@ if (request.method === "OPTIONS") {
         }
       }
       if (path === "/api/recaptcha/sitekey" && request.method === "GET") {
-        const key = (env as unknown as Record<string, string | undefined>).RECAPTCHA_SITE_KEY || "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq";
+        const key = (env as unknown as Record<string, string | undefined>).RECAPTCHA_SITE_KEY || "6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD";
         return j({ ok: true, siteKey: key });
       }
 
@@ -310,7 +310,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       <tr><td>Account &amp; identity</td><td>Firebase UID (<code>firebase_uid</code>), email, phone, display name, avatar URL, provider (google / password / phone / email-link), username, id_tag</td><td>You + Firebase Auth</td></tr>
       <tr><td>App activity</td><td>Rooms created/joined, seats, messages/moments, follows, likes, gift sends/receives (coins spent, gems 70% to host), XP events, transactions, daily rewards, call sessions</td><td>Your use of MS-ROOMS</td></tr>
       <tr><td>Device &amp; technical</td><td>IP (<code>CF-Connecting-IP</code>), region (<code>origin.region_code</code> for Cloud Armor), user-agent, device identifiers, crash logs</td><td>Automatically</td></tr>
-      <tr><td>Verification &amp; safety</td><td>reCAPTCHA token/response (site key <code>6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq</code>), CSRF tokens, Firebase ID token (aud=<code>bestaudioroom</code>), Cloudflare Turn/CALLS session metadata</td><td>Security checks</td></tr>
+      <tr><td>Verification &amp; safety</td><td>reCAPTCHA token/response (site key <code>6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD</code>), CSRF tokens, Firebase ID token (aud=<code>bestaudioroom</code>), Cloudflare Turn/CALLS session metadata</td><td>Security checks</td></tr>
       <tr><td>Support</td><td>Reports you submit</td><td>You</td></tr>
     </table>
     <p>We do <strong>not</strong> collect payment card numbers directly — recharge is handled by app stores / payment provider; we store only package/amount/status.</p>

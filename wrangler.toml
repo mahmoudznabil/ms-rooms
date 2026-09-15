@@ -34,7 +34,7 @@ database_id = "d600133d-804e-4203-83cb-5166d35d4ae3"
 [vars]
 # reCAPTCHA v2 site key (public) — used for registration bot protection
 # Secret key must be set via `wrangler secret put RECAPTCHA_SECRET_KEY` (never commit)
-RECAPTCHA_SITE_KEY = "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq"
+RECAPTCHA_SITE_KEY = "6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD"
 
 # Frontend: the Next.js static export in ./out is served from this same
 # Worker (Cloudflare's recommended Workers Static Assets path), because this

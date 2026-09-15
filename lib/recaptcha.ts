@@ -1,6 +1,6 @@
 "use client";
 
-const SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq";
+const SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || "6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD";
 const EXPO_SITE_KEY = process.env.EXPO_PUBLIC_RECAPTCHA_SITE_KEY || SITE_KEY;
 
 declare global {
