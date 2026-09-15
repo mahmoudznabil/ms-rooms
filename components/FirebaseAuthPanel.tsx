@@ -112,8 +112,13 @@ export default function FirebaseAuthPanel() {
     if (mode !== "create") return;
     let cancelled = false;
     setRecaptchaError(null);
+    setRecaptchaToken(null);
     loadRecaptchaScript().then(() => {
       if (cancelled || !window.grecaptcha) return;
+      if (typeof window.grecaptcha.render !== "function") {
+        if (!cancelled) setRecaptchaError("Security check was blocked (grecaptcha.render is not a function) — an ad-blocker, Brave Shields, or private DNS may be neutering google.com/recaptcha. Allow it for this site, then reopen this page.");
+        return;
+      }
       const el = document.getElementById("register-recaptcha");
       if (!el) return;
       try {
@@ -135,10 +140,10 @@ export default function FirebaseAuthPanel() {
           setRecaptchaError(`Security check couldn't start${why} — reload the page and try again.`);
         }
       }
-    }).catch(() => {
+    }).catch((e: unknown) => {
       // Script blocked (usually an ad-blocker on google.com) — the button
       // would otherwise stay disabled forever with no explanation.
-      if (!cancelled) setRecaptchaError("Security check couldn't load — an ad-blocker may be blocking google.com. Disable it for this site, then reopen this page.");
+      if (!cancelled) setRecaptchaError(e instanceof Error ? e.message : "Security check couldn't load — an ad-blocker may be blocking google.com. Disable it for this site, then reopen this page.");
     });
     return () => { cancelled = true; };
   }, [siteKey, mode]);

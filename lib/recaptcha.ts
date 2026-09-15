@@ -25,20 +25,74 @@ export function getSiteKey(): string {
   return SITE_KEY || EXPO_SITE_KEY;
 }
 
+/** True only for the REAL library — blockers inject a neutered `grecaptcha`
+ *  stub without `render`, which must not count as loaded. */
+export function isRecaptchaReady(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return typeof (window.grecaptcha as unknown as { render?: unknown } | undefined)?.render === "function";
+  } catch {
+    return false;
+  }
+}
+
 export function loadRecaptchaScript(): Promise<void> {
-  if (scriptLoaded) return Promise.resolve();
+  if (typeof window === "undefined") return Promise.resolve();
+  if (isRecaptchaReady()) {
+    scriptLoaded = true;
+    scriptLoading = null;
+    return Promise.resolve();
+  }
   if (scriptLoading) return scriptLoading;
   scriptLoading = new Promise<void>((resolve, reject) => {
-    if (typeof window === "undefined") return resolve();
-    if (window.grecaptcha) { scriptLoaded = true; return resolve(); }
-    const s = document.createElement("script");
-    s.src = "https://www.google.com/recaptcha/api.js?render=explicit";
-    s.async = true;
-    s.defer = true;
-    s.onload = () => { scriptLoaded = true; resolve(); };
-    s.onerror = () => reject(new Error("Failed to load reCAPTCHA"));
-    document.head.appendChild(s);
+    const fail = (msg: string) => reject(new Error(msg));
+    const check = () => {
+      if (isRecaptchaReady()) {
+        scriptLoaded = true;
+        resolve();
+      } else {
+        fail(
+          "Security check was blocked (grecaptcha.render is not a function) — an ad-blocker, Brave Shields, or private DNS may be neutering google.com/recaptcha. Allow it for this site, then reopen this page."
+        );
+      }
+    };
+    // A blocker stub may already sit on window.grecaptcha: loading the real
+    // script overwrites it. If our script is blocked too, fail loudly.
+    try {
+      const s = document.createElement("script");
+      s.src = "https://www.google.com/recaptcha/api.js?render=explicit";
+      s.async = true;
+      s.defer = true;
+      let settled = false;
+      s.onload = () => {
+        if (settled) return;
+        settled = true;
+        // Give the library a beat to define render before judging.
+        setTimeout(check, 400);
+      };
+      s.onerror = () => {
+        if (settled) return;
+        settled = true;
+        fail("Security check couldn't load — an ad-blocker may be blocking google.com. Disable it for this site, then reopen this page.");
+      };
+      document.head.appendChild(s);
+      // Blockers sometimes swallow both load and error events: time out.
+      setTimeout(() => {
+        if (settled || scriptLoaded) return;
+        settled = true;
+        check();
+      }, 9000);
+    } catch {
+      fail("Security check couldn't load — reload the page and try again.");
+    }
   });
+  // Never cache a rejection: the user may allow the blocker and retry.
+  scriptLoading.then(
+    () => {},
+    () => {
+      if (!isRecaptchaReady()) scriptLoading = null;
+    }
+  );
   return scriptLoading;
 }
 
