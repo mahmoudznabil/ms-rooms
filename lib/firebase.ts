@@ -2,6 +2,11 @@
 
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import {
+  initializeAppCheck,
+  ReCaptchaV3Provider,
+  type AppCheck,
+} from "firebase/app-check";
+import {
   getAuth as _getAuth,
   GoogleAuthProvider,
   RecaptchaVerifier,
@@ -41,6 +46,42 @@ const firebaseConfig = {
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const firebaseApp = app;
+
+// Firebase Authentication is protected by App Check in production. The
+// visible checkbox used during registration is reCAPTCHA v2 and cannot be
+// used as an App Check provider. App Check requires its own score-based v3
+// site key, which is kept separate here. This key is public; the matching
+// secret is never used in the browser.
+const APP_CHECK_V3_KEY = env(
+  "NEXT_PUBLIC_FIREBASE_APPCHECK_RECAPTCHA_V3_KEY",
+  "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq",
+);
+let appCheckInitError: unknown = null;
+
+function initAppCheck(): AppCheck | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(APP_CHECK_V3_KEY),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } catch (e) {
+    appCheckInitError = e;
+    try {
+      console.error("[firebase] App Check init failed:", e);
+    } catch {}
+    return null;
+  }
+}
+
+// This must run before getAuth(). Auth obtains the app-check-internal
+// provider from the Firebase app container when it is created.
+export const firebaseAppCheck = initAppCheck();
+
+export function getAppCheckInitError(): unknown {
+  return appCheckInitError;
+}
+
 // getAuth() touches the Auth component registry, which is not registered in
 // the Node bundle during Next.js static prerender (/_not-found etc.) —
 // that crashed the export build. Auth is only ever used in the browser

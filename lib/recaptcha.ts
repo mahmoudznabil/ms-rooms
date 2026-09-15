@@ -51,6 +51,34 @@ export function isRecaptchaReady(): boolean {
   }
 }
 
+function existingRecaptchaScript(): HTMLScriptElement | null {
+  if (typeof document === "undefined") return null;
+  return Array.from(document.scripts).find((script) =>
+    script.src.includes("www.google.com/recaptcha/api.js"),
+  ) ?? null;
+}
+
+function waitForRecaptchaReady(timeoutMs = 10000): Promise<void> {
+  if (isRecaptchaReady()) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const started = Date.now();
+    const poll = () => {
+      if (isRecaptchaReady()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - started >= timeoutMs) {
+        reject(new Error(
+          "Security check was blocked (grecaptcha.render is not a function) — an ad-blocker, Brave Shields, or private DNS may be neutering google.com/recaptcha. Allow it for this site, then reopen this page.",
+        ));
+        return;
+      }
+      window.setTimeout(poll, 100);
+    };
+    poll();
+  });
+}
+
 export function loadRecaptchaScript(): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve();
   if (isRecaptchaReady()) {
@@ -61,6 +89,14 @@ export function loadRecaptchaScript(): Promise<void> {
   if (scriptLoading) return scriptLoading;
   scriptLoading = new Promise<void>((resolve, reject) => {
     const fail = (msg: string) => reject(new Error(msg));
+    const existing = existingRecaptchaScript();
+    if (existing) {
+      // Firebase App Check may already be loading the shared reCAPTCHA
+      // script. Do not add a second script: both App Check v3 and the signup
+      // checkbox use the same global grecaptcha instance.
+      void waitForRecaptchaReady().then(resolve, reject);
+      return;
+    }
     const check = () => {
       if (isRecaptchaReady()) {
         scriptLoaded = true;

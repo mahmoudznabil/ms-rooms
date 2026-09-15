@@ -15,6 +15,7 @@ import {
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
+  getAppCheckInitError,
 } from "@/lib/firebase";
 import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
@@ -45,6 +46,9 @@ function formatAuthError(e: unknown): string {
   try {
     console.error("[auth]", code, msg, (err?.customData ?? e) as unknown);
   } catch {}
+  if (code.includes("app-check") || msg.toLowerCase().includes("app check")) {
+    return `${full} (code: ${code || "auth/firebase-app-check-token-is-invalid"}). Firebase Authentication is enforcing App Check, but this web app did not receive a valid App Check token. Confirm the v3 App Check site key is registered for web app 1:628489866765:web:a75db602122ef083700f44 and that its domains include bestaudiobackend.mahmoudnabil03.workers.dev.`;
+  }
   if (
     code === "auth/internal-error" ||
     msg.includes("internal-error") ||
@@ -77,6 +81,7 @@ export default function FirebaseAuthPanel() {
   const [recaptchaError, setRecaptchaError] = useState<string | null>(null);
   const recaptchaWidgetId = useRef<number | null>(null);
   const siteKey = getSiteKey();
+  const appCheckInitFailed = Boolean(getAppCheckInitError());
 
   const switchMode = (m: Mode) => {
     setErr(null);
@@ -236,15 +241,17 @@ export default function FirebaseAuthPanel() {
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code ?? "";
       const msg = e instanceof Error ? e.message : String(e);
+      const appCheckBroken = code.includes("app-check") || msg.toLowerCase().includes("app check");
       const popupBroken =
-        code === "auth/internal-error" ||
         code === "auth/popup-blocked" ||
         code === "auth/popup-closed-by-user" ||
         code === "auth/network-request-failed" ||
         code === "auth/cancelled-popup-request" ||
-        msg.includes("internal-error") ||
-        msg.includes("Database is closing");
-      if (popupBroken) {
+        (code === "auth/internal-error" && /popup|window|resolver/i.test(msg));
+      if (appCheckBroken) {
+        logAuthEvent("google", "failure", msg);
+        setErr(formatAuthError(e));
+      } else if (popupBroken) {
         try {
           const popupCode = (code || msg).slice(0, 200);
           try {
@@ -269,14 +276,17 @@ export default function FirebaseAuthPanel() {
     setBusy(true); setErr(null); setMsg(null);
     try {
       if (create) {
+        setMsg("Checking security…");
         const token = recaptchaToken || window.grecaptcha?.getResponse(recaptchaWidgetId.current ?? undefined) || "";
         if (!token) throw new Error("Please complete the reCAPTCHA to register.");
         const ok = await verifyRecaptchaToken(token);
         if (!ok) throw new Error("reCAPTCHA verification failed — try again.");
       }
+      setMsg(create ? "Creating your Firebase account…" : "Signing in…");
       const cred = create
         ? await createUserWithEmailAndPassword(auth, email.trim(), password)
         : await signInWithEmailAndPassword(auth, email.trim(), password);
+      setMsg("Saving your profile securely…");
       await afterFirebase(cred.user);
       logAuthEvent("email", "success");
       setMsg(create ? "Account created." : "Signed in.");
@@ -337,7 +347,7 @@ export default function FirebaseAuthPanel() {
   const needRecaptcha = mode === "create" && !recaptchaToken;
 
   return (
-    <div className="w-full">
+      <div className="w-full">
       <h1 className="mt-4 text-center text-2xl font-light text-white">
         {mode === "create" ? "Create your account" : mode === "phone" ? "Sign in with phone" : "Sign in to MS-ROOMS"}
       </h1>
@@ -350,6 +360,11 @@ export default function FirebaseAuthPanel() {
       {msg && !err && (
         <div className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
           {msg}
+        </div>
+      )}
+      {appCheckInitFailed && !err && (
+        <div role="alert" className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-200">
+          Security verification could not initialize. Firebase sign-in may be rejected until the web App Check v3 key is registered for this app.
         </div>
       )}
 

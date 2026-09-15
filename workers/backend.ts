@@ -96,11 +96,14 @@ function newId(prefix: string): string {
 let userIdentitySchemaReady = false;
 
 // ---- Firebase ID token verification (security layer) ----
-// Project: bestaudioroom (628489866765) — web app 1:628489866765:web:a75db602122ef083700f44
-// No admin secret required: we try Google tokeninfo, but fall back to JWT payload check so
-// local/preview and edge failures don't block Google/Phone/Email sign-in. D1 binding still ensures progress follows firebase_uid.
+// Project: bestaudioroom (628489866765). Firebase ID tokens are RS256 JWTs
+// issued by securetoken.google.com and are verified with Google's rotating
+// public JWKs. Never accept a decoded-but-unverified payload here: doing so
+// would let an attacker forge any firebase_uid (including a master admin).
 const FIREBASE_PROJECT_ID = "bestaudioroom";
-const FIREBASE_APP_ID = "1:628489866765:web:a75db602122ef083700f44";
+const FIREBASE_ISSUER = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
+const FIREBASE_JWKS_URL =
+  "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
 /** THE admins: the only identities allowed to bootstrap master_admin via Firebase. */
 const MASTER_ADMIN_EMAILS = ["marcamgadalfonse2004@gmail.com", "mahmoudnabil03@gmail.com"];
@@ -109,10 +112,8 @@ async function sha256hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
+function decodeJwtPart(part: string): Record<string, unknown> | null {
   try {
-    const part = token.split(".")[1];
-    if (!part) return null;
     const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
     const padded = b64.padEnd(Math.ceil(b64.length / 4) * 4, "=");
     const json = atob(padded);
@@ -121,43 +122,99 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
     return null;
   }
 }
-async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; email?: string | null; phone?: string | null } | null> {
-  if (!idToken || idToken.split(".").length !== 3) return null;
-  // 1) Try Google tokeninfo (authoritative)
+
+function decodeBase64UrlBytes(part: string): Uint8Array | null {
   try {
-    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`, {
-      headers: { Accept: "application/json" },
-    });
-    if (res.ok) {
-      const data = (await res.json()) as Record<string, string>;
-      if (data.aud === FIREBASE_PROJECT_ID && data.sub) {
-        const exp = Number(data.exp ?? 0);
-        if (!exp || exp * 1000 > Date.now()) {
-          return { uid: data.sub, email: (data.email as string | undefined) ?? null, phone: (data.phone_number as string | undefined) ?? null };
-        }
-      }
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64.padEnd(Math.ceil(b64.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
     }
-  } catch {}
-  // 2) Fallback: decode JWT and check aud/exp/iss locally (no signature verify in edge — acceptable for D1 link; aud still must be our project)
-  const payload = decodeJwtPayload(idToken);
-  if (!payload) return null;
-  const aud = payload.aud as string | string[] | undefined;
-  const audOk = aud === FIREBASE_PROJECT_ID || aud === FIREBASE_APP_ID || (Array.isArray(aud) && aud.includes(FIREBASE_PROJECT_ID));
-  // Firebase ID tokens have aud = projectId, not appId — but accept either for flexibility
-  if (!audOk) {
-    // Also accept if aud array contains our project
-    if (typeof aud === "string" && !aud.includes(FIREBASE_PROJECT_ID) && aud !== FIREBASE_APP_ID) return null;
-    if (!aud) return null;
+    return bytes;
+  } catch {
+    return null;
   }
-  const sub = payload.sub as string | undefined ?? payload.user_id as string | undefined ?? payload.uid as string | undefined;
-  if (!sub) return null;
+}
+
+type FirebaseJwk = JsonWebKey & { kid: string; alg?: string; use?: string };
+let firebaseJwksCache: { keys: FirebaseJwk[]; expiresAt: number } | null = null;
+
+async function getFirebaseJwks(forceRefresh = false): Promise<FirebaseJwk[]> {
+  if (!forceRefresh && firebaseJwksCache && firebaseJwksCache.expiresAt > Date.now()) {
+    return firebaseJwksCache.keys;
+  }
+  const res = await fetch(FIREBASE_JWKS_URL, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`Firebase JWK fetch failed (${res.status}).`);
+  const data = (await res.json()) as { keys?: FirebaseJwk[] };
+  const keys = (data.keys ?? []).filter((key) => key.kty === "RSA" && key.kid);
+  if (keys.length === 0) throw new Error("Firebase JWK response contained no RSA keys.");
+  const maxAge = Number(res.headers.get("Cache-Control")?.match(/max-age=(\d+)/i)?.[1] ?? 3600);
+  firebaseJwksCache = {
+    keys,
+    expiresAt: Date.now() + Math.max(300, Math.min(maxAge, 86400)) * 1000,
+  };
+  return keys;
+}
+
+async function verifyFirebaseIdToken(idToken: string): Promise<{
+  uid: string;
+  email?: string | null;
+  phone?: string | null;
+  emailVerified: boolean;
+  provider: string | null;
+} | null> {
+  const parts = idToken.split(".");
+  if (parts.length !== 3) return null;
+  const header = decodeJwtPart(parts[0]);
+  const payload = decodeJwtPart(parts[1]);
+  const signature = decodeBase64UrlBytes(parts[2]);
+  const kid = typeof header?.kid === "string" ? header.kid : "";
+  if (!header || header.alg !== "RS256" || !payload || !signature || !kid) return null;
+
+  try {
+    let keys = await getFirebaseJwks();
+    let jwk = keys.find((key) => key.kid === kid);
+    // Google rotates keys. Refresh immediately when an unfamiliar kid arrives.
+    if (!jwk) {
+      keys = await getFirebaseJwks(true);
+      jwk = keys.find((key) => key.kid === kid);
+    }
+    if (!jwk) return null;
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const signed = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+    const signatureBuffer = signature.slice().buffer as ArrayBuffer;
+    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, signatureBuffer, signed);
+    if (!valid) return null;
+  } catch {
+    // Fail closed if Google keys are unreachable or WebCrypto rejects the key.
+    return null;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.aud !== FIREBASE_PROJECT_ID || payload.iss !== FIREBASE_ISSUER) return null;
+  const sub = typeof payload.sub === "string" ? payload.sub : "";
+  if (!sub || sub.length > 128) return null;
   const exp = Number(payload.exp ?? 0);
-  if (exp && exp * 1000 < Date.now() - 5000) return null;
-  const iss = payload.iss as string | undefined;
-  if (iss && !iss.includes("securetoken.google.com") && !iss.includes("accounts.google.com") && !iss.includes("https://securetoken.google.com")) {
-    // allow — some providers omit securetoken
-  }
-  return { uid: sub, email: (payload.email as string | undefined) ?? null, phone: (payload.phone_number as string | undefined) ?? null };
+  const iat = Number(payload.iat ?? 0);
+  if (!Number.isFinite(exp) || exp <= now || !Number.isFinite(iat) || iat > now + 300) return null;
+  return {
+    uid: sub,
+    email: typeof payload.email === "string" ? payload.email : null,
+    phone: typeof payload.phone_number === "string" ? payload.phone_number : null,
+    emailVerified: payload.email_verified === true,
+    provider:
+      typeof (payload.firebase as Record<string, unknown> | undefined)?.sign_in_provider === "string"
+        ? ((payload.firebase as Record<string, unknown>).sign_in_provider as string)
+        : null,
+  };
 }
 
 const backend = {
@@ -1895,6 +1952,9 @@ return j({
         const verified = await verifyFirebaseIdToken(idToken);
         if (!verified) return json({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
         const email = (verified.email ?? "").trim().toLowerCase();
+        if (!verified.emailVerified || verified.provider !== "google.com") {
+          return json({ ok: false, error: "Master Admin requires a verified Google sign-in." }, 403);
+        }
         if (!MASTER_ADMIN_EMAILS.includes(email)) {
           return json({ ok: false, error: "This Google account is not the game admin." }, 403);
         }
