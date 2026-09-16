@@ -13,10 +13,7 @@ import {
   signInWithPhoneNumber as _signInWithPhoneNumber,
   signInWithEmailAndPassword as _signInWithEmailAndPassword,
   createUserWithEmailAndPassword as _createUserWithEmailAndPassword,
-  signInWithEmailLink as _signInWithEmailLink,
-  sendSignInLinkToEmail as _sendSignInLinkToEmail,
   sendPasswordResetEmail as _sendPasswordResetEmail,
-  isSignInWithEmailLink as _isSignInWithEmailLink,
   signInWithPopup as _signInWithPopup,
   signInWithRedirect as _signInWithRedirect,
   getRedirectResult as _getRedirectResult,
@@ -215,21 +212,9 @@ export function createUserWithEmailAndPassword(...args: Parameters<typeof _creat
   throwIfAuthBroken();
   return _createUserWithEmailAndPassword(...args);
 }
-export function signInWithEmailLink(...args: Parameters<typeof _signInWithEmailLink>) {
-  throwIfAuthBroken();
-  return _signInWithEmailLink(...args);
-}
-export function sendSignInLinkToEmail(...args: Parameters<typeof _sendSignInLinkToEmail>) {
-  throwIfAuthBroken();
-  return _sendSignInLinkToEmail(...args);
-}
 export function sendPasswordResetEmail(...args: Parameters<typeof _sendPasswordResetEmail>) {
   throwIfAuthBroken();
   return _sendPasswordResetEmail(...args);
-}
-export function isSignInWithEmailLink(...args: Parameters<typeof _isSignInWithEmailLink>) {
-  if (authInitError) return false;
-  return _isSignInWithEmailLink(...args);
 }
 export function signInWithPopup(...args: Parameters<typeof _signInWithPopup>) {
   throwIfAuthBroken();

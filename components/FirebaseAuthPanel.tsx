@@ -8,10 +8,7 @@ import {
   signInWithPhoneNumber,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendSignInLinkToEmail,
   sendPasswordResetEmail,
-  isSignInWithEmailLink,
-  signInWithEmailLink,
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
@@ -89,26 +86,6 @@ export default function FirebaseAuthPanel() {
     setPhoneConfirm(null);
     setMode(m);
   };
-
-  useEffect(() => {
-    if (isSignInWithEmailLink(auth, window.location.href)) {
-      let storedEmail = window.localStorage.getItem("emailForSignIn") ?? "";
-      if (!storedEmail) storedEmail = window.prompt("Confirm your email for sign-in") ?? "";
-      if (storedEmail) {
-        setBusy(true);
-        signInWithEmailLink(auth, storedEmail, window.location.href)
-          .then(async (cred) => {
-            const { user } = await syncFirebaseUser(cred.user);
-            useSession.setState({ user, ready: true, authError: null });
-            try { window.localStorage.removeItem("emailForSignIn"); } catch {}
-            window.history.replaceState({}, "", window.location.pathname);
-            setMsg("Signed in — progress restored across devices.");
-          })
-          .catch((e: unknown) => setErr(formatAuthError(e)))
-          .finally(() => setBusy(false));
-      }
-    }
-  }, []);
 
   // Registration reCAPTCHA widget (site key: 6LdgXbQt...). Rendered when the
   // create-account card mounts; the node remounts on mode switches, so a
@@ -252,19 +229,9 @@ export default function FirebaseAuthPanel() {
         logAuthEvent("google", "failure", msg);
         setErr(formatAuthError(e));
       } else if (popupBroken) {
-        try {
-          const popupCode = (code || msg).slice(0, 200);
-          try {
-            sessionStorage.setItem("msrooms_google_redirect", "1");
-            sessionStorage.setItem("msrooms_google_popup_error", popupCode);
-          } catch {}
-          setMsg(`Popup failed (${popupCode}) — redirecting to Google…`);
-          await signInWithRedirect(auth, googleProvider);
-          return;
-        } catch (e2: unknown) {
-          logAuthEvent("google", "failure", e2 instanceof Error ? e2.message : undefined);
-          setErr(formatAuthError(e2));
-        }
+        // Don't redirect - just show the error and let user retry
+        logAuthEvent("google", "failure", msg);
+        setErr(formatAuthError(e));
       } else {
         logAuthEvent("google", "failure", e instanceof Error ? e.message : undefined);
         setErr(formatAuthError(e));
@@ -306,19 +273,6 @@ export default function FirebaseAuthPanel() {
     try {
       await sendPasswordResetEmail(auth, email.trim());
       setMsg("Password reset link sent — check your inbox.");
-    } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
-  };
-
-  const handleSendLink = async () => {
-    if (!email.trim()) {
-      setErr("Enter your email address above first.");
-      return;
-    }
-    setBusy(true); setErr(null); setMsg(null);
-    try {
-      await sendSignInLinkToEmail(auth, email.trim(), { url: `${window.location.origin}/login`, handleCodeInApp: true });
-      window.localStorage.setItem("emailForSignIn", email.trim());
-      setMsg("Link sent — check your inbox.");
     } catch (e: unknown) { setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
@@ -492,9 +446,6 @@ export default function FirebaseAuthPanel() {
         {mode === "signin" && (
           <>
             <span className="mx-2 text-white/10">•</span>
-            <button onClick={() => void handleSendLink()} disabled={busy} className="hover:text-white/70 hover:underline disabled:opacity-40">
-              Email me a sign-in link
-            </button>
           </>
         )}
       </div>

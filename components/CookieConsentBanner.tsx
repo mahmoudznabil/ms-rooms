@@ -69,7 +69,7 @@ export default function CookieConsentBanner() {
     }
   };
 
-  if (!showBanner || state !== "granted") return null;
+  if (!showBanner || state === "granted") return null;
 
   return (
     <div
