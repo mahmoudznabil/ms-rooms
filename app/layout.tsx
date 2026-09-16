@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import RegisterSW from "@/components/RegisterSW";
+import CookieConsentBanner from "@/components/CookieConsentBanner";
 
 export const metadata: Metadata = {
   title: "MS-ROOMS | Live Voice • Neon Audio Parties",
@@ -26,6 +27,7 @@ export default function RootLayout({
       <body className="bg-[#0d0d12] text-white antialiased">
         <RegisterSW />
         <AppShell>{children}</AppShell>
+        <CookieConsentBanner />
       </body>
     </html>
   );

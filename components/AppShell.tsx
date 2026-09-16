@@ -10,7 +10,6 @@ import { levelForXp } from "@/lib/levels";
 import LoginView from "@/components/LoginView";
 import ServerCheckinModal from "@/components/ServerCheckinModal";
 import OnboardingTour from "@/components/OnboardingTour";
-import CookieConsentBanner from "@/components/CookieConsentBanner";
 import IncomingCallGate from "@/components/IncomingCallGate";
 import RightRail from "@/components/RightRail";
 import { UserAvatar } from "@/components/bits";
@@ -249,7 +248,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
       <ServerCheckinModal />
       {showTour && user && <OnboardingTour user={user} onDone={finishTour} />}
-      <CookieConsentBanner />
       <Suspense fallback={null}>
         <IncomingCallGate />
       </Suspense>
