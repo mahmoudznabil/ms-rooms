@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MessageCircle, Mic, MicOff, Phone, PhoneOff, RotateCcw, Video, VideoOff } from "lucide-react";
+import { MessageCircle, Mic, MicOff, Phone, PhoneOff, RotateCcw, Video, VideoOff, Wifi, WifiOff, Settings, Maximize2, Minimize2 } from "lucide-react";
 import {
   acceptCallRoom,
   cancelCallRoom,
@@ -25,8 +25,8 @@ type Screen =
   | { kind: "signin" }
   | { kind: "invalid" }
   | { kind: "forbidden" }
-  | { kind: "outgoing"; peerName: string; peerAvatar: string | null; peerUsername: string }
-  | { kind: "incoming"; peerName: string; peerAvatar: string | null; peerUsername: string }
+  | { kind: "outgoing"; peerName: string; peerAvatar: string | null; peerUsername: string; media: CallMedia }
+  | { kind: "incoming"; peerName: string; peerAvatar: string | null; peerUsername: string; media: CallMedia }
   | { kind: "incall" }
   | { kind: "ended"; title: string; hint: string; peerId: string | null };
 
@@ -35,6 +35,13 @@ function fmtElapsed(ms: number): string {
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
+
+function ConnectionQualityIcon({ quality }: { quality: string }) {
+  if (quality === "failed") return <WifiOff size={16} className="text-red-400" />;
+  if (quality === "new" || quality === "connecting") return <Wifi size={16} className="text-amber-400 animate-pulse" />;
+  if (quality === "disconnected") return <WifiOff size={16} className="text-red-400" />;
+  return <Wifi size={16} className="text-emerald-400" />;
 }
 
 export default function CallScreen() {
@@ -98,7 +105,7 @@ export default function CallScreen() {
         };
         setPeer(peerInfo);
         setMedia((st.call_session?.media as CallMedia) ?? "audio");
-        routeStatus(st.call_session?.status ?? null, isCaller ? "caller" : "callee", (st.call_session?.connected_at as string | null) ?? null, peerInfo);
+        routeStatus(st.call_session?.status ?? null, isCaller ? "caller" : "callee", (st.call_session?.connected_at as string | null) ?? null, peerInfo, (st.call_session?.media as CallMedia) ?? "audio");
       } catch {
         if (!cancelled) setScreen({ kind: "invalid" });
       }
@@ -114,15 +121,16 @@ export default function CallScreen() {
       status: CallStatus | null,
       who: "caller" | "callee",
       at: string | null,
-      p: { id: string; name: string; username: string; avatar: string | null } = peer
+      p: { id: string; name: string; username: string; avatar: string | null } = peer,
+      mediaType?: CallMedia
     ) => {
       if (status === "connected") {
         setConnectedAt(at);
         setScreen({ kind: "incall" });
       } else if (status === "ringing" || status === "initiated") {
         setScreen(who === "caller"
-          ? { kind: "outgoing", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username }
-          : { kind: "incoming", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username });
+          ? { kind: "outgoing", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username, media: mediaType ?? "audio" }
+          : { kind: "incoming", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username, media: mediaType ?? "audio" });
       } else if (status === "rejected") {
         setScreen({ kind: "ended", title: who === "caller" ? "Declined" : "You declined the call", hint: who === "caller" ? `${p.name} declined your call.` : "The caller has been notified.", peerId: p.id || null });
       } else if (status === "cancelled") {
@@ -146,7 +154,7 @@ export default function CallScreen() {
         const st = await privateCallStatus(roomId);
         const status = st.call_session?.status ?? null;
         if (status !== "ringing" && status !== "initiated") {
-          routeStatus(status, role, (st.call_session?.connected_at as string | null) ?? null);
+          routeStatus(status, role, (st.call_session?.connected_at as string | null) ?? null, peer, (st.call_session?.media as CallMedia) ?? "audio");
         }
       } catch {
         // Silent — next poll retries.
@@ -312,17 +320,17 @@ export default function CallScreen() {
   // ---- ringing screens --------------------------------------------------------------------
   if (screen.kind === "outgoing") {
     return (
-      <div className="mx-auto flex min-h-[60dvh] max-w-md flex-col items-center justify-center py-10 text-center">
-        <p className="text-xs font-bold uppercase tracking-widest text-white/45">Outgoing {media === "video" ? "video" : "voice"} call</p>
-        <div className="mt-4"><UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={96} /></div>
-        <h1 className="mt-4 text-2xl font-black">{screen.peerName}</h1>
+      <div className="mx-auto flex min-h-[70dvh] max-w-md flex-col items-center justify-center py-10 text-center">
+        <p className="text-xs font-bold uppercase tracking-widest text-white/45">Outgoing {screen.media === "video" ? "video" : "voice"} call</p>
+        <div className="mt-4"><UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={112} /></div>
+        <h1 className="mt-4 text-3xl font-black">{screen.peerName}</h1>
         <p className="mt-1 flex items-center justify-center gap-1.5 text-sm text-white/50">
-          <span className="live-dot inline-block h-2 w-2 rounded-full bg-emerald-400" />
+          <span className="live-dot inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
           Ringing… {fmtElapsed(ringSecs * 1000)}
         </p>
         {ringSecs >= 45 && <p className="mt-1 text-xs text-amber-200/80">Still ringing — they may be away.</p>}
         <button onClick={() => void doCancel()} disabled={busy} aria-label="Cancel call" className="mt-8 rounded-full bg-red-500 p-5 text-white shadow-lg shadow-red-500/30 transition hover:bg-red-400 active:scale-95 disabled:opacity-40">
-          <Phone size={26} className="rotate-[135deg]" />
+          <Phone size={28} className="rotate-[135deg]" />
         </button>
         <p className="mt-2 text-xs font-semibold text-white/50">Cancel</p>
       </div>
@@ -331,21 +339,21 @@ export default function CallScreen() {
 
   if (screen.kind === "incoming") {
     return (
-      <div className="mx-auto flex min-h-[60dvh] max-w-md flex-col items-center justify-center py-10 text-center">
-        <p className="text-xs font-bold uppercase tracking-widest text-white/45">Incoming {media === "video" ? "video" : "voice"} call</p>
-        <div className="mt-4"><UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={96} /></div>
-        <h1 className="mt-4 text-2xl font-black">{screen.peerName}</h1>
+      <div className="mx-auto flex min-h-[70dvh] max-w-md flex-col items-center justify-center py-10 text-center">
+        <p className="text-xs font-bold uppercase tracking-widest text-white/45">Incoming {screen.media === "video" ? "video" : "voice"} call</p>
+        <div className="mt-4"><UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={112} /></div>
+        <h1 className="mt-4 text-3xl font-black">{screen.peerName}</h1>
         <p className="mt-1 text-sm text-white/50">wants to talk to you</p>
-        <div className="mt-8 flex items-center gap-6">
+        <div className="mt-10 flex items-center gap-8">
           <span className="flex flex-col items-center gap-1.5">
-            <button onClick={() => void doDecline()} disabled={busy} aria-label="Decline" className="rounded-full bg-red-500 p-5 text-white shadow-lg shadow-red-500/30 transition hover:bg-red-400 active:scale-95 disabled:opacity-40">
-              <Phone size={26} className="rotate-[135deg]" />
+            <button onClick={() => void doDecline()} disabled={busy} aria-label="Decline" className="rounded-full bg-red-500 p-6 text-white shadow-lg shadow-red-500/30 transition hover:bg-red-400 active:scale-95 disabled:opacity-40">
+              <Phone size={28} className="rotate-[135deg]" />
             </button>
             <span className="text-xs font-semibold text-white/50">Decline</span>
           </span>
           <span className="flex flex-col items-center gap-1.5">
-            <button onClick={() => void doAccept()} disabled={busy} aria-label="Accept" className="animate-pulse rounded-full bg-emerald-500 p-5 text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 active:scale-95 disabled:opacity-40">
-              <Phone size={26} />
+            <button onClick={() => void doAccept()} disabled={busy} aria-label="Accept" className="animate-pulse rounded-full bg-emerald-500 p-6 text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 active:scale-95 disabled:opacity-40">
+              <Phone size={28} />
             </button>
             <span className="text-xs font-semibold text-white/50">Accept</span>
           </span>
@@ -388,6 +396,7 @@ function InCallUI({
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const [fullScreen, setFullScreen] = useState(false);
 
   useEffect(() => {
     if (remoteAudioRef.current && session.remoteStream) remoteAudioRef.current.srcObject = session.remoteStream;
@@ -405,99 +414,233 @@ function InCallUI({
       ? fmtElapsed(now - session.liveSince)
       : "00:00";
 
+  const getConnectionQuality = (state: string): "excellent" | "good" | "fair" | "poor" | "failed" => {
+    if (session.phase === "error") return "failed";
+    if (session.connection === "failed") return "failed";
+    if (session.connection === "disconnected") return "poor";
+    if (session.connection === "connecting") return "fair";
+    if (session.connection === "new") return "fair";
+    if (session.connection === "live" || session.connection === "connected") return "excellent";
+    return "fair";
+  };
+
+  const quality = getConnectionQuality(session.connection);
+
   if (session.phase === "error") {
     return (
-      <div className="mx-auto max-w-md py-16 text-center">
-        <p className="text-4xl">🎙️</p>
-        <h1 className="mt-3 text-xl font-black">Couldn&apos;t start media</h1>
-        <p className="mt-1 text-sm text-white/50">{session.error ?? "Check permissions and try again."}</p>
-        <div className="mt-5 flex justify-center gap-2">
-          <button onClick={() => void session.join(media === "video")} className="flex items-center gap-1.5 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">
-            <RotateCcw size={15} /> Rejoin
-          </button>
-          <button onClick={onEnd} className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">End call</button>
+      <div className="fixed inset-0 flex items-center justify-center bg-black/90 z-50">
+        <div className="mx-auto max-w-md py-10 px-6 text-center bg-[#15151d] rounded-3xl border border-white/10 shadow-2xl">
+          <p className="text-5xl">🎙️</p>
+          <h1 className="mt-4 text-2xl font-black">Couldn&apos;t start media</h1>
+          <p className="mt-2 text-sm text-white/50">{session.error ?? "Check permissions and try again."}</p>
+          <div className="mt-6 flex justify-center gap-3">
+            <button onClick={() => void session.join(media === "video")} className="flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-bold text-black hover:bg-white/85">
+              <RotateCcw size={16} /> Rejoin
+            </button>
+            <button onClick={onEnd} className="rounded-full bg-white/10 px-6 py-3 text-sm font-bold text-white hover:bg-white/15">End call</button>
+          </div>
         </div>
       </div>
     );
   }
 
+  const qualityColors = {
+    excellent: "bg-emerald-400",
+    good: "bg-green-400",
+    fair: "bg-amber-400",
+    poor: "bg-orange-400",
+    failed: "bg-red-400",
+  };
+
   return (
-    <div className="mx-auto max-w-md">
+    <div className={`fixed inset-0 z-50 ${fullScreen ? "" : "max-w-md mx-auto"}`}>
       {/* Hidden remote audio — ALWAYS rendered so voice works even on video calls */}
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
-      {notice && <p className="mb-3 rounded-xl bg-white/10 px-3 py-2 text-center text-xs font-semibold text-amber-200">{notice}</p>}
 
       {session.videoMode ? (
-        <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black" style={{ aspectRatio: "3/4" }}>
-          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-          <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-cover" />
+        // VIDEO MODE - Full screen like WhatsApp
+        <div className={`fixed inset-0 bg-black ${fullScreen ? "z-50" : "relative h-full"}`}>
+          {/* Remote video - full screen */}
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover"
+          />
           {!session.remoteStream && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[#15151d]">
-              <UserAvatar name={peer.name} avatarUrl={peer.avatar} size={72} />
-              <p className="text-sm text-white/50">{session.phase === "joining" ? "Connecting camera…" : "Waiting for video…"}</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 z-10">
+              <UserAvatar name={peer.name} avatarUrl={peer.avatar} size={88} />
+              <p className="text-base text-white/70">{session.phase === "joining" ? "Connecting camera…" : "Waiting for video…"}</p>
             </div>
           )}
-          {/* Self PiP */}
-          <div className="absolute bottom-3 right-3 h-28 w-20 overflow-hidden rounded-2xl border border-white/20 bg-black">
-            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+
+          {/* Connection quality indicator - top left */}
+          <div className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 backdrop-blur">
+            <span className="flex items-center gap-1">
+              <ConnectionQualityIcon quality={quality} />
+              <span className="text-xs font-medium text-white capitalize">{quality}</span>
+            </span>
+          </div>
+
+          {/* Call info - top center */}
+          <div className="absolute left-1/2 top-4 -translate-x-1/2 z-20 flex items-center gap-2 rounded-full bg-black/60 px-4 py-1.5 backdrop-blur">
+            <span className="text-sm font-semibold text-white">{peer.name}</span>
+            <span className="text-xs text-white/50">·</span>
+            <span className="text-xs font-mono text-white/70 tabular-nums" id="call-timer">
+              {(() => {
+                const start = connectedAt ? new Date(connectedAt).getTime() : (session.liveSince ?? Date.now());
+                const elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
+                const m = Math.floor(elapsed / 60);
+                const s = elapsed % 60;
+                return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+              })()}
+            </span>
+          </div>
+
+          {/* Self PiP - bottom right */}
+          <div className="absolute bottom-5 right-5 z-20 h-32 w-24 overflow-hidden rounded-xl border-2 border-white/20 bg-black shadow-xl">
             <video ref={localVideoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
           </div>
-          <div className="absolute left-3 top-3 rounded-full bg-black/60 px-3 py-1 text-xs font-bold text-white">
-            {peer.name} · {elapsed}
-          </div>
+
+          {/* Connection status indicator - bottom left */}
           {session.connection === "failed" && (
-            <div className="absolute bottom-3 left-3 rounded-full bg-red-500/80 px-3 py-1 text-xs font-bold text-white">
-              Poor connection…
+            <div className="absolute bottom-5 left-5 z-20 flex items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1.5 backdrop-blur">
+              <WifiOff size={12} className="text-white" />
+              <span className="text-xs font-semibold text-white">Poor connection</span>
             </div>
           )}
+
+          {/* Controls - bottom center */}
+          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
+            {/* Mute */}
+            <button
+              onClick={session.toggleMic}
+              aria-label={session.micOn ? "Mute microphone" : "Unmute microphone"}
+              className={`rounded-full p-4 transition-all duration-200 active:scale-95 shadow-xl ${
+                session.micOn
+                  ? "bg-white/10 text-white hover:bg-white/20 ring-2 ring-white/20"
+                  : "bg-red-500/90 text-white ring-2 ring-red-500/50"
+              }`}
+            >
+              {session.micOn ? <Mic size={26} /> : <MicOff size={26} />}
+            </button>
+
+            {/* Camera toggle - only show in video mode or allow turning on */}
+            <button
+              onClick={() => void session.toggleCam()}
+              aria-label={session.camOn ? "Turn camera off" : "Turn camera on"}
+              className={`rounded-full p-4 transition-all duration-200 active:scale-95 shadow-xl ${
+                session.camOn
+                  ? "bg-white/10 text-white hover:bg-white/20 ring-2 ring-white/20"
+                  : "bg-white/10 text-white/50 hover:bg-white/20"
+              }`}
+            >
+              {session.camOn ? <Video size={26} /> : <VideoOff size={26} />}
+            </button>
+
+            {/* Fullscreen toggle */}
+            <button
+              onClick={() => setFullScreen(!fullScreen)}
+              aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"}
+              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              {fullScreen ? <Minimize2 size={26} /> : <Maximize2 size={26} />}
+            </button>
+
+            {/* End call */}
+            <button
+              onClick={onEnd}
+              aria-label="End call"
+              className="rounded-full bg-red-500/90 p-4 transition-all duration-200 active:scale-95 shadow-xl hover:bg-red-600 ring-2 ring-red-500/50"
+            >
+              <PhoneOff size={26} />
+            </button>
+          </div>
+
         </div>
       ) : (
-        <div className="flex flex-col items-center rounded-3xl border border-white/10 bg-[#15151d] px-6 py-10 text-center">
-          <UserAvatar name={peer.name} avatarUrl={peer.avatar} size={96} />
-          <h1 className="mt-4 text-2xl font-black">{peer.name}</h1>
-          <p className="mt-1 flex items-center justify-center gap-1.5 text-sm text-white/50">
-            <span className={`inline-block h-2 w-2 rounded-full ${session.phase === "live" ? "bg-emerald-400 live-dot" : "bg-amber-300"}`} />
-            {session.phase === "joining" ? "Connecting…" : elapsed}
-          </p>
-          {session.connection === "failed" && <p className="mt-1 text-xs font-bold text-red-300">Poor connection…</p>}
-        </div>
+        // AUDIO MODE - Full screen with avatar
+        <div className={`fixed inset-0 bg-black ${fullScreen ? "z-50" : "relative h-full flex flex-col items-center justify-center"}`}>
+          <div className="flex-1 flex flex-col items-center justify-center px-6">
+            <UserAvatar name={peer.name} avatarUrl={peer.avatar} size={144} />
+            <h1 className="mt-6 text-3xl font-black text-center">{peer.name}</h1>
+            <p className="mt-2 flex items-center justify-center gap-2 text-base text-white/60">
+              <span className={`inline-flex items-center gap-1 h-2 w-2 rounded-full ${session.phase === "live" ? "bg-emerald-400" : "bg-amber-300"}`} />
+              <span className="text-sm font-medium">
+                {session.phase === "joining" ? "Connecting…" : elapsed}
+              </span>
+            </p>
+            {session.connection === "failed" && (
+              <p className="mt-2 text-sm font-semibold text-red-300 flex items-center gap-1.5">
+                <WifiOff size={14} /> Poor connection — reconnecting…
+              </p>
+            )}
+          </div>
+
+          {/* Connection quality indicator */}
+          <div className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 backdrop-blur">
+            <span className="flex items-center gap-1">
+              <ConnectionQualityIcon quality={quality} />
+              <span className="text-xs font-medium text-white capitalize">{quality}</span>
+            </span>
+          </div>
+
+          {/* Call timer - top center */}
+          <div className="absolute left-1/2 top-4 -translate-x-1/2 z-20 flex items-center gap-2 rounded-full bg-black/60 px-4 py-1.5 backdrop-blur">
+            <span className="text-sm font-semibold text-white">{peer.name}</span>
+            <span className="text-xs text-white/50">·</span>
+            <span className="text-xs font-mono text-white/70 tabular-nums" id="call-timer-audio">
+              {(() => {
+                const start = connectedAt ? new Date(connectedAt).getTime() : (session.liveSince ?? Date.now());
+                const elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
+                const m = Math.floor(elapsed / 60);
+                const s = elapsed % 60;
+                return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+              })()}
+            </span>
+          </div>
+
+          {/* Controls - bottom center */}
+          <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4 ${fullScreen ? "" : "mb-8"}`}>
+            <button
+              onClick={session.toggleMic}
+              aria-label={session.micOn ? "Mute microphone" : "Unmute microphone"}
+              className={`rounded-full p-5 transition-all duration-200 active:scale-95 shadow-xl ${
+                session.micOn
+                  ? "bg-white/10 text-white hover:bg-white/20 ring-2 ring-white/20"
+                  : "bg-red-500/90 text-white ring-2 ring-red-500/50"
+              }`}
+            >
+              {session.micOn ? <Mic size={28} /> : <MicOff size={28} />}
+            </button>
+
+            <button
+              onClick={() => void session.toggleCam()}
+              aria-label={session.camOn ? "Turn camera off" : "Turn camera on"}
+              title={session.videoMode ? "Camera on/off" : "Turn on camera (rejoins with video)"}
+              className={`rounded-full p-5 transition-all duration-200 active:scale-95 shadow-xl ${
+                session.camOn
+                  ? "bg-white/10 text-white hover:bg-white/20 ring-2 ring-white/20"
+                  : "bg-white/10 text-white/50 hover:bg-white/20"
+              }`}
+            >
+              {session.camOn ? <Video size={28} /> : <VideoOff size={28} />}
+            </button>
+
+            <button
+              onClick={() => setFullScreen(!fullScreen)}
+              aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"}
+              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              {fullScreen ? <Minimize2 size={28} /> : <Maximize2 size={28} />}
+            </button>
+
+            <button onClick={onEnd} aria-label="End call" className="rounded-full bg-red-500/90 p-5 transition-all duration-200 active:scale-95 shadow-xl hover:bg-red-600 ring-2 ring-red-500/50">
+              <PhoneOff size={28} />
+            </button>
+          </div>
+</div>
       )}
-
-      {/* Controls: mute · camera · end (clarity under pressure) */}
-      <div className="mt-4 flex items-center justify-center gap-4">
-        <span className="flex flex-col items-center gap-1.5">
-          <button
-            onClick={session.toggleMic}
-            aria-label={session.micOn ? "Mute microphone" : "Unmute microphone"}
-            className={`rounded-full p-4 transition active:scale-95 ${session.micOn ? "bg-white/10 text-white hover:bg-white/15" : "bg-red-500 text-white hover:bg-red-400"}`}
-          >
-            {session.micOn ? <Mic size={22} /> : <MicOff size={22} />}
-          </button>
-          <span className="text-[11px] font-semibold text-white/50">{session.micOn ? "Mute" : "Unmuted"}</span>
-        </span>
-        <span className="flex flex-col items-center gap-1.5">
-          <button
-            onClick={() => void session.toggleCam()}
-            aria-label={session.camOn ? "Turn camera off" : "Turn camera on"}
-            title={session.videoMode ? "Camera on/off" : "Turn on camera (rejoins with video)"}
-            className={`rounded-full p-4 transition active:scale-95 ${session.camOn ? "bg-white/10 text-white hover:bg-white/15" : "bg-white/10 text-white/50 hover:bg-white/15"}`}
-          >
-            {session.camOn ? <Video size={22} /> : <VideoOff size={22} />}
-          </button>
-          <span className="text-[11px] font-semibold text-white/50">Camera</span>
-        </span>
-        <span className="flex flex-col items-center gap-1.5">
-          <button onClick={onEnd} aria-label="End call" className="rounded-full bg-red-500 p-4 text-white shadow-lg shadow-red-500/30 transition hover:bg-red-400 active:scale-95">
-            <PhoneOff size={22} />
-          </button>
-          <span className="text-[11px] font-semibold text-white/50">End</span>
-        </span>
-      </div>
-
-      <Link href={`/messages?userId=${encodeURIComponent(peer.id)}`} className="mx-auto mt-4 flex w-fit items-center gap-1.5 rounded-full bg-white/5 px-4 py-2 text-xs font-bold text-white/60 hover:bg-white/10 hover:text-white">
-        <MessageCircle size={13} /> Message {peer.name} after
-      </Link>
     </div>
   );
 }
