@@ -33,12 +33,13 @@ function env(name: string, fallback: string): string {
 // Web App config — project: bestaudioroom (628489866765)
 // Values come from NEXT_PUBLIC_* when present, otherwise the known web config.
 const firebaseConfig = {
-  apiKey: env("NEXT_PUBLIC_FIREBASE_API_KEY", "AIzaSyBphyNfZM-ijL31Y3xyJUlqbIclDazbfgg"),
-  authDomain: env("NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN", "bestaudioroom.firebaseapp.com"),
-  projectId: env("NEXT_PUBLIC_FIREBASE_PROJECT_ID", "bestaudioroom"),
-  storageBucket: env("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET", "bestaudioroom.firebasestorage.app"),
-  messagingSenderId: env("NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID", "628489866765"),
-  appId: env("NEXT_PUBLIC_FIREBASE_APP_ID", "1:628489866765:web:a75db602122ef083700f44"),
+  apiKey: "AIzaSyB_9lRPrvtvm2iNLyM495VGGBfK3nJZkaA",
+  authDomain: "ms-room-audio.firebaseapp.com",
+  projectId: "ms-room-audio",
+  storageBucket: "ms-room-audio.firebasestorage.app",
+  messagingSenderId: "887561048772",
+  appId: "1:887561048772:web:c83dca6873a44a109d6f91",
+  measurementId: "G-RREGFDPZ9H"
 };
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);

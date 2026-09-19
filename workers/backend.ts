@@ -96,11 +96,11 @@ function newId(prefix: string): string {
 let userIdentitySchemaReady = false;
 
 // ---- Firebase ID token verification (security layer) ----
-// Project: bestaudioroom (628489866765). Firebase ID tokens are RS256 JWTs
+// Project: ms-room-audio (887561048772). Firebase ID tokens are RS256 JWTs
 // issued by securetoken.google.com and are verified with Google's rotating
 // public JWKs. Never accept a decoded-but-unverified payload here: doing so
 // would let an attacker forge any firebase_uid (including a master admin).
-const FIREBASE_PROJECT_ID = "bestaudioroom";
+const FIREBASE_PROJECT_ID = "ms-room-audio";
 const FIREBASE_ISSUER = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
 const FIREBASE_JWKS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -358,7 +358,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
     <p><strong>MS-ROOMS / BestAudioRoom</strong> ("we", "us") operates audio rooms, social features, and virtual gifts. This policy explains what we collect, how we use it, and your choices. By creating an account or using MS-ROOMS you agree to this policy.</p>
 
     <h2>1. Who we are &amp; contact</h2>
-    <p>Data controller: MS-ROOMS (BestAudioRoom). Backend hosted on <strong>Cloudflare Workers + D1</strong> (<code>bestaudiobackend.mahmoudnabil03.workers.dev</code>). Auth via <strong>Firebase (Google) project bestaudioroom</strong>.</p>
+    <p>Data controller: MS-ROOMS (BestAudioRoom). Backend hosted on <strong>Cloudflare Workers + D1</strong> (<code>bestaudiobackend.mahmoudnabil03.workers.dev</code>). Auth via <strong>Firebase (Google) project ms-room-audio</strong>.</p>
     <p>Contact: <a href="mailto:mahmoudnabil03@gmail.com">mahmoudnabil03@gmail.com</a> / <a href="mailto:marcamgadalfonse2004@gmail.com">marcamgadalfonse2004@gmail.com</a>. For deletion requests use subject "Privacy Request".</p>
 
     <h2>2. Information we collect</h2>
@@ -367,7 +367,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       <tr><td>Account &amp; identity</td><td>Firebase UID (<code>firebase_uid</code>), email, phone, display name, avatar URL, provider (google / password / phone / email-link), username, id_tag</td><td>You + Firebase Auth</td></tr>
       <tr><td>App activity</td><td>Rooms created/joined, seats, messages/moments, follows, likes, gift sends/receives (coins spent, gems 70% to host), XP events, transactions, daily rewards, call sessions</td><td>Your use of MS-ROOMS</td></tr>
       <tr><td>Device &amp; technical</td><td>IP (<code>CF-Connecting-IP</code>), region (<code>origin.region_code</code> for Cloud Armor), user-agent, device identifiers, crash logs</td><td>Automatically</td></tr>
-      <tr><td>Verification &amp; safety</td><td>reCAPTCHA token/response (site key <code>6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD</code>), CSRF tokens, Firebase ID token (aud=<code>bestaudioroom</code>), Cloudflare Turn/CALLS session metadata</td><td>Security checks</td></tr>
+      <tr><td>Verification &amp; safety</td><td>reCAPTCHA token/response (site key <code>6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD</code>), CSRF tokens, Firebase ID token (aud=<code>ms-room-audio</code>), Cloudflare Turn/CALLS session metadata</td><td>Security checks</td></tr>
       <tr><td>Support</td><td>Reports you submit</td><td>You</td></tr>
     </table>
     <p>We do <strong>not</strong> collect payment card numbers directly — recharge is handled by app stores / payment provider; we store only package/amount/status.</p>
@@ -404,7 +404,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
     </ul>
 
     <h2>8. Security</h2>
-    <p>HTTPS, HttpOnly Secure SameSite cookies for sessions, Firebase ID token verification (<code>aud=bestaudioroom</code>), CSRF protection, Cloud Armor rate limiting / geo-blocking / WAF (SQLi/XSS v33), and least-privilege D1 access. No method is 100% secure — report vulnerabilities to the contact above.</p>
+    <p>HTTPS, HttpOnly Secure SameSite cookies for sessions, Firebase ID token verification (<code>aud=ms-room-audio</code>), CSRF protection, Cloud Armor rate limiting / geo-blocking / WAF (SQLi/XSS v33), and least-privilege D1 access. No method is 100% secure — report vulnerabilities to the contact above.</p>
 
     <h2>9. Your rights &amp; choices</h2>
     <ul>
@@ -984,7 +984,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       // ---- Firebase Auth (phone, email/password, email link, Google)  ----
       // Security layer: Firebase is the identity provider, D1 is the source of truth.
       // The client signs in with Firebase, gets an ID token, then POSTs it here.
-      // We verify the token via Google tokeninfo (aud == bestaudioroom), then upsert
+      // We verify the token via Google tokeninfo (aud == ms-room-audio), then upsert
       // the D1 user by firebase_uid so coins/xp/rooms/moments follow the identity
       // across any device. All progress mutations remain server-side in D1.
       if (path === "/api/auth/firebase" && request.method === "POST") {
