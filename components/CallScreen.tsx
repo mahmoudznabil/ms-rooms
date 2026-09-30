@@ -381,8 +381,8 @@ export default function CallScreen() {
         <p className="text-4xl">📞</p>
         <h1 className="mt-3 text-xl font-black">Sign in to join the call</h1>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Sign Up / Log In</Link>
-          <Link href="/calls" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Calls tab</Link>
+          <Link prefetch={false} href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Sign Up / Log In</Link>
+          <Link prefetch={false} href="/calls" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Calls tab</Link>
         </div>
       </div>
     );
@@ -394,7 +394,7 @@ export default function CallScreen() {
         <h1 className="mt-3 text-xl font-black">Invalid call link</h1>
         <p className="mt-1 text-sm text-white/50">This link doesn&apos;t point at a call.</p>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/calls" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to Calls</Link>
+          <Link prefetch={false} href="/calls" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to Calls</Link>
         </div>
       </div>
     );
@@ -406,7 +406,7 @@ export default function CallScreen() {
         <h1 className="mt-3 text-xl font-black">Private call</h1>
         <p className="mt-1 text-sm text-white/50">Only the two people on this call can open it.</p>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/calls" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to Calls</Link>
+          <Link prefetch={false} href="/calls" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to Calls</Link>
         </div>
       </div>
     );
@@ -425,11 +425,11 @@ export default function CallScreen() {
             </button>
           )}
           {screen.peerId && (
-            <Link href={`/messages?userId=${encodeURIComponent(screen.peerId)}`} className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">
+            <Link prefetch={false} href={`/messages?userId=${encodeURIComponent(screen.peerId)}`} className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">
               Message
             </Link>
           )}
-          <Link href="/calls" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">
+          <Link prefetch={false} href="/calls" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">
             Calls tab
           </Link>
         </div>
@@ -823,7 +823,7 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
               <Smile size={28} />
             </button>
 
-            <Link
+            <Link prefetch={false}
               href={`/messages?userId=${encodeURIComponent(peer.id)}`}
               aria-label="Message"
               className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 shadow-xl text-white hover:bg-white/20"

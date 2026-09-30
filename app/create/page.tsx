@@ -50,7 +50,7 @@ export default function CreateRoomPage() {
 
   return (
     <div className="mx-auto w-full max-w-lg">
-      <Link href="/" className="inline-flex items-center gap-1.5 text-sm font-semibold text-white/60 transition hover:text-white">
+      <Link prefetch={false} href="/" className="inline-flex items-center gap-1.5 text-sm font-semibold text-white/60 transition hover:text-white">
         <ArrowLeft size={15} /> Back
       </Link>
       <h1 className="mt-2 text-2xl font-black tracking-tight">Go live</h1>

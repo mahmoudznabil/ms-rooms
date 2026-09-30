@@ -543,9 +543,10 @@ select:focus {
   }
 }
 
-/* Lucky spin wheel */
+/* Lucky spin wheel. Duration matches SPIN_TURNS animation timing in
+   components/SpinModal.tsx so the result appears as the wheel settles. */
 .spin-wheel {
-  transition: transform 3.2s cubic-bezier(0.15, 0.85, 0.25, 1);
+  transition: transform 3.4s cubic-bezier(0.15, 0.85, 0.25, 1);
 }
 
 .spin-tick {

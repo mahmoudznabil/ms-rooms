@@ -98,7 +98,7 @@ export default function SearchPage() {
               <ul className="mt-2 space-y-2">
                 {rooms.map((r) => (
                   <li key={r.id}>
-                    <Link href={`/room?slug=${r.slug}`} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#15151d] p-3 transition hover:border-violet-400/40">
+                    <Link prefetch={false} href={`/room?slug=${r.slug}`} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#15151d] p-3 transition hover:border-violet-400/40">
                       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ backgroundColor: r.cover_color }}>
                         <Mic size={18} className="text-white/85" />
                       </span>
@@ -123,11 +123,11 @@ export default function SearchPage() {
                 {users.map((u) => (
                   <li key={u.id} className="rounded-2xl border border-white/10 bg-[#15151d] p-3">
                     <div className="flex items-center gap-2.5">
-                      <Link href={`/profile?u=${encodeURIComponent(u.username)}`} aria-label={`View ${u.display_name}`}>
+                      <Link prefetch={false} href={`/profile?u=${encodeURIComponent(u.username)}`} aria-label={`View ${u.display_name}`}>
                         <UserAvatar name={u.display_name} avatarUrl={u.avatar_url} xp={u.xp} size={40} />
                       </Link>
                       <span className="min-w-0 flex-1">
-                        <Link href={`/profile?u=${encodeURIComponent(u.username)}`} className="block truncate text-sm font-extrabold hover:underline">
+                        <Link prefetch={false} href={`/profile?u=${encodeURIComponent(u.username)}`} className="block truncate text-sm font-extrabold hover:underline">
                           {u.display_name}{" "}
                           {u.id_tag && <span className="rounded bg-white/10 px-1.5 py-0.5 text-xs font-bold text-white/60">{u.id_tag}</span>}
                         </Link>
@@ -144,13 +144,13 @@ export default function SearchPage() {
                       </button>
                     </div>
                     <div className="mt-2 flex gap-2">
-                      <Link
+                      <Link prefetch={false}
                         href={`/profile?u=${encodeURIComponent(u.username)}`}
                         className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
                       >
                         <Eye size={13} /> View profile
                       </Link>
-                      <Link
+                      <Link prefetch={false}
                         href={`/messages?userId=${encodeURIComponent(u.id)}`}
                         className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
                       >

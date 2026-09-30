@@ -122,7 +122,7 @@ export default function CallsPage() {
           <h1 className="text-2xl font-black tracking-tight">Calls</h1>
           <p className="mt-0.5 text-xs text-white/50">Voice &amp; video — recents sync across devices.</p>
         </div>
-        <Link href="/search" className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85">
+        <Link prefetch={false} href="/search" className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85">
           <Phone size={15} /> New call
         </Link>
       </div>
@@ -153,7 +153,7 @@ export default function CallsPage() {
             title={tab === "missed" ? "No missed calls" : "No calls yet"}
             hint={tab === "missed" ? "Declined and unanswered calls show up here." : "Search for a friend and tap Call — voice or video."}
           />
-          <Link href="/search" className="mt-3 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black transition hover:bg-white/85">
+          <Link prefetch={false} href="/search" className="mt-3 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black transition hover:bg-white/85">
             Find someone to call
           </Link>
         </div>
@@ -162,11 +162,11 @@ export default function CallsPage() {
           {filtered.map((c) => (
             <li key={c.id} className="rounded-2xl border border-white/10 bg-[#15151d] p-3">
               <div className="flex items-center gap-2.5">
-                <Link href={`/profile?u=${encodeURIComponent(c.peer.username)}`} aria-label={`View ${c.peer.display_name}`}>
+                <Link prefetch={false} href={`/profile?u=${encodeURIComponent(c.peer.username)}`} aria-label={`View ${c.peer.display_name}`}>
                   <UserAvatar name={c.peer.display_name} avatarUrl={c.peer.avatar_url} size={44} />
                 </Link>
                 <span className="min-w-0 flex-1">
-                  <Link href={`/profile?u=${encodeURIComponent(c.peer.username)}`} className="block truncate text-sm font-extrabold hover:underline">
+                  <Link prefetch={false} href={`/profile?u=${encodeURIComponent(c.peer.username)}`} className="block truncate text-sm font-extrabold hover:underline">
                     {c.peer.display_name}
                   </Link>
                   <span className="flex items-center gap-1 text-xs text-white/45">
@@ -175,7 +175,7 @@ export default function CallsPage() {
                     {c.media === "video" && <Video size={11} className="ml-0.5 text-white/35" />}
                   </span>
                 </span>
-                <Link
+                <Link prefetch={false}
                   href={`/messages?userId=${encodeURIComponent(c.peer.id)}`}
                   aria-label={`Message ${c.peer.display_name}`}
                   className="rounded-full bg-white/5 p-2.5 text-white/70 transition hover:bg-white/10 hover:text-white"
@@ -192,7 +192,7 @@ export default function CallsPage() {
                 </button>
               </div>
               {(c.status === "ringing" || c.status === "initiated") && (
-                <Link
+                <Link prefetch={false}
                   href={`/call?room=${encodeURIComponent(c.room_slug)}`}
                   className="mt-2 block rounded-xl bg-emerald-500/15 py-2 text-center text-xs font-bold text-emerald-200 transition hover:bg-emerald-500/25"
                 >

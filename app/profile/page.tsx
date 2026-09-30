@@ -376,7 +376,7 @@ function OwnProfile() {
         ))}
       </div>
 
-      <Link href="/rankings" className="mt-3 flex items-center justify-center gap-1.5 rounded-2xl border border-amber-300/20 bg-amber-300/10 py-3 text-sm font-bold text-amber-200 transition hover:bg-amber-300/20">
+      <Link prefetch={false} href="/rankings" className="mt-3 flex items-center justify-center gap-1.5 rounded-2xl border border-amber-300/20 bg-amber-300/10 py-3 text-sm font-bold text-amber-200 transition hover:bg-amber-300/20">
         <Trophy size={15} /> Leaderboards
       </Link>
 
@@ -508,8 +508,8 @@ function FriendProfile({ userKey }: { userKey: string }) {
         <h1 className="mt-3 text-xl font-black">User not found</h1>
         <p className="mt-1 text-sm text-white/50">No one matches “{userKey}”. Check the spelling or search again.</p>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/search" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Search again</Link>
-          <Link href="/lobby" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Back to lobby</Link>
+          <Link prefetch={false} href="/search" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Search again</Link>
+          <Link prefetch={false} href="/lobby" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Back to lobby</Link>
         </div>
       </div>
     );
@@ -578,7 +578,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
         </div>
 
         {isOwn ? (
-          <Link href="/profile" className="mt-4 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black transition hover:bg-white/85">
+          <Link prefetch={false} href="/profile" className="mt-4 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black transition hover:bg-white/85">
             This is you — open your profile
           </Link>
         ) : (
@@ -590,7 +590,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
             >
               {following ? <UserCheck size={15} /> : <UserPlus size={15} />} {following ? "Following" : "Follow"}
             </button>
-            <Link
+            <Link prefetch={false}
               href={`/messages?userId=${encodeURIComponent(profileUser.id)}`}
               className="flex items-center justify-center gap-1 rounded-2xl bg-white/10 py-3 text-sm font-bold text-white transition hover:bg-white/15"
             >
@@ -633,7 +633,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
           <ul className="mt-2 space-y-1.5">
             {social.followers_list.map((f) => (
               <li key={f.id}>
-                <Link href={`/profile?u=${encodeURIComponent(f.username)}`} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.04] px-3 py-2 transition hover:bg-white/[0.08]">
+                <Link prefetch={false} href={`/profile?u=${encodeURIComponent(f.username)}`} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.04] px-3 py-2 transition hover:bg-white/[0.08]">
                   <UserAvatar name={f.display_name} avatarUrl={f.avatar_url} size={30} showFrame={false} />
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{f.display_name}</span>
                   <span className="text-xs text-white/35">@{f.username}</span>

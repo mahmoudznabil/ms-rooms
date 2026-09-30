@@ -8,6 +8,8 @@ import { Modal } from "@/components/bits";
 
 const SEGMENTS = [0, 10, 30, 60, 150, 300];
 const COLORS = ["#334155", "#7c3aed", "#db2777", "#f59e0b", "#10b981", "#0ea5e9"];
+/** Full turns during a spin. Must match the CSS transition duration (~3.4s). */
+const SPIN_TURNS = 5;
 
 export default function SpinModal({ onClose }: { onClose: () => void }) {
   const user = useSession((s) => s.user);
@@ -27,13 +29,21 @@ export default function SpinModal({ onClose }: { onClose: () => void }) {
     try {
       const r = await spin(user.id);
       const idx = SEGMENTS.indexOf(r.prize);
-      // Rotate so the winning segment lands on top (5 full turns + offset).
-      setAngle((a) => a + 1800 + (360 - (idx * 60 + 30)) - ((a + 1800 + (360 - (idx * 60 + 30))) % 360));
+      if (idx < 0) throw new Error("That prize is not on the wheel.");
+      // The wheel is a conic-gradient starting at 12 o'clock, so segment i is
+      // centred at i*60+30 degrees clockwise from the top. Rotating by `angle`
+      // moves that centre to (i*60+30 + angle). For the tick at the top to land
+      // on the winning segment we need that sum ≡ 0 (mod 360), i.e. an angle of
+      // (360 - centre). Add whole turns for the spin duration and always move
+      // forward, so the wheel never jumps backwards between spins.
+      const target = (360 - (idx * 60 + 30)) % 360;
+      const delta = target === 0 ? 360 : target;
+      setAngle((a) => a + SPIN_TURNS * 360 + delta);
       setTimeout(() => {
         setResult({ prize: r.prize, net: r.net });
         setSpinning(false);
         void refresh();
-      }, 3300);
+      }, 3400);
     } catch (e) {
       setSpinning(false);
       setError(e instanceof Error ? e.message : "Spin failed. Try again.");

@@ -86,7 +86,7 @@ export default function RankingsPage() {
                     <Mic size={17} className="text-white/70" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <Link href={`/room?slug=${String(r.slug)}`} className="block truncate text-sm font-extrabold hover:underline">
+                    <Link prefetch={false} href={`/room?slug=${String(r.slug)}`} className="block truncate text-sm font-extrabold hover:underline">
                       {String(r.title)}
                     </Link>
                     <span className="flex items-center gap-1 text-xs text-white/45">

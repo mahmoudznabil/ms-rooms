@@ -10,6 +10,7 @@ import {
   Dices,
   Flag,
   Gift,
+  Headphones,
   Mic,
   MicOff,
   MessageCircle,
@@ -362,8 +363,8 @@ function RoomViewInner() {
         <h1 className="mt-3 text-xl font-black">Invalid room link</h1>
         <p className="mt-1 text-sm text-white/50">This link is missing a room. Browse live rooms instead.</p>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to lobby</Link>
-          <Link href="/create" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Create a room</Link>
+          <Link prefetch={false} href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to lobby</Link>
+          <Link prefetch={false} href="/create" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Create a room</Link>
         </div>
       </div>
     );
@@ -375,8 +376,8 @@ function RoomViewInner() {
         <h1 className="mt-3 text-xl font-black">Sign in to join the room</h1>
         <p className="mt-1 text-sm text-white/50">Voice rooms need an account so your coins, gifts and XP follow you.</p>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Sign up / Log in</Link>
-          <Link href="/lobby" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Browse rooms</Link>
+          <Link prefetch={false} href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Sign up / Log in</Link>
+          <Link prefetch={false} href="/lobby" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Browse rooms</Link>
         </div>
       </div>
     );
@@ -393,7 +394,7 @@ function RoomViewInner() {
             : (loadError ?? "Check your connection and try again.")}
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
-          <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to lobby</Link>
+          <Link prefetch={false} href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Back to lobby</Link>
           <button
             onClick={() => {
               setLoadingRoom(true);
@@ -415,7 +416,7 @@ function RoomViewInner() {
           >
             Try again
           </button>
-          <Link href="/create" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Create a room</Link>
+          <Link prefetch={false} href="/create" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">Create a room</Link>
         </div>
       </div>
     );
@@ -529,7 +530,7 @@ function RoomViewInner() {
     <div>
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link href="/" aria-label="Back to lobby" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+        <Link prefetch={false} href="/" aria-label="Back to lobby" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
           <ArrowLeft size={17} />
         </Link>
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ backgroundColor: room.cover_color }}>
@@ -547,7 +548,7 @@ function RoomViewInner() {
         <button onClick={() => setShowChat(true)} aria-label="Open messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
           <MessageCircle size={16} />
         </button>
-        <Link href="/wallet" className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-xs font-bold text-amber-200">
+        <Link prefetch={false} href="/wallet" className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-xs font-bold text-amber-200">
           <Coins size={13} /> {user.coins.toLocaleString()}
         </Link>
       </div>
@@ -776,10 +777,22 @@ function RoomViewInner() {
             ))}
           </div>
         )}
-        <div className="flex items-center gap-2">
+<div className="flex items-center gap-2">
           <button onClick={() => void voice.toggleMic()} aria-label={voice.micOn ? "Mute microphone" : "Unmute microphone"}
             className={`rounded-2xl p-3 transition active:scale-95 ${voice.micOn ? "bg-emerald-400 text-black" : "bg-white/10 text-white/70 hover:bg-white/15"}`}>
             {voice.micOn ? <Mic size={17} /> : <MicOff size={17} />}
+          </button>
+          <button
+            onClick={() => void voice.toggleMonitor()}
+            disabled={!voice.micOn}
+            aria-label={voice.monitoring ? "Stop hearing yourself" : "Hear yourself"}
+            aria-pressed={voice.monitoring}
+            title={voice.monitoring ? "Stop monitoring your mic" : "Play your mic back through your speakers (use headphones)"}
+            className={`rounded-2xl p-3 transition active:scale-95 disabled:opacity-35 ${
+              voice.monitoring ? "bg-sky-400 text-black" : "bg-white/10 text-white/70 hover:bg-white/15"
+            }`}
+          >
+            <Headphones size={17} />
           </button>
           <button onClick={() => setGiftOpen((v) => !v)} aria-label="Send a gift"
             className={`rounded-2xl p-3 transition active:scale-95 ${giftOpen ? "bg-amber-400 text-black" : "bg-white/10 text-amber-200 hover:bg-white/15"}`}>

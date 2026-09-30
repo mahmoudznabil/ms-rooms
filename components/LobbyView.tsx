@@ -62,7 +62,7 @@ export default function LobbyView() {
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
           </button>
-          <Link
+          <Link prefetch={false}
             href="/create"
             className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85"
           >
@@ -106,7 +106,7 @@ export default function LobbyView() {
             title={rooms.length === 0 ? "No live rooms yet" : "No rooms match"}
             hint={rooms.length === 0 ? "No empty rooms are left open — be the first to open one for others to join." : "Try another search or category."}
           />
-          <Link
+          <Link prefetch={false}
             href="/create"
             className="mt-3 block rounded-2xl bg-white py-3 text-center text-sm font-bold text-black transition hover:bg-white/85"
           >
@@ -116,7 +116,7 @@ export default function LobbyView() {
       ) : (
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           {filtered.map((room) => (
-            <Link
+            <Link prefetch={false}
               key={room.id}
               href={`/room?slug=${room.slug}`}
               className="group overflow-hidden rounded-3xl border border-white/10 bg-[#15151d] transition hover:border-violet-400/40 active:scale-[0.99]"

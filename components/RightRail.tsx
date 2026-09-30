@@ -47,7 +47,7 @@ export default function RightRail() {
               Lv.{prog.level} · {user.xp.toLocaleString()} XP
             </p>
           </div>
-          <Link href="/profile" aria-label="Profile" className="text-white/40 transition hover:text-white">
+          <Link prefetch={false} href="/profile" aria-label="Profile" className="text-white/40 transition hover:text-white">
             <ChevronRight size={18} />
           </Link>
         </div>
@@ -61,7 +61,7 @@ export default function RightRail() {
           <span className="flex items-center gap-1.5 text-sm font-bold text-amber-200">
             <Coins size={15} /> {user.coins.toLocaleString()}
           </span>
-          <Link href="/wallet" className="text-xs font-bold text-amber-200/80 underline-offset-2 hover:underline">
+          <Link prefetch={false} href="/wallet" className="text-xs font-bold text-amber-200/80 underline-offset-2 hover:underline">
             Top up
           </Link>
         </div>
@@ -72,7 +72,7 @@ export default function RightRail() {
           <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-white/50">
             <Trophy size={13} /> Top gifters
           </h3>
-          <Link href="/rankings" className="text-xs font-bold text-violet-300 hover:underline">
+          <Link prefetch={false} href="/rankings" className="text-xs font-bold text-violet-300 hover:underline">
             All
           </Link>
         </div>
@@ -94,7 +94,7 @@ export default function RightRail() {
         )}
       </div>
 
-      <Link
+      <Link prefetch={false}
         href="/wallet"
         className="flex items-center gap-3 rounded-3xl border border-fuchsia-400/20 bg-gradient-to-br from-fuchsia-500/15 to-violet-500/10 p-4 transition hover:border-fuchsia-400/40"
       >

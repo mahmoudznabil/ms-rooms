@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Coins, Gift, X, Flame } from "lucide-react";
 import { checkin } from "@/lib/api";
 import { useSession } from "@/stores/useSession";
@@ -16,6 +17,7 @@ function seenKey(uid: string): string {
 }
 
 export default function ServerCheckinModal() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ credited: number; streak: number } | null>(null);
@@ -26,6 +28,10 @@ export default function ServerCheckinModal() {
 
   useEffect(() => {
     if (!ready || !user) return;
+    // Only ever interrupt the user in the lobby. Auto-popping a modal on every
+    // page stole focus from whatever they were actually doing — most visibly it
+    // made a room's games look broken, because the overlay swallowed the click.
+    if (pathname !== "/lobby") return;
     let seen = false;
     try {
       seen = window.localStorage.getItem(seenKey(user.id)) === "1";
@@ -35,7 +41,7 @@ export default function ServerCheckinModal() {
     if (seen) return;
     const t = setTimeout(() => setOpen(true), 900);
     return () => clearTimeout(t);
-  }, [ready, user]);
+  }, [ready, user, pathname]);
 
   if (!open || !user) return null;
 
@@ -68,8 +74,24 @@ export default function ServerCheckinModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="modal-pop w-full max-w-xs rounded-3xl border border-white/10 bg-[#17171f] p-6 text-center shadow-2xl">
+    // Clicking the backdrop or pressing Escape dismisses this. It is a bonus,
+    // not a gate: a full-screen overlay that swallows every click makes the
+    // room underneath look broken, which is exactly what happened to the games
+    // panel before this was made dismissible.
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      onClick={dismiss}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Daily check-in"
+    >
+      <div
+        className="modal-pop w-full max-w-xs rounded-3xl border border-white/10 bg-ink-overlay p-6 text-center shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") dismiss();
+        }}
+      >
         <div className="mb-1 flex justify-end">
           <button
             aria-label="Close check-in"
@@ -114,6 +136,12 @@ export default function ServerCheckinModal() {
               className="mt-4 w-full rounded-2xl bg-amber-400 py-3 text-sm font-bold text-black transition hover:bg-amber-300 active:scale-[0.98] disabled:opacity-50"
             >
               {busy ? "Claiming…" : "Claim +100"}
+            </button>
+            <button
+              onClick={dismiss}
+              className="mt-2 w-full rounded-2xl py-2 text-xs font-semibold text-white/50 transition hover:text-white/80"
+            >
+              Not now
             </button>
           </>
         )}

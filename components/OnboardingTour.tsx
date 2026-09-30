@@ -81,7 +81,7 @@ export default function OnboardingTour({ user, onDone }: { user: ApiUser; onDone
             </button>
           )}
           {last ? (
-            <Link
+            <Link prefetch={false}
               href="/profile"
               onClick={onDone}
               className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-sm font-bold text-black transition hover:bg-white/85"

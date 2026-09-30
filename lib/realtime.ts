@@ -106,7 +106,15 @@ function rmsLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): numb
   return Math.min(1, Math.sqrt(sum / buffer.length) * 2.5);
 }
 
-/** One shared capture + meter for the whole session; many PCs read from it. */
+/**
+ * One shared capture + meter for the whole session; many PCs read from it.
+ *
+ * `startMonitor` is what makes the user hear themselves. WebRTC never echoes
+ * your own microphone back — the local track is only sent to peers — so without
+ * an explicit local path to the speakers the room feels dead and people assume
+ * they are muted. It runs through a GainNode so the level can be trimmed, and
+ * it is deliberately off until asked for: on speakers this is a feedback loop.
+ */
 function createLocalCapture(wantVideo: boolean) {
   let disposed = false;
   const streamPromise = navigator.mediaDevices.getUserMedia({
@@ -118,18 +126,56 @@ function createLocalCapture(wantVideo: boolean) {
 
   let ctx: AudioContext | null = null;
   let analyser: AnalyserNode | null = null;
+  let monitorGain: GainNode | null = null;
   let buf: Uint8Array<ArrayBuffer> | null = null;
   let raf = 0;
 
+  const ensureCtx = async (stream: MediaStream): Promise<AudioContext> => {
+    if (!ctx) ctx = new AudioContext();
+    if (ctx.state === "suspended") await ctx.resume().catch(() => undefined);
+    return ctx;
+  };
+
   return {
     streamPromise,
+    /** Route the local mic to the speakers. Returns false if the browser blocked it. */
+    async startMonitor(): Promise<boolean> {
+      try {
+        const stream = await streamPromise;
+        if (disposed) return false;
+        const audio = await ensureCtx(stream);
+        if (!monitorGain) {
+          const src = audio.createMediaStreamSource(stream);
+          monitorGain = audio.createGain();
+          // Trimmed: the point is to confirm you are transmitting, not to
+          // compete with the room for volume.
+          monitorGain.gain.value = 0.35;
+          src.connect(monitorGain);
+          monitorGain.connect(audio.destination);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    stopMonitor() {
+      try {
+        monitorGain?.disconnect();
+      } catch {
+        /* already gone */
+      }
+      monitorGain = null;
+    },
+    get monitoring() {
+      return monitorGain !== null;
+    },
     startMeter(onLevel: (v: number) => void) {
-      void streamPromise.then((stream) => {
+      void streamPromise.then(async (stream) => {
         if (disposed || ctx) return;
         try {
-          ctx = new AudioContext();
-          const src = ctx.createMediaStreamSource(stream);
-          analyser = ctx.createAnalyser();
+          const audio = await ensureCtx(stream);
+          const src = audio.createMediaStreamSource(stream);
+          analyser = audio.createAnalyser();
           analyser.fftSize = 512;
           src.connect(analyser);
           buf = new Uint8Array(analyser.fftSize);
@@ -529,7 +575,9 @@ export interface RoomVoice {
   peers: RoomPeerVoice[];
   turnReady: boolean;
   speakingUserIds: string[];
+  monitoring: boolean;
   toggleMic: () => void;
+  toggleMonitor: () => Promise<void>;
   leave: () => void;
 }
 
@@ -541,6 +589,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
   const [peers, setPeers] = useState<RoomPeerVoice[]>([]);
   const [turnReady, setTurnReady] = useState(false);
   const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
+  const [monitoring, setMonitoring] = useState(false);
 
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const streamsRef = useRef<Map<string, MediaStream>>(new Map());
@@ -665,6 +714,35 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     });
     setMicOn(true);
   }, [micOn]);
+
+  /**
+   * Route the mic to the speakers so you can hear yourself.
+   *
+   * Off by default on purpose: on built-in speakers this feeds the mic straight
+   * back into the room and howls. Turning the mic off also stops monitoring,
+   * so the user is never hearing themselves after they have muted.
+   */
+  const toggleMonitor = useCallback(async () => {
+    const capture = captureRef.current;
+    if (!capture) return;
+    if (capture.monitoring) {
+      capture.stopMonitor();
+      setMonitoring(false);
+      return;
+    }
+    // Monitoring a muted mic would just play silence.
+    const enabled = localRef.current?.getAudioTracks().some((t) => t.enabled) ?? false;
+    if (!enabled) {
+      setError("Turn your mic on first, then you can hear yourself.");
+      return;
+    }
+    const ok = await capture.startMonitor();
+    if (!ok) {
+      setError("This browser blocked audio playback. Tap anywhere on the page, then try again.");
+      return;
+    }
+    setMonitoring(true);
+  }, []);
 
   // Full session: capture + TURN + peer discovery + signaling loop.
   useEffect(() => {
@@ -830,7 +908,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     );
   }, [speakingUserIds]);
 
-  return { status, micOn, level, error, peers, turnReady, speakingUserIds, toggleMic, leave: stopAll };
+  return { status, micOn, level, error, peers, turnReady, speakingUserIds, monitoring, toggleMic, toggleMonitor, leave: stopAll };
 }
 
 // Local mirror of the API peer row, kept here so the hook doesn't need the type

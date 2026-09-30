@@ -176,14 +176,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <Link href="/" className="flex items-center gap-2 px-2 py-4">
+        <Link prefetch={false} href="/" className="flex items-center gap-2 px-2 py-4">
           <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-9 w-9 rounded-xl object-contain bg-[#0a0a12] ring-1 ring-white/10" />
           <span className="text-lg font-black tracking-tight">{getContextTitle()}</span>
         </Link>
 
         <nav className="flex-1 space-y-1" aria-label="Primary navigation">
           {visibleNav.map((n) => (
-            <Link
+            <Link prefetch={false}
               key={n.href}
               href={n.href}
               className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-semibold transition ${
@@ -200,7 +200,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         {context === "main" && user && (
-          <Link
+          <Link prefetch={false}
             href="/create"
             className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
           >
@@ -209,7 +209,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         )}
 
         {context === "creator" && (
-          <Link
+          <Link prefetch={false}
             href="/create"
             className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
           >
@@ -218,7 +218,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         )}
 
         <div className="mt-auto pt-4 border-t border-white/10">
-          <Link href="/profile" className="flex items-center gap-2.5 rounded-2xl bg-white/5 p-2.5 transition-all duration-200 hover:bg-white/10 hover:scale-[1.02]">
+          <Link prefetch={false} href="/profile" className="flex items-center gap-2.5 rounded-2xl bg-white/5 p-2.5 transition-all duration-200 hover:bg-white/10 hover:scale-[1.02]">
             <UserAvatar name={user.display_name} avatarUrl={user.avatar_url} xp={user.xp} size={34} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-bold">{user.display_name}</span>
@@ -231,12 +231,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <div className="app-main">
         <header className="app-topbar">
           <div className="flex min-w-0 items-center gap-2">
-            <Link href="/" aria-label="MS-ROOMS home" className="flex shrink-0 items-center gap-1.5">
+            <Link prefetch={false} href="/" aria-label="MS-ROOMS home" className="flex shrink-0 items-center gap-1.5">
               <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain bg-[#0a0a12] ring-1 ring-white/10" />
               <span className="hidden font-black tracking-tight sm:inline">MS-ROOMS</span>
             </Link>
             {/* Lobby stays one tap away no matter which page you are on. */}
-            <Link
+            <Link prefetch={false}
               href="/lobby"
               className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-bold ${
                 pathname.startsWith("/lobby") ? "bg-white text-black" : "bg-white/5 text-white/70 hover:bg-white/10"
@@ -246,7 +246,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/calls" aria-label="Calls" className="relative rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/calls" aria-label="Calls" className="relative rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Phone size={16} />
               {missed > 0 && (
                 <span className="absolute -right-1 -top-1 rounded-full bg-red-500 px-1 text-[9px] font-black text-white">
@@ -254,22 +254,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 </span>
               )}
             </Link>
-            <Link href="/messages" aria-label="Messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/messages" aria-label="Messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <MessageCircle size={16} />
             </Link>
-            <Link href="/search" aria-label="Search" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/search" aria-label="Search" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Search size={16} />
             </Link>
             {user ? (
               <>
-                <Link
+                <Link prefetch={false}
                   href="/wallet"
                   className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200 transition-all duration-200 hover:bg-amber-300/20 hover:scale-105"
                 >
                   <Coins size={14} />
                   {user.coins.toLocaleString()}
                 </Link>
-                <Link
+                <Link prefetch={false}
                   href="/profile"
                   className="flex items-center gap-1.5 rounded-full bg-white/5 p-1 transition-all duration-200 hover:bg-white/10 hover:scale-105"
                   aria-label="Profile"
@@ -278,7 +278,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 </Link>
               </>
             ) : (
-              <Link href="/login" className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-black transition-all duration-200 hover:bg-white/85 hover:scale-105">
+              <Link prefetch={false} href="/login" className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-black transition-all duration-200 hover:bg-white/85 hover:scale-105">
                 Login
               </Link>
             )}
@@ -304,7 +304,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             }
             active={pathname.startsWith("/calls") || pathname.startsWith("/call")}
           />
-          <Link href="/create" aria-label="Create room" className="app-tabs-create">
+          <Link prefetch={false} href="/create" aria-label="Create room" className="app-tabs-create">
             <Plus size={22} />
           </Link>
           <TabLink href="/moments" label="Moments" icon={<Sparkles size={20} />} active={pathname.startsWith("/moments")} />
@@ -323,7 +323,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
 function TabLink({ href, label, icon, active, exact = false }: { href: string; label: string; icon: ReactNode; active: boolean; exact?: boolean }) {
   return (
-    <Link
+    <Link prefetch={false}
       href={href}
       className={`flex flex-col items-center gap-0.5 px-3 py-1.5 text-[11px] font-semibold transition ${
         active ? "text-white" : "text-white/40 hover:text-white/70"

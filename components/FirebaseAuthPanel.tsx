@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import {
   auth,
   googleProvider,
@@ -16,7 +16,6 @@ import {
 } from "@/lib/firebase";
 import { syncFirebaseUser } from "@/lib/firebase-sync";
 import { useSession } from "@/stores/useSession";
-import { getSiteKey, getSiteKeyAsync, loadRecaptchaScript, verifyRecaptchaToken } from "@/lib/recaptcha";
 import { logAuthEvent } from "@/lib/metrics";
 
 // GitHub login principles, MS-ROOMS theme: one narrow column, a bordered
@@ -74,10 +73,6 @@ export default function FirebaseAuthPanel() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [phoneConfirm, setPhoneConfirm] = useState<import("firebase/auth").ConfirmationResult | null>(null);
-  const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
-  const [recaptchaError, setRecaptchaError] = useState<string | null>(null);
-  const recaptchaWidgetId = useRef<number | null>(null);
-  const siteKey = getSiteKey();
   const appCheckInitFailed = Boolean(getAppCheckInitError());
 
   const switchMode = (m: Mode) => {
@@ -87,51 +82,11 @@ export default function FirebaseAuthPanel() {
     setMode(m);
   };
 
-  // Registration reCAPTCHA widget (site key: 6LdgXbQt...). Rendered when the
-  // create-account card mounts; the node remounts on mode switches, so a
-  // stale widget id is dropped and rendered fresh.
-  useEffect(() => {
-    if (mode !== "create") return;
-    let cancelled = false;
-    setRecaptchaError(null);
-    setRecaptchaToken(null);
-    loadRecaptchaScript().then(async () => {
-      if (cancelled || !window.grecaptcha) return;
-      if (typeof window.grecaptcha.render !== "function") {
-        if (!cancelled) setRecaptchaError("Security check was blocked (grecaptcha.render is not a function) — an ad-blocker, Brave Shields, or private DNS may be neutering google.com/recaptcha. Allow it for this site, then reopen this page.");
-        return;
-      }
-      // Server-authoritative key: rotations apply without a rebuild.
-      const key = await getSiteKeyAsync();
-      if (cancelled) return;
-      const el = document.getElementById("register-recaptcha");
-      if (!el) return;
-      try {
-        if (recaptchaWidgetId.current !== null) {
-          try { window.grecaptcha.reset(recaptchaWidgetId.current); } catch {}
-          recaptchaWidgetId.current = null;
-        }
-        el.innerHTML = "";
-        recaptchaWidgetId.current = window.grecaptcha.render(el, {
-          sitekey: key,
-          callback: (t: string) => setRecaptchaToken(t),
-          "expired-callback": () => setRecaptchaToken(null),
-        });
-      } catch (e: unknown) {
-        // render() throws for a misconfigured key (wrong type/domains) — show
-        // Google's own message so the fix is obvious instead of a dead button.
-        if (!cancelled) {
-          const why = e instanceof Error && e.message ? ` (${e.message.slice(0, 140)})` : "";
-          setRecaptchaError(`Security check couldn't start${why} — reload the page and try again.`);
-        }
-      }
-    }).catch((e: unknown) => {
-      // Script blocked (usually an ad-blocker on google.com) — the button
-      // would otherwise stay disabled forever with no explanation.
-      if (!cancelled) setRecaptchaError(e instanceof Error ? e.message : "Security check couldn't load — an ad-blocker may be blocking google.com. Disable it for this site, then reopen this page.");
-    });
-    return () => { cancelled = true; };
-  }, [siteKey, mode]);
+  // NOTE: the registration reCAPTCHA v2 checkbox was removed. Its site key was
+  // issued for the previous Firebase project and can never validate against the
+  // current domain, which left signup permanently blocked. Firebase Auth still
+  // applies its own rate limiting and abuse protection to email sign-up, and
+  // phone sign-in keeps its mandatory App Check challenge regardless.
 
   const afterFirebase = async (fbUser: import("firebase/auth").User) => {
     const { user, isNew } = await syncFirebaseUser(fbUser);
@@ -242,13 +197,6 @@ export default function FirebaseAuthPanel() {
   const handleEmail = async (create: boolean) => {
     setBusy(true); setErr(null); setMsg(null);
     try {
-      if (create) {
-        setMsg("Checking security…");
-        const token = recaptchaToken || window.grecaptcha?.getResponse(recaptchaWidgetId.current ?? undefined) || "";
-        if (!token) throw new Error("Please complete the reCAPTCHA to register.");
-        const ok = await verifyRecaptchaToken(token);
-        if (!ok) throw new Error("reCAPTCHA verification failed — try again.");
-      }
       setMsg(create ? "Creating your Firebase account…" : "Signing in…");
       const cred = create
         ? await createUserWithEmailAndPassword(auth, email.trim(), password)
@@ -257,10 +205,6 @@ export default function FirebaseAuthPanel() {
       await afterFirebase(cred.user);
       logAuthEvent("email", "success");
       setMsg(create ? "Account created." : "Signed in.");
-      if (create && window.grecaptcha && recaptchaWidgetId.current !== null) {
-        try { window.grecaptcha.reset(recaptchaWidgetId.current); } catch {}
-        setRecaptchaToken(null);
-      }
     } catch (e: unknown) { logAuthEvent("email", "failure", e instanceof Error ? e.message : undefined); setErr(formatAuthError(e)); } finally { setBusy(false); }
   };
 
@@ -298,7 +242,6 @@ export default function FirebaseAuthPanel() {
   };
 
   const canSubmitPassword = email.trim().length > 0 && (mode === "signin" ? password.length > 0 : password.length >= 6);
-  const needRecaptcha = mode === "create" && !recaptchaToken;
 
   return (
       <div className="w-full">
@@ -355,24 +298,8 @@ export default function FirebaseAuthPanel() {
                 <p className="mt-1.5 text-xs text-white/35">At least 6 characters.</p>
               )}
             </div>
-            {mode === "create" && (
-              <div className="mt-3">
-                {recaptchaError ? (
-                  <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200">
-                    {recaptchaError}
-                  </p>
-                ) : (
-                  <>
-                    <div id="register-recaptcha" className="flex justify-center" />
-                    {needRecaptcha && (
-                      <p className="mt-1.5 text-center text-xs text-white/35">Complete the reCAPTCHA to create your account.</p>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
             <div className="mt-4">
-              <button type="submit" disabled={busy || !canSubmitPassword || needRecaptcha} className={primaryBtn}>
+              <button type="submit" disabled={busy || !canSubmitPassword} className={primaryBtn}>
                 {busy ? (mode === "create" ? "Creating account…" : "Signing in…") : mode === "create" ? "Create account" : "Sign in"}
               </button>
             </div>

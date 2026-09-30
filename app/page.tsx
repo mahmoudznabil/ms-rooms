@@ -99,7 +99,7 @@ export default function Home() {
             <a href="#apps" className="hidden rounded-full px-3 py-1.5 text-paper-dim transition hover:bg-white/5 hover:text-paper sm:block">
               Apps
             </a>
-            <Link
+            <Link prefetch={false}
               href="/login"
               className="rounded-full bg-paper px-4 py-2 text-sm font-bold text-ink transition hover:bg-paper/85"
             >
@@ -132,14 +132,14 @@ export default function Home() {
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Link
+              <Link prefetch={false}
                 href="/login"
                 className="group inline-flex items-center gap-2 rounded-full bg-live px-6 py-3.5 text-sm font-extrabold text-white transition hover:bg-live/90 active:scale-[0.98]"
               >
                 Create a free account
                 <ArrowRight size={16} className="transition-transform group-hover:translate-x-0.5" />
               </Link>
-              <Link
+              <Link prefetch={false}
                 href="/login"
                 className="inline-flex items-center gap-2 rounded-full border border-line-strong px-6 py-3.5 text-sm font-bold text-paper transition hover:bg-white/5"
               >
@@ -276,7 +276,7 @@ export default function Home() {
                 </li>
               ))}
             </ul>
-            <Link
+            <Link prefetch={false}
               href="/login"
               className="mt-7 inline-flex items-center gap-2 rounded-full bg-paper px-6 py-3 text-sm font-extrabold text-ink transition hover:bg-paper/85"
             >
@@ -384,7 +384,7 @@ export default function Home() {
           <p className="mx-auto mt-3 max-w-[46ch] text-sm leading-relaxed text-paper-dim sm:text-base">
             Make an account, open a room, take a seat. It takes about a minute.
           </p>
-          <Link
+          <Link prefetch={false}
             href="/login"
             className="mt-7 inline-flex items-center gap-2 rounded-full bg-live px-7 py-4 text-sm font-extrabold text-white transition hover:bg-live/90 active:scale-[0.98]"
           >
@@ -400,8 +400,8 @@ export default function Home() {
             <Shield size={12} /> MS-ROOMS
           </span>
           <nav className="flex items-center gap-4">
-            <Link href="/login" className="transition hover:text-paper">Sign in</Link>
-            <Link href="/support" className="transition hover:text-paper">Support</Link>
+            <Link prefetch={false} href="/login" className="transition hover:text-paper">Sign in</Link>
+            <Link prefetch={false} href="/support" className="transition hover:text-paper">Support</Link>
             <span className="flex items-center gap-1.5">
               <Headset size={12} /> Audio on Cloudflare
             </span>
