@@ -173,7 +173,7 @@ export default function FirebaseAuthPanel() {
             setErr(
               `Google returned without a credential (code: auth/redirect-incomplete).` +
               (popupErr ? ` Popup had failed first with: ${popupErr}.` : "") +
-              ` If that says auth/unauthorized-domain, add bestaudiobackend.mahmoudnabil03.workers.dev under Firebase Console → Authentication → Settings → Authorized domains. Otherwise allow third-party cookies for this site, or use email sign-in.`
+              ` If that says auth/unauthorized-domain, add ms-rooms.pages.dev under Firebase Console → Authentication → Settings → Authorized domains. Otherwise allow third-party cookies for this site, or use phone sign-in.`
             );
           }
           return;

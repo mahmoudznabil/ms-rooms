@@ -1,0 +1,26 @@
+# Cloudflare Pages cache policy.
+#
+# Without this, Pages serves the HTML document with a 7-day CDN cache
+# (s-maxage=604800). After each deploy the browser gets an OLD document that
+# points at chunk hashes from a previous build — and those files no longer
+# exist, so the page chunk 404s, React never mounts that route, and the shell
+# falls back to rendering the login screen even though the session is valid.
+#
+# Rule: HTML must always revalidate; only content-hashed build output is
+# allowed to be cached forever.
+
+/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Build output is content-hashed, so a given URL can never change meaning.
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The worker script is byte-compared by the browser; keep it revalidating so a
+# new version is picked up on the next load.
+sw.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Never let a CDN or proxy cache authenticated API traffic.
+/api/*
+  Cache-Control: no-store

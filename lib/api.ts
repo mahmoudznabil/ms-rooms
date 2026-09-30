@@ -1,8 +1,13 @@
 import type { LobbyRoom } from "@/lib/rooms";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ||
-  "https://bestaudiobackend.mahmoudxnabil.workers.dev";
+/**
+ * The API now lives on the same origin as the app (Pages Functions), so the
+ * default is a relative path. That keeps requests same-origin: no CORS
+ * preflight, and session cookies work without SameSite=None gymnastics.
+ * NEXT_PUBLIC_API_URL only needs to be set when deliberately pointing the
+ * frontend at a different host (e.g. a local Worker during development).
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ?? "";
 
 export class ApiError extends Error {
   status: number;

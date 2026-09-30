@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { GIFT_CATALOG, formatCount } from "@/lib/rooms";
 import {
+  API_BASE,
   ApiError,
   endRoom,
   fetchRoomDetail,
@@ -247,7 +248,7 @@ function RoomViewInner() {
     
     const pollCallStatus = () => {
       if (!room?.is_private) return;
-      fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/status?room_id=${room.id}`, {
+      fetch(`${API_BASE}/api/rooms/private-call/status?room_id=${room.id}`, {
         credentials: "include",
       })
         .then((res) => res.json())
@@ -292,7 +293,7 @@ function RoomViewInner() {
   const acceptCall = async () => {
     if (!incomingCall || !room) return;
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/accept`, {
+      const res = await fetch(`${API_BASE}/api/rooms/private-call/accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ room_id: incomingCall.roomId }),
@@ -314,7 +315,7 @@ function RoomViewInner() {
   const rejectCall = async () => {
     if (!incomingCall) return;
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/reject`, {
+      const res = await fetch(`${API_BASE}/api/rooms/private-call/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ room_id: incomingCall.roomId }),
@@ -336,7 +337,7 @@ function RoomViewInner() {
   const endCall = async () => {
     if (!room) return;
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call/end`, {
+      const res = await fetch(`${API_BASE}/api/rooms/private-call/end`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ room_id: room.id }),
@@ -698,7 +699,7 @@ function RoomViewInner() {
               onClick={async () => {
                 if (!user) return;
                 try {
-                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://bestaudiobackend.mahmoudnabil03.workers.dev"}/api/rooms/private-call`, {
+                  const res = await fetch(`${API_BASE}/api/rooms/private-call`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({

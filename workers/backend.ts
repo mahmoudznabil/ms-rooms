@@ -35,16 +35,28 @@ interface Env {
   RECAPTCHA_SECRET_KEY?: string;
 }
 
-// Allowed origins - configure via environment or use defaults
+// Allowed origins. The API and the app are served from the same origin by
+// Cloudflare Pages, so a same-origin request (no Origin header, or one matching
+// the request host) is always allowed and never needs CORS headers. The list
+// below only matters when the frontend is deliberately pointed at a different
+// host during local development.
 const ALLOWED_ORIGINS = [
-  "https://bestaudiobackend.mahmoudnabil03.workers.dev",
-  "https://bestaudiobackend.mahmoudxnabil.workers.dev",
   "https://ms-rooms.pages.dev",
   "https://main.ms-rooms.pages.dev",
-  "https://ms-rooms-frontend.pages.dev",
+  "https://bestaudiobackend.mahmoudxnabil.workers.dev",
   "http://localhost:3000",
   "http://localhost:3001",
 ];
+
+/** True when this request is same-origin with the API itself. */
+function isSameOrigin(request: Request, origin: string): boolean {
+  if (!origin) return true; // same-origin fetches may omit Origin
+  try {
+    return new URL(request.url).origin === origin;
+  } catch {
+    return false;
+  }
+}
 
 function isOriginAllowed(origin: string): boolean {
   return ALLOWED_ORIGINS.includes(origin);
@@ -63,11 +75,16 @@ function getCorsHeaders(origin: string): Record<string, string> {
   };
 }
 
-function json(data: unknown, status = 200, origin?: string): Response {
-  const headers = origin ? getCorsHeaders(origin) : { "Content-Type": "application/json" };
+/** CORS headers only matter when the caller is actually cross-origin. */
+function corsFor(request: Request, origin: string): Record<string, string> {
+  return isSameOrigin(request, origin) ? {} : getCorsHeaders(origin);
+}
+
+function json(data: unknown, status = 200, origin?: string, request?: Request): Response {
+  const cors = origin && request ? corsFor(request, origin) : origin ? getCorsHeaders(origin) : {};
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { "Content-Type": "application/json", ...cors },
   });
 }
 
@@ -270,9 +287,10 @@ if (request.method === "OPTIONS") {
     if (path.startsWith("/api/admin/")) return true;
     // Skip for webhook/callback endpoints
     if (path === "/api/calls/session" || path === "/api/turn") return true;
-    // Follow/rooms/gifts/moments etc. are cross-origin (Pages -> Workers) with credentials:include
-    // Strict cookie CSRF fails cross-site without SameSite=None. Use Origin allowlist instead.
-    // Keep token check optional: if Origin is allowed, allow request (CORS protection).
+    // The app and API are same-origin, so a SameSite=Lax cookie already blocks
+    // cross-site form posts. Same-origin requests still require the token;
+    // a request from an allowlisted origin is accepted because CORS prevents
+    // an attacker page from reading the response.
     const origin = request.headers.get("Origin") || "";
     if (origin && isOriginAllowed(origin)) return true;
     // Same-origin or no Origin header: require token
@@ -284,12 +302,12 @@ if (request.method === "OPTIONS") {
     return csrfToken.length >= 32;
   }
 
-  // CSRF token endpoint — SameSite=None for cross-origin Pages -> Workers with credentials:include
+  // CSRF token endpoint. Same-origin deployment, so a Lax cookie is enough.
   if (path === "/api/csrf" && request.method === "GET") {
     const token = await generateCsrfToken();
-    const headers = new Headers(getCorsHeaders(origin));
+    const headers = new Headers(corsFor(request, origin));
     headers.set("Content-Type", "application/json");
-    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${24 * 60 * 60}`);
+    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
     return new Response(JSON.stringify({ ok: true, csrf_token: token }), {
       status: 200,
       headers,
@@ -915,8 +933,8 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           .bind(token, userId)
           .run();
         // Set HttpOnly cookie
-        const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        const cookieHeaders = corsFor(request, origin);
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
         return new Response(JSON.stringify({ ok: true, user }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -969,8 +987,8 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         if (cookieToken) {
           await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(cookieToken).run();
         }
-        const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`;
+        const cookieHeaders = corsFor(request, origin);
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -1075,8 +1093,8 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           await env.DB.prepare(`INSERT INTO auth_audit (id, user_id, firebase_uid, provider) VALUES (?, ?, ?, ?)`).bind(newId("audit"), userId, firebaseUid, provider).run();
         } catch {}
         // Set HttpOnly cookie
-        const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        const cookieHeaders = corsFor(request, origin);
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
         return new Response(JSON.stringify({ ok: true, user, isNew }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -1469,8 +1487,8 @@ return j({ ok: true, ended: true });
         }
         
         // Clear session cookie
-        const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`;
+        const cookieHeaders = corsFor(request, origin);
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
         
         return new Response(JSON.stringify({ ok: true, message: "Account and all data deleted" }), {
           status: 200,
