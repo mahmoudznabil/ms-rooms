@@ -600,6 +600,8 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
   const activeRef = useRef(false);
   const speakingRef = useRef(new Set<string>());
   const analyserMapRef = useRef<Map<string, AnalyserNode>>(new Map());
+  // Hidden <audio> elements that actually render each remote peer's track.
+  const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 
   const stopAll = useCallback(() => {
     activeRef.current = false;
@@ -611,6 +613,17 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     pcsRef.current.clear();
     streamsRef.current.clear();
     analyserMapRef.current.clear();
+    // Detach and drop the playback elements. Without this a left peer's audio
+    // element keeps its srcObject and can continue playing into the next room.
+    audioElsRef.current.forEach((el) => {
+      try {
+        el.pause();
+        el.srcObject = null;
+      } catch {
+        // ignore
+      }
+    });
+    audioElsRef.current.clear();
     void audioCtxRef.current?.close().catch(() => undefined);
     audioCtxRef.current = null;
     speakingRef.current.clear();
@@ -660,6 +673,32 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
           } catch {
             /* meter is cosmetic */
           }
+        }
+
+        // Play the peer's audio.
+        //
+        // The analyser above is measure-only: a node that terminates in nothing
+        // produces silence, so remote peers were being "connected" (meter lit,
+        // connection state fine) while nothing ever reached the speakers. This
+        // is what made a room look live but sound empty. An <audio> element with
+        // srcObject is used instead of ctx.createMediaStreamSource ->
+        // destination because the element is what autoplay policy keys off:
+        // once the user has interacted with the page, playback starts on its own
+        // and we do not need to call play() (which browsers reject silently).
+        if (audioTrack) {
+          let el = audioElsRef.current.get(peerId);
+          if (!el) {
+            el = document.createElement("audio");
+            el.autoplay = true;
+            // Safari will not play a MediaStream without this.
+            el.setAttribute("playsinline", "");
+            audioElsRef.current.set(peerId, el);
+          }
+          if (el.srcObject !== remote) el.srcObject = remote;
+          // Autoplay can still be refused (e.g. the tab was muted, or the
+          // browser decided the gesture was too old). Retry on the next inbound
+          // track event and surface it if it stays blocked.
+          void el.play().catch(() => undefined);
         }
       };
       pc.onconnectionstatechange = () => {
@@ -875,6 +914,16 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
               pcsRef.current.delete(sig.from);
               streamsRef.current.delete(sig.from);
               analyserMapRef.current.delete(sig.from);
+              const el = audioElsRef.current.get(sig.from);
+              if (el) {
+                try {
+                  el.pause();
+                  el.srcObject = null;
+                } catch {
+                  // ignore
+                }
+                audioElsRef.current.delete(sig.from);
+              }
             }
           }
         } catch {

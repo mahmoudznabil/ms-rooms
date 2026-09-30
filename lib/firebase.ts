@@ -54,14 +54,17 @@ const APP_CHECK_V3_KEY = env(
   "6LdgXbQtAAAAAJAMc3Q68CFZG8_3gKeB6hErtWlq",
 );
 let appCheckInitError: unknown = null;
+let appCheckInstance: AppCheck | null = null;
 
 function initAppCheck(): AppCheck | null {
   if (typeof window === "undefined") return null;
+  if (appCheckInstance) return appCheckInstance;
   try {
-    return initializeAppCheck(app, {
+    appCheckInstance = initializeAppCheck(app, {
       provider: new ReCaptchaV3Provider(APP_CHECK_V3_KEY),
       isTokenAutoRefreshEnabled: true,
     });
+    return appCheckInstance;
   } catch (e) {
     appCheckInitError = e;
     try {
@@ -71,9 +74,19 @@ function initAppCheck(): AppCheck | null {
   }
 }
 
-// This must run before getAuth(). Auth obtains the app-check-internal
-// provider from the Firebase app container when it is created.
-export const firebaseAppCheck = initAppCheck();
+/**
+ * App Check is created on first use rather than at module load.
+ *
+ * ReCaptchaV3Provider injects Google's reCAPTCHA script, which is ~347 KB and
+ * dominated the guest landing page's main thread (1.5s of the 2.4s total
+ * blocking time) even though a logged-out visitor never authenticates. The
+ * provider attaches to the app container, so it must be initialised before the
+ * first auth request — but nothing else, so we hold it until sign-in is
+ * actually attempted. `ensureAppCheck()` is called from the auth entry points.
+ */
+export function ensureAppCheck(): AppCheck | null {
+  return initAppCheck();
+}
 
 export function getAppCheckInitError(): unknown {
   return appCheckInitError;
@@ -115,6 +128,11 @@ function brokenAuthStub(): Auth {
 function initAuth(): Auth {
   if (typeof window === "undefined") return {} as Auth;
   try {
+    // App Check first: Auth reads the provider from the Firebase app container
+    // when it is created, so a token must exist before getAuth() runs. This is
+    // still lazy relative to page load — it happens when auth is first touched,
+    // not on every visitor's first paint.
+    initAppCheck();
     const a = _getAuth(app);
     // Persist session across tabs/restarts (fixes refresh/new-tab session loss)
     try {

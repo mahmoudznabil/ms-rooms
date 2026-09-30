@@ -84,7 +84,7 @@ export default function CookieConsentBanner() {
           </div>
 
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-white">Cookies & Sign-In</h3>
+            <h3 className="text-sm font-bold text-white">Cookies & Sign-In</h3>
             <p className="mt-1 text-xs text-white/60 leading-relaxed">
               This site uses cookies for authentication. Google sign-in requires
               <strong className="text-white">third-party cookies</strong> to complete the redirect flow.

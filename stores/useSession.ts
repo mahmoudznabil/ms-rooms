@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { API_BASE, fetchUser, login as apiLogin, me as apiMe, ApiError, type ApiUser } from "@/lib/api";
+import { clearFirebaseSessionHint, hasFirebaseSessionHint } from "@/lib/firebase-hint";
 
 interface SessionState {
   user: ApiUser | null;
@@ -27,6 +28,15 @@ export const useSession = create<SessionState>((set, get) => ({
     } catch {
       // No D1 session — but Firebase may still hold the identity (redirect
       // sign-in return, expired cookie, fresh tab). Re-mint silently.
+    }
+    // Only attempt the Firebase re-mint if this browser has actually signed in
+    // with Firebase before. Without the hint this fallback runs for every
+    // logged-out visitor, importing firebase/auth and the ~347 KB reCAPTCHA
+    // App Check script just to conclude there is no session — which made the
+    // anonymous landing page pay a ~1.5s main-thread cost it never needed.
+    if (!hasFirebaseSessionHint()) {
+      set({ user: null, ready: true });
+      return;
     }
     try {
       const [{ auth }, { syncFirebaseUser }] = await Promise.all([

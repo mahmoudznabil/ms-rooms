@@ -1,18 +1,40 @@
 "use client";
 
 import { Suspense, useEffect, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Coins, Home, Radio, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle, Settings, Users, BarChart3, Bell, ShieldCheck, LayoutDashboard, LogOut, Crown, Gamepad2, Music, Users2, Layers, Activity, Settings2 } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
-import LoginView from "@/components/LoginView";
 import ServerCheckinModal from "@/components/ServerCheckinModal";
 import OnboardingTour from "@/components/OnboardingTour";
 import IncomingCallGate from "@/components/IncomingCallGate";
 import RightRail from "@/components/RightRail";
 import { UserAvatar } from "@/components/bits";
+
+// LoginView pulls in FirebaseAuthPanel, and with it firebase/auth and the
+// reCAPTCHA App Check script (~347 KB, ~1.5s of main-thread work). AppShell
+// wraps every route, so a static import shipped all of that to every visitor —
+// including the logged-out landing page, which never authenticates. next/dynamic
+// keeps that cost off the critical path for people who are just browsing; the
+// chunk is only requested once a login screen is actually rendered.
+const LoginView = dynamic(() => import("@/components/LoginView"), {
+  loading: () => <BootScreen />,
+  ssr: true,
+});
+
+function BootScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/15 border-t-violet-400" />
+        <p className="text-sm font-semibold text-paper-dim">Loading…</p>
+      </div>
+    </div>
+  );
+}
 
 function MissedBadge({ count }: { count: number }) {
   if (count <= 0) return null;
@@ -166,7 +188,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   if (pathname === "/") return <LoginView />;
 
-  if (callPaths.some((p) => pathname.startsWith(p))) {
+  // Exact match only. `startsWith("/call")` also matched "/calls", so the Calls
+  // tab rendered the bare page with no sidebar and no topbar — leaving no way
+  // back to the lobby except the browser back button.
+  if (callPaths.some((p) => pathname === p)) {
     return <div className="w-full h-full">{children}</div>;
   }
 

@@ -1,28 +1,15 @@
 import type { Metadata, Viewport } from "next";
-import { Bricolage_Grotesque, Outfit } from "next/font/google";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import RegisterSW from "@/components/RegisterSW";
 import CookieConsentBanner from "@/components/CookieConsentBanner";
 
-// Two families, one job each. Bricolage Grotesque carries the brand voice in
-// headlines and buttons — it has enough character to read as a party product
-// rather than a template. Outfit handles everything functional and stays quiet
-// at small sizes. Self-hosted via next/font, so there is no third-party request
-// on first paint and the static export stays dependency-free.
-const display = Bricolage_Grotesque({
-  subsets: ["latin"],
-  weight: ["600", "700", "800"],
-  variable: "--font-display",
-  display: "swap",
-});
-
-const body = Outfit({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-body",
-  display: "swap",
-});
+// Arial throughout — a system font, so there is no webfont to download, no
+// FOUT/FOIT, and no extra bytes on first paint. The single trade-off is that
+// Arial ships only two real weights (400 / 700); CSS font-weight values between
+// them get synthesised by the browser. globals.css collapses those intermediate
+// steps onto real Arial weights instead of letting the browser fake them, and
+// relies on size + colour for hierarchy rather than weight variety.
 
 export const metadata: Metadata = {
   title: "MS-ROOMS | Live voice rooms, games and gifts",
@@ -43,7 +30,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable}`}>
+    <html lang="en">
       <body className="bg-ink text-paper antialiased">
         <RegisterSW />
         <AppShell>{children}</AppShell>

@@ -23,8 +23,11 @@
   --ink-line-strong: rgba(255, 255, 255, 0.16);
 
   --paper: #f4f2f8;
-  --paper-dim: rgba(244, 242, 248, 0.62);
-  --paper-faint: rgba(244, 242, 248, 0.38);
+  --paper-dim: rgba(244, 242, 248, 0.72);
+  /* 0.38 failed WCAG AA (2.6:1) for the small labels that use it. 0.55 clears
+     the 4.5:1 floor with room to spare, and still reads as clearly de-emphasised
+     next to --paper. */
+  --paper-faint: rgba(244, 242, 248, 0.55);
 
   --live: #ff2d78;
   --join: #00e5a0;
@@ -52,8 +55,11 @@
   --color-coin: var(--coin);
   --color-arc: var(--arc);
 
-  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
-  --font-body: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  /* Arial is resolved from the OS, so these need no @font-face and no
+     download. Order matters: Liberation Sans / Helvetica are metric-compatible
+     stand-ins on Linux, and the generic sans-serif is the final safety net. */
+  --font-display: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  --font-body: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
 }
 
 * {
@@ -75,7 +81,7 @@ body {
   max-width: 100vw;
   overflow-x: clip;
   margin: 0;
-  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
   background:
     radial-gradient(760px 420px at 12% -8%, rgba(255, 45, 120, 0.16), transparent 62%),
     radial-gradient(620px 380px at 92% 2%, rgba(139, 92, 246, 0.15), transparent 62%),
@@ -85,15 +91,121 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Headings, buttons and anything acting as a display element pick up the
-   brand face. Body copy stays on Outfit. */
+/* ---------------------------------------------------------------------------
+   Type: Arial, with weight reserved for the two real Arial cuts.
+
+   Arial ships exactly two real weights: Regular (400) and Bold (700). Asking
+   for 500, 600 or 800 makes the browser *synthesise* a heavier stroke by
+   smearing the glyph outline — that reads blurry on light backgrounds, muddy on
+   dark ones, and it breaks under Windows High Contrast.
+
+   So the intermediate weights collapse onto real cuts:
+
+     500 / 600  ->  400   (labels, chips, secondary controls, body-ish UI)
+     700 / 800 / 900 -> 700 (headings, primary buttons, emphasis)
+
+   Hierarchy comes from size, colour and spacing rather than a ladder of fake
+   weights. That is what makes "bold" mean something: if text is bold it is
+   genuinely bold, and it is a heading or a primary action — never body copy.
+
+   Note this block deliberately sets font-family/weight/tracking only. Sizes stay
+   with Tailwind's text-* utilities so this change cannot silently restyle the
+   whole app's type scale.
+--------------------------------------------------------------------------- */
+
+/* Body copy: Regular, the default. Nothing inherits Bold by accident. */
+body {
+  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  font-weight: 400;
+}
+
+/* Headers: Bold — the one heavy weight we are allowed. */
 h1,
 h2,
 h3,
 h4,
+h5,
+h6,
 .font-display {
-  font-family: var(--font-display), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  font-weight: 700;
   letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+/* Long copy: Regular with a comfortable measure. */
+p,
+li,
+dd,
+dt {
+  font-weight: 400;
+}
+
+/* Collapse weights Arial cannot render, so nothing is ever synthesised.
+   These live outside @layer so they beat Tailwind's font-* utilities. */
+.font-thin,
+.font-light,
+.font-normal,
+.font-medium,
+.font-semibold {
+  font-weight: 400;
+}
+.font-bold,
+.font-extrabold,
+.font-black {
+  font-weight: 700;
+}
+
+/* Controls inherit Arial — the platform default (Times, on some systems) is
+   the most common reason a form looks half-styled. */
+input,
+textarea,
+select,
+button {
+  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+}
+
+::placeholder {
+  color: var(--paper-faint);
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Contrast floor (WCAG 2.1 AA).
+
+   Measured, not guessed. Compositing white at alpha A onto this app's own
+   backgrounds (#07070b body, #17171f panels) gives:
+
+       A=0.30 -> 2.6:1      A=0.40 -> 3.7:1
+       A=0.45 -> 4.5:1 *    A=0.50 -> 5.3:1  <- clears AA everywhere
+
+   The boundary is 0.487 against panels. So every `text-white/NN` below /50 is
+   below the readability floor for small text on this palette and is remapped
+   here to a passing value rather than being edited at ~113 call sites.
+
+   The ramp stays monotonic (higher original opacity -> higher final), so the
+   original sense of hierarchy survives. Levels that were unreadable before now
+   collapse toward each other, which is the correct trade: they were previously
+   indistinguishable anyway, because neither could actually be read.
+
+   These rules sit outside @layer so they override Tailwind's utilities.
+--------------------------------------------------------------------------- */
+.text-white\/10,
+.text-white\/20,
+.text-white\/25 {
+  color: rgb(255 255 255 / 0.5);
+}
+.text-white\/30 {
+  color: rgb(255 255 255 / 0.52);
+}
+.text-white\/35 {
+  color: rgb(255 255 255 / 0.54);
+}
+.text-white\/40 {
+  color: rgb(255 255 255 / 0.56);
+}
+.text-white\/45 {
+  color: rgb(255 255 255 / 0.6);
 }
 
 ::selection {
