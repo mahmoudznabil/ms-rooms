@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle } from "lucide-react";
+import { Coins, Home, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle, Settings, Users, BarChart3, Bell, ShieldCheck, LayoutDashboard, LogOut, Crown, Gamepad2, Music, Users2, Layers, Activity, Settings2 } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
@@ -14,19 +14,6 @@ import IncomingCallGate from "@/components/IncomingCallGate";
 import RightRail from "@/components/RightRail";
 import { UserAvatar } from "@/components/bits";
 
-const NAV = [
-  { href: "/", label: "Home", icon: Home },
-  { href: "/moments", label: "Moments", icon: Sparkles },
-  { href: "/calls", label: "Calls", icon: Phone },
-  { href: "/rankings", label: "Rankings", icon: Trophy },
-  { href: "/wallet", label: "Wallet", icon: Wallet },
-  { href: "/messages", label: "Messages", icon: MessageCircle },
-  { href: "/search", label: "Search", icon: Search },
-  { href: "/support", label: "Support", icon: Headset },
-  { href: "/admin", label: "Admin", icon: Shield },
-  { href: "/profile", label: "Profile", icon: User },
-];
-
 function MissedBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
@@ -36,9 +23,72 @@ function MissedBadge({ count }: { count: number }) {
   );
 }
 
-function isActive(pathname: string, href: string): boolean {
+function isActive(pathname: string, href: string, exact = false): boolean {
   if (href === "/") return pathname === "/";
+  if (exact) return pathname === href;
   return pathname.startsWith(href);
+}
+
+interface NavItem {
+  href: string;
+  label: string;
+  icon: React.ElementType;
+  exact?: boolean;
+}
+
+const SIDEBAR_CONFIGS = {
+  main: [
+    { href: "/lobby", label: "Lobby", icon: Home, exact: false },
+    { href: "/moments", label: "Moments", icon: Sparkles },
+    { href: "/calls", label: "Calls", icon: Phone },
+    { href: "/rankings", label: "Rankings", icon: Trophy },
+    { href: "/wallet", label: "Wallet", icon: Wallet },
+    { href: "/messages", label: "Messages", icon: MessageCircle },
+    { href: "/search", label: "Search", icon: Search },
+    { href: "/support", label: "Support", icon: Headset },
+    { href: "/profile", label: "Profile", icon: User },
+  ],
+  admin: [
+    { href: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
+    { href: "/admin/users", label: "Users", icon: Users2 },
+    { href: "/admin/rooms", label: "Rooms", icon: Layers },
+    { href: "/admin/calls", label: "Calls", icon: Phone },
+    { href: "/admin/messages", label: "Messages", icon: MessageCircle },
+    { href: "/admin/reports", label: "Reports", icon: Activity },
+    { href: "/admin/settings", label: "Settings", icon: Settings2 },
+    { href: "/admin/analytics", label: "Analytics", icon: BarChart3 },
+    { href: "/admin/moderation", label: "Moderation", icon: ShieldCheck },
+    { href: "/admin/gifts", label: "Gifts", icon: Sparkles },
+    { href: "/admin/games", label: "Games", icon: Gamepad2 },
+  ],
+  creator: [
+    { href: "/create", label: "Create Room", icon: Plus },
+    { href: "/my-rooms", label: "My Rooms", icon: Layers },
+    { href: "/wallet", label: "Earnings", icon: Wallet },
+    { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  ],
+  settings: [
+    { href: "/settings", label: "Settings", icon: Settings2 },
+    { href: "/settings/profile", label: "Profile", icon: User },
+    { href: "/settings/notifications", label: "Notifications", icon: Bell },
+    { href: "/settings/privacy", label: "Privacy", icon: Shield },
+    { href: "/settings/account", label: "Account", icon: User },
+  ],
+} as const;
+
+type SidebarConfigKey = keyof typeof SIDEBAR_CONFIGS;
+
+function getSidebarConfig(pathname: string, isAdmin: boolean, user: any): { config: readonly NavItem[]; context: string } {
+  if (pathname.startsWith("/admin")) {
+    return { config: SIDEBAR_CONFIGS.admin, context: "admin" };
+  }
+  if (pathname.startsWith("/settings")) {
+    return { config: SIDEBAR_CONFIGS.settings, context: "settings" };
+  }
+  if (pathname.startsWith("/my-rooms") || pathname.startsWith("/create") || pathname.startsWith("/analytics")) {
+    return { config: SIDEBAR_CONFIGS.creator, context: "creator" };
+  }
+  return { config: SIDEBAR_CONFIGS.main, context: "main" };
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -47,11 +97,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const user = useSession((s) => s.user);
   const boot = useSession((s) => s.boot);
   const [isAdmin, setIsAdmin] = useState(false);
-  // First-run tour: only brand-new signups (panel sets the session flag on
-  // fresh account creation), once per user. Consumers never see admin.
+
   const [showTour, setShowTour] = useState(false);
-  // Only Marc + Mahmoud see Admin — hidden from public
   const ADMIN_ALLOW = ["mahmoudnabil03@gmail.com", "marc@ms-rooms.app", "marc@gmail.com", "marc@msrooms.app"];
+
   useEffect(() => {
     const check = async () => {
       const email = (user as unknown as { email?: string | null })?.email ?? null;
@@ -69,7 +118,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void boot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -91,6 +139,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const missed = useCalls((s) => s.missed);
   const refreshMissed = useCalls((s) => s.refreshMissed);
+
   useEffect(() => {
     if (!user) return;
     void refreshMissed();
@@ -98,50 +147,47 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [user, refreshMissed]);
 
-  if (!ready) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="flex justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-16 w-16 rounded-2xl object-contain" />
-          </div>
-          <p className="mt-3 text-2xl font-black tracking-tight">MS-ROOMS</p>
-          <p className="mt-1 text-sm text-white/45">Tuning the frequency…</p>
-        </div>
-      </div>
-    );
-  }
+  const getContextTitle = () => {
+    if (pathname.startsWith("/admin")) return "Admin Panel";
+    if (pathname.startsWith("/settings")) return "Settings";
+    if (pathname.startsWith("/my-rooms") || pathname.startsWith("/create")) return "Creator Tools";
+    return "MS-ROOMS";
+  };
 
-  const publicPaths = ["/", "/login"];
-  // Signed OUT: no sidebar / topbar / tabs / rail — the public landing brings
-  // its own top nav and /login is self-contained. The chrome only exists
-  // once you're signed in.
+  const publicPaths = ["/login"];
+  const callPaths = ["/call"];
+
   if (!user) {
     if (!publicPaths.includes(pathname)) return <LoginView />;
-    // Full-width wrapper so the public landing header can span edge-to-edge
-    // on all devices; inner pages constrain their own content width.
     return <div className="w-full pb-10">{children}</div>;
   }
-  const visibleNav = NAV.filter((n) => n.href !== "/admin" || isAdmin);
-  // Direct /admin access without admin token → show admin login page, but hide tab from public nav
+
+  if (pathname === "/") {
+    return <LoginView />;
+  }
+
+  if (callPaths.some((p) => pathname.startsWith(p))) {
+    return <div className="w-full h-full">{children}</div>;
+  }
+
+  const { config: navItems, context } = getSidebarConfig(pathname, isAdmin, user);
+  const visibleNav = navItems.filter((n) => n.href !== "/admin" || isAdmin);
 
   return (
     <div className="app-shell">
-      {/* Desktop sidebar */}
       <aside className="app-sidebar">
         <Link href="/" className="flex items-center gap-2 px-2 py-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-9 w-9 rounded-xl object-contain bg-[#0a0a12] ring-1 ring-white/10" />
-          <span className="text-lg font-black tracking-tight">MS-ROOMS</span>
+          <span className="text-lg font-black tracking-tight">{getContextTitle()}</span>
         </Link>
-        <nav className="flex-1 space-y-1" aria-label="Primary">
+
+        <nav className="flex-1 space-y-1" aria-label="Primary navigation">
           {visibleNav.map((n) => (
             <Link
               key={n.href}
               href={n.href}
               className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-semibold transition ${
-                isActive(pathname, n.href)
+                isActive(pathname, n.href, n.exact)
                   ? "bg-white text-black"
                   : "text-white/60 hover:bg-white/5 hover:text-white"
               }`}
@@ -152,33 +198,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </nav>
-        <Link
-          href="/create"
-          className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
-        >
-          <Plus size={16} /> Start a room
-        </Link>
-        {user ? (
-          <Link href="/profile" className="mt-3 flex items-center gap-2.5 rounded-2xl bg-white/5 p-2.5 transition hover:bg-white/10">
+
+        {context === "main" && user && (
+          <Link
+            href="/create"
+            className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
+          >
+            <Plus size={16} /> Start a room
+          </Link>
+        )}
+
+        {context === "creator" && (
+          <Link
+            href="/create"
+            className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
+          >
+            <Plus size={16} /> Create Room
+          </Link>
+        )}
+
+        <div className="mt-auto pt-4 border-t border-white/10">
+          <Link href="/profile" className="flex items-center gap-2.5 rounded-2xl bg-white/5 p-2.5 transition-all duration-200 hover:bg-white/10 hover:scale-[1.02]">
             <UserAvatar name={user.display_name} avatarUrl={user.avatar_url} xp={user.xp} size={34} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-bold">{user.display_name}</span>
               <span className="block text-xs text-white/45">Lv.{levelForXp(user.xp)}</span>
             </span>
           </Link>
-        ) : (
-          <Link href="/login" className="mt-3 flex items-center justify-center rounded-2xl bg-white py-3 text-sm font-bold text-black hover:bg-white/85">
-            Login / Sign up
-          </Link>
-        )}
+        </div>
       </aside>
 
-      {/* Main column */}
       <div className="app-main">
-        {/* Mobile top bar */}
         <header className="app-topbar">
           <Link href="/" className="flex items-center gap-1.5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain bg-[#0a0a12] ring-1 ring-white/10" />
             <span className="font-black tracking-tight">MS-ROOMS</span>
           </Link>
@@ -198,15 +250,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <Search size={16} />
             </Link>
             {user ? (
-              <Link
-                href="/wallet"
-                className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200"
-              >
-                <Coins size={14} />
-                {user.coins.toLocaleString()}
-              </Link>
+              <>
+                <Link
+                  href="/wallet"
+                  className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200 transition-all duration-200 hover:bg-amber-300/20 hover:scale-105"
+                >
+                  <Coins size={14} />
+                  {user.coins.toLocaleString()}
+                </Link>
+                <Link
+                  href="/profile"
+                  className="flex items-center gap-1.5 rounded-full bg-white/5 p-1 transition-all duration-200 hover:bg-white/10 hover:scale-105"
+                  aria-label="Profile"
+                >
+                  <UserAvatar name={user.display_name} avatarUrl={user.avatar_url} xp={user.xp} size={28} />
+                </Link>
+              </>
             ) : (
-              <Link href="/login" className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-black hover:bg-white/85">
+              <Link href="/login" className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-black transition-all duration-200 hover:bg-white/85 hover:scale-105">
                 Login
               </Link>
             )}
@@ -215,7 +276,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         <main className="app-content">{children}</main>
 
-        {/* Mobile bottom tabs */}
         <nav className="app-tabs" aria-label="Primary">
           <TabLink href="/" label="Home" icon={<Home size={20} />} active={pathname === "/"} />
           <TabLink
@@ -239,23 +299,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <TabLink href="/moments" label="Moments" icon={<Sparkles size={20} />} active={pathname.startsWith("/moments")} />
           <TabLink href="/profile" label="Me" icon={<User size={20} />} active={pathname.startsWith("/profile")} />
         </nav>
+
+        <ServerCheckinModal />
+        {showTour && user && <OnboardingTour user={user} onDone={finishTour} />}
+        <Suspense fallback={null}>
+          <IncomingCallGate />
+        </Suspense>
       </div>
-
-      {/* Desktop right rail */}
-      <aside className="app-rail">
-        <RightRail />
-      </aside>
-
-      <ServerCheckinModal />
-      {showTour && user && <OnboardingTour user={user} onDone={finishTour} />}
-      <Suspense fallback={null}>
-        <IncomingCallGate />
-      </Suspense>
     </div>
   );
 }
 
-function TabLink({ href, label, icon, active }: { href: string; label: string; icon: ReactNode; active: boolean }) {
+function TabLink({ href, label, icon, active, exact = false }: { href: string; label: string; icon: ReactNode; active: boolean; exact?: boolean }) {
   return (
     <Link
       href={href}

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MessageCircle, Mic, MicOff, Phone, PhoneOff, RotateCcw, Video, VideoOff, Wifi, WifiOff, Settings, Maximize2, Minimize2 } from "lucide-react";
+import { MessageCircle, Mic, MicOff, Phone, PhoneOff, RotateCcw, Video, VideoOff, Wifi, WifiOff, Settings, Maximize2, Minimize2, Users, Gamepad2, Monitor, Smile, MoreHorizontal, Share2 } from "lucide-react";
 import {
   acceptCallRoom,
   cancelCallRoom,
@@ -547,6 +547,55 @@ function InCallUI({
               {fullScreen ? <Minimize2 size={26} /> : <Maximize2 size={26} />}
             </button>
 
+            {/* Screen Share */}
+            <button
+              onClick={() => void session.toggleScreenShare?.()}
+              aria-label={session.screenShareOn ? "Stop screen share" : "Share screen"}
+              className={`rounded-full p-4 transition-all duration-200 active:scale-95 shadow-xl ${
+                session.screenShareOn
+                  ? "bg-white/10 text-white hover:bg-white/20 ring-2 ring-white/20"
+                  : "bg-white/10 text-white/50 hover:bg-white/20"
+              }`}
+            >
+              <Share2 size={26} />
+            </button>
+
+            {/* Add People */}
+            <button
+              onClick={() => void session.addPeople?.()}
+              aria-label="Add people"
+              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 shadow-xl hover:bg-white/20 text-white"
+            >
+              <Users size={26} />
+            </button>
+
+            {/* Games */}
+            <button
+              onClick={() => void session.openGames?.()}
+              aria-label="Games"
+              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              <Gamepad2 size={26} />
+            </button>
+
+            {/* Reactions */}
+            <button
+              onClick={() => void session.openReactions?.()}
+              aria-label="Reactions"
+              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              <Smile size={26} />
+            </button>
+
+            {/* More options */}
+            <button
+              onClick={() => void session.openMore?.()}
+              aria-label="More options"
+              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              <MoreHorizontal size={26} />
+            </button>
+
             {/* End call */}
             <button
               onClick={onEnd}
@@ -638,8 +687,44 @@ function InCallUI({
             <button onClick={onEnd} aria-label="End call" className="rounded-full bg-red-500/90 p-5 transition-all duration-200 active:scale-95 shadow-xl hover:bg-red-600 ring-2 ring-red-500/50">
               <PhoneOff size={28} />
             </button>
+
+            {/* Add People */}
+            <button
+              onClick={() => void session.addPeople?.()}
+              aria-label="Add people"
+              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 shadow-xl hover:bg-white/20 text-white"
+            >
+              <Users size={28} />
+            </button>
+
+            {/* Games */}
+            <button
+              onClick={() => void session.openGames?.()}
+              aria-label="Games"
+              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              <Gamepad2 size={28} />
+            </button>
+
+            {/* Reactions */}
+            <button
+              onClick={() => void session.openReactions?.()}
+              aria-label="Reactions"
+              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              <Smile size={28} />
+            </button>
+
+            {/* More options */}
+            <button
+              onClick={() => void session.openMore?.()}
+              aria-label="More options"
+              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            >
+              <MoreHorizontal size={28} />
+            </button>
           </div>
-</div>
+        </div>
       )}
     </div>
   );

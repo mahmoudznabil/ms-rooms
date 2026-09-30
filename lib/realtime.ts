@@ -37,7 +37,7 @@ export async function getTurnConfig(): Promise<TurnConfig> {
     iceServers?: RTCIceServer[] | null;
     setup?: string;
   };
-  if (!data.ok) throw new Error("turn endpoint returned an error");
+  if (!data.ok) throw new Error("Firebase JWK fetch failed");
   const iceServers = Array.isArray(data.iceServers) && data.iceServers.length > 0 ? data.iceServers : null;
   return {
     configured: data.configured === true && (iceServers != null || data.turn != null),
@@ -199,6 +199,7 @@ export function useCallSession(roomSlug: string, withVideo: boolean) {
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(withVideo);
   const [videoMode, setVideoMode] = useState(withVideo);
+  const [screenShareOn, setScreenShareOn] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [connection, setConnection] = useState<string>("new");
@@ -312,10 +313,89 @@ export function useCallSession(roomSlug: string, withVideo: boolean) {
     setCamOn(next);
   }, [camOn, videoMode, join]);
 
+  const toggleScreenShare = useCallback(async () => {
+    const s = streamRef.current;
+    if (!s) return;
+    const next = !screenShareOn;
+    try {
+      if (next) {
+        // Start screen sharing
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        // Replace video track with screen share
+        const videoTrack = screenStream.getVideoTracks()[0];
+        const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
+        if (sender && videoTrack) {
+          await sender.replaceTrack(videoTrack);
+        }
+        // Handle screen share ended by user
+        videoTrack.onended = async () => {
+          setScreenShareOn(false);
+          // Switch back to camera if it was on
+          if (camOn) {
+            const camStream = await navigator.mediaDevices.getUserMedia({
+              video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+              audio: false,
+            });
+            const camTrack = camStream.getVideoTracks()[0];
+            const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
+            if (sender && camTrack) {
+              await sender.replaceTrack(camTrack);
+            }
+          }
+        };
+        setScreenShareOn(true);
+      } else {
+        // Stop screen sharing, switch back to camera
+        if (camOn) {
+          const camStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+            audio: false,
+          });
+          const camTrack = camStream.getVideoTracks()[0];
+          const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
+          if (sender && camTrack) {
+            await sender.replaceTrack(camTrack);
+          }
+        }
+        setScreenShareOn(false);
+      }
+    } catch (e) {
+      console.error("Screen share error:", e);
+      setScreenShareOn(false);
+    }
+  }, [camOn]);
+
+  const addPeople = useCallback(() => {
+    // TODO: Implement add people to call (group calls)
+    console.log("Add people to call - not yet implemented");
+    // This would open a modal to select contacts to add to the call
+  }, []);
+
+  const openGames = useCallback(() => {
+    // TODO: Implement in-call games
+    console.log("Open games - not yet implemented");
+    // This would open a games panel
+  }, []);
+
+  const openReactions = useCallback(() => {
+    // TODO: Implement reactions/emoji picker
+    console.log("Open reactions - not yet implemented");
+    // This would open an emoji/reactions picker
+  }, []);
+
+  const openMore = useCallback(() => {
+    // TODO: Implement more options menu
+    console.log("Open more options - not yet implemented");
+    // This would open a more options menu
+  }, []);
+
   const leave = useCallback(() => {
     teardown();
     setPhase("ended");
   }, [teardown]);
 
-  return { phase, error, micOn, camOn, videoMode, localStream, remoteStream, connection, liveSince, join, toggleMic, toggleCam, leave };
+  return { phase, error, micOn, camOn, videoMode, screenShareOn, localStream, remoteStream, connection, liveSince, join, toggleMic, toggleCam, toggleScreenShare, addPeople, openGames, openReactions, openMore, leave };
 }

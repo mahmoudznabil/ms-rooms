@@ -30,16 +30,15 @@ function env(name: string, fallback: string): string {
   return v && v.length > 0 ? v : fallback;
 }
 
-// Web App config — project: bestaudioroom (628489866765)
+// Web App config — project: ms-rooms-auth (59506321553)
 // Values come from NEXT_PUBLIC_* when present, otherwise the known web config.
 const firebaseConfig = {
-  apiKey: "AIzaSyB_9lRPrvtvm2iNLyM495VGGBfK3nJZkaA",
-  authDomain: "ms-room-audio.firebaseapp.com",
-  projectId: "ms-room-audio",
-  storageBucket: "ms-room-audio.firebasestorage.app",
-  messagingSenderId: "887561048772",
-  appId: "1:887561048772:web:c83dca6873a44a109d6f91",
-  measurementId: "G-RREGFDPZ9H"
+  apiKey: "AIzaSyBgPuvvc8zt7y9dhB0_ZfeptaRAdRjZkmk",
+  authDomain: "ms-rooms-auth.firebaseapp.com",
+  projectId: "ms-rooms-auth",
+  storageBucket: "ms-rooms-auth.firebasestorage.app",
+  messagingSenderId: "59506321553",
+  appId: "1:59506321553:web:d5db8040d4ce22667ef730"
 };
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
@@ -252,6 +251,6 @@ export type { User };
 
 // Email link helpers: must use same origin URL
 export const EMAIL_LINK_SETTINGS = {
-  url: typeof window !== "undefined" ? `${window.location.origin}/login` : "https://bestaudioroom.firebaseapp.com/login",
+  url: typeof window !== "undefined" ? `${window.location.origin}/login` : "https://ms-rooms-auth.firebaseapp.com/login",
   handleCodeInApp: true,
 };

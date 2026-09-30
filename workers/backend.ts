@@ -8,10 +8,14 @@
  * `tsc --noEmit` stay green without extra dependencies.
  */
 
+import { R2Bucket } from "@cloudflare/workers-types";
+
 interface Env {
   // Typed as `any` to avoid requiring @cloudflare/workers-types.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DB: any;
+  // Cloudflare R2 bucket for chat attachments
+  CHAT_ATTACHMENTS: R2Bucket;
   // Cloudflare Calls SFU. Set via `wrangler secret put`.
   // When absent, /api/calls/session reports `configured: false`
   // and clients run in local preview mode.
@@ -34,7 +38,9 @@ interface Env {
 // Allowed origins - configure via environment or use defaults
 const ALLOWED_ORIGINS = [
   "https://bestaudiobackend.mahmoudnabil03.workers.dev",
+  "https://bestaudiobackend.mahmoudxnabil.workers.dev",
   "https://ms-rooms.pages.dev",
+  "https://main.ms-rooms.pages.dev",
   "https://ms-rooms-frontend.pages.dev",
   "http://localhost:3000",
   "http://localhost:3001",
@@ -52,6 +58,8 @@ function getCorsHeaders(origin: string): Record<string, string> {
     "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CSRF-Token",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "86400",
+    // Never let a cache serve one origin's ACAO to another origin.
+    Vary: "Origin",
   };
 }
 
@@ -100,7 +108,7 @@ let userIdentitySchemaReady = false;
 // issued by securetoken.google.com and are verified with Google's rotating
 // public JWKs. Never accept a decoded-but-unverified payload here: doing so
 // would let an attacker forge any firebase_uid (including a master admin).
-const FIREBASE_PROJECT_ID = "ms-room-audio";
+const FIREBASE_PROJECT_ID = "ms-rooms-auth";
 const FIREBASE_ISSUER = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
 const FIREBASE_JWKS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -535,27 +543,6 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         return j({ ok: true, worker: "bestaudiobackend", time: new Date().toISOString() });
       }
 
-      // CSRF token endpoint
-      if (path === "/api/csrf" && request.method === "GET") {
-        const token = await generateCsrfToken();
-        const origin = request.headers.get("Origin") || "";
-        const response = j({ ok: true, csrf_token: token });
-        const headers = new Headers(response.headers);
-        headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
-        return new Response(JSON.stringify({ ok: true, csrf_token: token }), {
-          status: 200,
-          headers: { "Content-Type": "application/json", ...Object.fromEntries(headers.entries()) },
-        });
-      }
-
-      // CSRF validation middleware for state-changing requests
-      if (["POST", "PATCH", "DELETE", "PUT"].includes(request.method)) {
-        const valid = await validateCsrfToken(request, env);
-        if (!valid) {
-          return j({ ok: false, error: "Invalid or missing CSRF token" }, 403);
-        }
-      }
-
       // ---- Rooms ----------------------------------------------------------
       if (path === "/api/rooms" && request.method === "GET") {
         const res = await env.DB.prepare(
@@ -920,7 +907,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           .run();
         // Set HttpOnly cookie
         const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
         return new Response(JSON.stringify({ ok: true, user }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -974,7 +961,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(cookieToken).run();
         }
         const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`;
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -1080,7 +1067,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         } catch {}
         // Set HttpOnly cookie
         const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
         return new Response(JSON.stringify({ ok: true, user, isNew }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -1458,7 +1445,7 @@ return j({ ok: true, ended: true });
         
         // Clear session cookie
         const cookieHeaders = getCorsHeaders(origin);
-        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`;
         
         return new Response(JSON.stringify({ ok: true, message: "Account and all data deleted" }), {
           status: 200,
@@ -2758,15 +2745,50 @@ return j({ ok: true });
           return j({ ok: true, messages });
         }
         if (request.method === "POST") {
-          const body = await readJson<{ content?: unknown; type?: unknown; reply_to_id?: unknown }>(request);
-          const content = typeof body?.content === "string" ? body.content.trim() : "";
-          const type = body?.type === "image" || body?.type === "audio" || body?.type === "file" ? (body.type as string) : "text";
-          const replyTo = typeof body?.reply_to_id === "string" && body.reply_to_id ? body.reply_to_id : null;
-          if (!content || content.length > 2000) return badRequest("content must be 1-2000 characters.");
+          const contentType = request.headers.get("content-type") || "";
+          let content = "";
+          let type = "text";
+          let replyTo = null;
+          let attachmentIds: string[] = [];
+
+          if (contentType.includes("multipart/form-data")) {
+            const formData = await request.formData();
+            const contentEntry = formData.get("content");
+            content = typeof contentEntry === "string" ? contentEntry.trim() : "";
+            const typeEntry = formData.get("type");
+            type = typeof typeEntry === "string" ? typeEntry : "text";
+            const replyToEntry = formData.get("reply_to_id");
+            replyTo = typeof replyToEntry === "string" ? replyToEntry : null;
+            // Handle attachment_ids from form data
+            const attachmentIdsStr = formData.get("attachment_ids") as string | null;
+            if (attachmentIdsStr) {
+              try { attachmentIds = JSON.parse(attachmentIdsStr); } catch { attachmentIds = []; }
+            }
+          } else {
+            const body = await readJson<{ content?: unknown; type?: unknown; reply_to_id?: unknown; attachment_ids?: unknown }>(request);
+            content = typeof body?.content === "string" ? body.content.trim() : "";
+            type = body?.type === "image" || body?.type === "audio" || body?.type === "file" ? (body.type as string) : "text";
+            replyTo = typeof body?.reply_to_id === "string" && body.reply_to_id ? body.reply_to_id : null;
+            attachmentIds = Array.isArray(body?.attachment_ids) ? body.attachment_ids : [];
+          }
+
+          if (!content && attachmentIds.length === 0) return badRequest("content or attachments required.");
+          if (content && content.length > 2000) return badRequest("content must be 1-2000 characters.");
+          
           const id = newId("msg");
           await env.DB.prepare(
             `INSERT INTO messages (id, conversation_id, sender_id, content, type, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)`
           ).bind(id, cid, userId, content, type, replyTo).run();
+
+          // Link attachments to message
+          if (attachmentIds.length > 0) {
+            for (const attachmentId of attachmentIds) {
+              await env.DB.prepare(
+                `UPDATE message_attachments SET message_id = ? WHERE id = ? AND message_id IS NULL`
+              ).bind(id, attachmentId).run();
+            }
+          }
+
           await env.DB.prepare(`UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(cid).run();
           await env.DB.prepare(`UPDATE conversation_participants SET last_read_at = CURRENT_TIMESTAMP WHERE conversation_id = ? AND user_id = ?`).bind(cid, userId).run();
           try {
@@ -2778,11 +2800,15 @@ return j({ ok: true });
              JOIN users u ON u.id = m.sender_id WHERE m.id = ?`
           ).bind(id).first();
           const m = row as Record<string, unknown>;
+          const attachments = await env.DB.prepare(
+            `SELECT * FROM message_attachments WHERE message_id = ?`
+          ).bind(id).all();
           return j({ ok: true, message: {
             id: m.id, conversation_id: m.conversation_id, sender_id: m.sender_id,
             content: m.content, type: m.type, reply_to_id: m.reply_to_id, metadata: m.metadata,
             created_at: m.created_at, updated_at: m.updated_at, deleted_at: m.deleted_at,
             sender: { id: m.sender_id, username: m.username, display_name: m.display_name, avatar_url: m.avatar_url },
+            attachments: attachments.results ?? []
           } }, 201);
         }
         return notFound();
@@ -2851,6 +2877,120 @@ return j({ ok: true });
           return j({ ok: true });
         }
         return notFound();
+      }
+
+      // ---- Chat Attachments Upload/Download ----
+      // POST /api/attachments/upload — upload a file/media/contact for a conversation or message
+      if (path === "/api/attachments/upload" && request.method === "POST") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+
+        const contentType = request.headers.get("content-type") || "";
+        if (!contentType.includes("multipart/form-data")) {
+          return j({ ok: false, error: "Expected multipart/form-data" }, 400);
+        }
+
+        const formData = await request.formData();
+        const file = formData.get("file") as File | null;
+        const conversationId = formData.get("conversation_id") as string | null;
+        const messageId = formData.get("message_id") as string | null;
+        // attachment_type from form is optional, we'll determine from file if not provided
+        const attachmentTypeFromForm = formData.get("attachment_type") as string | null;
+
+        if (!file) return j({ ok: false, error: "No file provided" }, 400);
+        if (!conversationId && !messageId) return j({ ok: false, error: "conversation_id or message_id required" }, 400);
+
+        // Validate file
+        const maxSize = 50 * 1024 * 1024; // 50MB
+        if (file.size > maxSize) return j({ ok: false, error: "File too large (max 50MB)" }, 400);
+
+        // Determine attachment type from file if not provided
+        let attachmentType: string = "file";
+        const mimeType = file.type || "application/octet-stream";
+        if (mimeType.startsWith("image/")) attachmentType = "image";
+        else if (mimeType.startsWith("video/")) attachmentType = "video";
+        else if (mimeType.startsWith("audio/")) attachmentType = "audio";
+        else if (mimeType.startsWith("text/") || mimeType === "application/vnd.contact+xml" || mimeType === "text/vcard") attachmentType = "contact";
+        else attachmentType = "file";
+
+        // Generate R2 key
+        // Generate R2 key
+        const attachmentId = newId("att");
+        const ext = file.name.split(".").pop() || "";
+const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
+
+        // Upload to R2 - use arrayBuffer to avoid stream type issues
+        if (!env.CHAT_ATTACHMENTS) {
+          return j({ ok: false, error: "File storage not configured. Enable R2 in Cloudflare Dashboard." }, 503);
+        }
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          await env.CHAT_ATTACHMENTS.put(r2Key, arrayBuffer, {
+            httpMetadata: { contentType: mimeType },
+            customMetadata: { userId, originalName: file.name },
+          });
+        } catch (e) {
+          return j({ ok: false, error: "Failed to upload file" }, 500);
+        }
+
+        await env.DB.prepare(
+          `INSERT INTO message_attachments (id, message_id, attachment_type, file_name, file_size, mime_type, r2_key, created_at)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`
+        ).bind(attachmentId, "file", file.name, file.size, mimeType, r2Key, new Date().toISOString()).run();
+
+        const downloadUrl = `${new URL(request.url).origin}/api/attachments/${attachmentId}/download`;
+
+        return j({ ok: true, attachment: {
+          id: attachmentId,
+          attachment_type: "file",
+          file_name: file.name,
+          file_size: file.size,
+          mime_type: mimeType,
+          download_url: downloadUrl,
+        } }, 201);
+      }
+
+      // GET /api/attachments/:id/download — download an attachment
+      if (path.match(/^\/api\/attachments\/([^/]+)\/download$/) && request.method === "GET") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+
+        const attachmentId = decodeURIComponent(path.split("/")[3]);
+
+        const attachment = await env.DB.prepare(
+          `SELECT * FROM message_attachments WHERE id = ?`
+        ).bind(attachmentId).first();
+
+        if (!attachment) return j({ ok: false, error: "Attachment not found" }, 404);
+
+        // Verify user has access (either sender or participant in conversation)
+        const message = await env.DB.prepare(
+          `SELECT m.*, cp.user_id FROM messages m
+           JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
+           WHERE m.id = ? AND cp.user_id = ?`
+        ).bind(attachment.message_id, userId).first();
+
+        if (!message) return j({ ok: false, error: "Access denied" }, 403);
+
+        if (!env.CHAT_ATTACHMENTS) {
+          return j({ ok: false, error: "File storage not configured. Enable R2 in Cloudflare Dashboard." }, 503);
+        }
+
+        const attachmentRecord = attachment as Record<string, unknown>;
+        const r2Key = attachmentRecord.r2_key as string;
+        const mimeType = attachmentRecord.mime_type as string;
+        const fileName = attachmentRecord.file_name as string;
+
+        const object = await env.CHAT_ATTACHMENTS.get(r2Key);
+        if (!object) return j({ ok: false, error: "File not found in storage" }, 404);
+
+        return new Response(object.body as ReadableStream<Uint8Array>, {
+          headers: {
+            "Content-Type": mimeType,
+            "Content-Disposition": `inline; filename="${fileName}"`,
+            "Cache-Control": "public, max-age=31536000",
+          },
+        });
       }
 
       // ---- AI usage metrics (persisted; powers dashboards) ---------------------

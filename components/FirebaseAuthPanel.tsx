@@ -44,7 +44,7 @@ function formatAuthError(e: unknown): string {
     console.error("[auth]", code, msg, (err?.customData ?? e) as unknown);
   } catch {}
   if (code.includes("app-check") || msg.toLowerCase().includes("app check")) {
-    return `${full} (code: ${code || "auth/firebase-app-check-token-is-invalid"}). Firebase Authentication is enforcing App Check, but this web app did not receive a valid App Check token. Confirm the v3 App Check site key is registered for web app 1:628489866765:web:a75db602122ef083700f44 and that its domains include bestaudiobackend.mahmoudnabil03.workers.dev.`;
+    return `${full} (code: ${code || "auth/firebase-app-check-token-is-invalid"}). Firebase Authentication is enforcing App Check, but this web app did not receive a valid App Check token. Confirm the v3 App Check site key is registered for web app 1:59506321553:web:d5db8040d4ce22667ef730 and that its domains include ms-rooms.pages.dev.`;
   }
   if (
     code === "auth/internal-error" ||

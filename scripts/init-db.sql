@@ -237,8 +237,8 @@ CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
   sender_id TEXT NOT NULL,
-  content TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('text', 'image', 'audio', 'file', 'system')),
+  content TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('text', 'image', 'audio', 'video', 'file', 'contact', 'system')),
   reply_to_id TEXT,
   metadata TEXT, -- JSON for extra data (translations, AI summaries, etc.)
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -248,6 +248,24 @@ CREATE TABLE IF NOT EXISTS messages (
   FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (reply_to_id) REFERENCES messages(id) ON DELETE SET NULL
 );
+
+-- Attachments table for chat messages (images, videos, files, contacts)
+CREATE TABLE IF NOT EXISTS message_attachments (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  attachment_type TEXT NOT NULL CHECK (attachment_type IN ('image', 'video', 'audio', 'file', 'contact')),
+  file_name TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  mime_type TEXT NOT NULL,
+  r2_key TEXT NOT NULL, -- R2 object key
+  thumbnail_r2_key TEXT, -- For images/videos
+  duration_seconds INTEGER, -- For audio/video
+  contact_data TEXT, -- JSON for contact info
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON message_attachments (message_id);
 
 CREATE TABLE IF NOT EXISTS ai_usage_events (
   id TEXT PRIMARY KEY,

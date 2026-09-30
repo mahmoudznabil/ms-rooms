@@ -2,7 +2,7 @@ import type { LobbyRoom } from "@/lib/rooms";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ||
-  "https://bestaudiobackend.mahmoudnabil03.workers.dev";
+  "https://bestaudiobackend.mahmoudxnabil.workers.dev";
 
 export class ApiError extends Error {
   status: number;

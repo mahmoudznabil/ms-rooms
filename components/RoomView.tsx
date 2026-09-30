@@ -614,7 +614,7 @@ function RoomViewInner() {
 
       {/* Feature 4.1: Embedded HTML5 Casual Games */}
       <div className="mt-3">
-        <MiniGamePanel />
+        <MiniGamePanel roomId={room.id} />
       </div>
 
       {/* Seats */}

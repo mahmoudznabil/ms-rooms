@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { Apple, Smartphone, Gamepad2, Mic, Crown, Gift, Star, Quote, Shield, Users, Headset, Sparkles, ArrowRight } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 
@@ -36,6 +38,13 @@ function Stars({ n }: { n: number }) {
 export default function Home() {
   const ready = useSession((s) => s.ready);
   const user = useSession((s) => s.user);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (ready && user) {
+      router.replace("/lobby");
+    }
+  }, [ready, user, router]);
 
   if (!ready) return <div className="flex justify-center py-20 text-sm text-white/40">Loading…</div>;
 

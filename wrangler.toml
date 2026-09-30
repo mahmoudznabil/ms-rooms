@@ -18,7 +18,11 @@ persist = true
 [[d1_databases]]
 binding = "DB"
 database_name = "best-audio-room"
-database_id = "d600133d-804e-4203-83cb-5166d35d4ae3"
+database_id = "82d9964f-ac73-4d0a-8c62-8f4940a05b0d"
+
+[[r2_buckets]]
+binding = "CHAT_ATTACHMENTS"
+bucket_name = "ms-rooms"
 
 # Cloudflare Calls credentials (SFU) + Realtime TURN — set via `wrangler secret put`
 #   CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN (SFU sessions/new)
@@ -36,11 +40,4 @@ database_id = "d600133d-804e-4203-83cb-5166d35d4ae3"
 # Secret key must be set via `wrangler secret put RECAPTCHA_SECRET_KEY` (never commit)
 RECAPTCHA_SITE_KEY = "6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD"
 
-# Frontend: the Next.js static export in ./out is served from this same
-# Worker (Cloudflare's recommended Workers Static Assets path), because this
-# account is currently blocked from creating new Pages projects
-# (API code 8000030). Asset requests (/, /room, /_next/*) serve static
-# files; /api/* and other unmatched routes fall through to the Worker below.
-[assets]
-directory = "./out"
-not_found_handling = "404-page"
+pages_build_output_dir = "./out"
