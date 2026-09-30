@@ -44,7 +44,7 @@ import {
   type GiftCatalogItem,
 } from "@/lib/api";
 import { ENTRY_EFFECT_LEVEL, levelForXp } from "@/lib/levels";
-import { useCloudflareVoice } from "@/lib/realtime";
+import { useRoomVoice } from "@/lib/realtime";
 import { useSession } from "@/stores/useSession";
 import { Modal, Spinner, UserAvatar, LevelBadge, EmptyState, Field, inputCls, PrimaryButton } from "@/components/bits";
 import SpinModal from "@/components/SpinModal";
@@ -104,7 +104,7 @@ function RoomViewInner() {
   const chatRef = useRef<HTMLDivElement>(null);
   const fxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const voice = useCloudflareVoice(slug);
+  const voice = useRoomVoice(room?.id ?? "", user?.id ?? null);
   const isHost = !!user && !!room && room.host_user_id === user.id;
   const mySeat = useMemo(
     () => (user ? seats.find((s) => s.user_id === user.id) : undefined),
@@ -556,10 +556,10 @@ function RoomViewInner() {
         : voice.status === "denied" || voice.status === "error" ? "bg-red-400/10 text-red-300"
         : "bg-white/5 text-white/55"}`}>
         <span className={`live-dot h-1.5 w-1.5 rounded-full ${voice.status === "live" ? "bg-emerald-400" : voice.status === "denied" || voice.status === "error" ? "bg-red-400" : "bg-white/40"}`} />
-        {voice.status === "live" ? "Cloudflare Realtime • live"
-          : voice.status === "requesting" ? "Connecting mic…"
+        {voice.status === "live" ? `On mic · ${voice.peers.length} in the room`
+          : voice.status === "connecting" ? "Joining the room…"
           : voice.status === "denied" || voice.status === "error" ? (voice.error ?? "Mic unavailable")
-          : voice.micOn ? "Preview mic • on" : "Tap the mic to talk"}
+          : voice.micOn ? "Mic is on" : "Tap the mic to talk"}
       </p>
 
       {entryFx && (
@@ -640,9 +640,15 @@ function RoomViewInner() {
             }
             const mine = seat.user_id === user.id;
             const muted = seat.is_muted === 1;
+            const speaking = !!seat.user_id && voice.speakingUserIds.includes(seat.user_id);
             return (
               <div key={i} className="flex flex-col items-center rounded-2xl border border-white/10 bg-[#15151d] p-2.5">
-                <div className="relative flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm font-extrabold">
+                <div
+                  className={`relative flex h-12 w-12 items-center justify-center rounded-full text-sm font-extrabold transition-shadow ${
+                    speaking ? "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#15151d]" : ""
+                  }`}
+                  style={{ background: `linear-gradient(135deg, ${room.cover_color}, #7c3aed)` }}
+                >
                   {(seat.display_name ?? "?").slice(0, 1).toUpperCase()}
                   {seat.role === "host" && (
                     <span className="absolute -right-1 -top-1 rounded-full bg-amber-400 p-0.5 text-black"><Crown size={11} /></span>

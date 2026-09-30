@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle, Settings, Users, BarChart3, Bell, ShieldCheck, LayoutDashboard, LogOut, Crown, Gamepad2, Music, Users2, Layers, Activity, Settings2 } from "lucide-react";
+import { Coins, Home, Radio, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle, Settings, Users, BarChart3, Bell, ShieldCheck, LayoutDashboard, LogOut, Crown, Gamepad2, Music, Users2, Layers, Activity, Settings2 } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
@@ -154,7 +154,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return "MS-ROOMS";
   };
 
-  const publicPaths = ["/login"];
+  // "/" is public (the marketing landing), and a signed-in visitor is bounced to
+  // the lobby rather than being shown the logins again.
+  const publicPaths = ["/", "/login"];
   const callPaths = ["/call"];
 
   if (!user) {
@@ -162,9 +164,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return <div className="w-full pb-10">{children}</div>;
   }
 
-  if (pathname === "/") {
-    return <LoginView />;
-  }
+  if (pathname === "/") return <LoginView />;
 
   if (callPaths.some((p) => pathname.startsWith(p))) {
     return <div className="w-full h-full">{children}</div>;
@@ -230,10 +230,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
       <div className="app-main">
         <header className="app-topbar">
-          <Link href="/" className="flex items-center gap-1.5">
-            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain bg-[#0a0a12] ring-1 ring-white/10" />
-            <span className="font-black tracking-tight">MS-ROOMS</span>
-          </Link>
+          <div className="flex min-w-0 items-center gap-2">
+            <Link href="/" aria-label="MS-ROOMS home" className="flex shrink-0 items-center gap-1.5">
+              <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain bg-[#0a0a12] ring-1 ring-white/10" />
+              <span className="hidden font-black tracking-tight sm:inline">MS-ROOMS</span>
+            </Link>
+            {/* Lobby stays one tap away no matter which page you are on. */}
+            <Link
+              href="/lobby"
+              className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-bold ${
+                pathname.startsWith("/lobby") ? "bg-white text-black" : "bg-white/5 text-white/70 hover:bg-white/10"
+              }`}
+            >
+              <Radio size={13} /> Lobby
+            </Link>
+          </div>
           <div className="flex items-center gap-2">
             <Link href="/calls" aria-label="Calls" className="relative rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Phone size={16} />

@@ -3,271 +3,411 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { Apple, Smartphone, Gamepad2, Mic, Crown, Gift, Star, Quote, Shield, Users, Headset, Sparkles, ArrowRight } from "lucide-react";
+import {
+  Apple,
+  Smartphone,
+  Mic,
+  Gift,
+  Gamepad2,
+  Swords,
+  Coins,
+  Radio,
+  Sparkles,
+  ArrowRight,
+  Shield,
+  Headset,
+  MessagesSquare,
+  Video,
+} from "lucide-react";
 import { useSession } from "@/stores/useSession";
 
-// Public landing (index) — lives OUTSIDE the lobby (/lobby).
-// Feature-led hero + auth CTA top-left: authed users see "Go to Lobby",
-// guests see "Sign Up / Log In". Dark theme.
-const REVIEWS = [
-  { name: "Alya R.", stars: 5, text: "Finally a voice party I can join from my laptop! No install, just click and talk. Rooms feel alive.", date: "2 days ago", tag: "Web UI" },
-  { name: "Khaled M.", stars: 5, text: "Gifts and PK battles are crazy fun. I earned gems hosting and my XP actually unlocks frames.", date: "1 week ago", tag: "Host" },
-  { name: "Sofia L.", stars: 4, text: "Love the karaoke rooms and Ludo inside the voice chat. Would love more themes but super smooth.", date: "3 days ago", tag: "Games" },
-  { name: "Omar J.", stars: 5, text: "Phone + Google sign-in works everywhere. Started on web, continued on Android — all coins followed me.", date: "5 days ago", tag: "Cross-device" },
-  { name: "Noura S.", stars: 4, text: "Support replied in hours when my top-up was late. The 10% bonus is real — 27.5k for $5!", date: "1 week ago", tag: "Support" },
-  { name: "Dev P.", stars: 5, text: "Best audio quality on Cloudflare. No lag even with 12 seats. The web game is a killer differentiator.", date: "4 days ago", tag: "Audio" },
+// Public landing page — shown only to signed-out visitors. Signed-in users are
+// redirected to the lobby (see the effect below and AppShell's route gate).
+//
+// Everything advertised here is something the app actually does today. There
+// are no invented review counts or install numbers: a teaser that lies about
+// the product is worse than no teaser at all.
+
+const STAGE = [
+  { name: "Luna", initials: "L", speaking: true, hue: "#ff2d78" },
+  { name: "Kareem", initials: "K", speaking: false, hue: "#8b5cf6" },
+  { name: "Nour", initials: "N", speaking: true, hue: "#00e5a0" },
+  { name: "Tarek", initials: "T", speaking: false, hue: "#ffc53d" },
+  { name: "Maya", initials: "M", speaking: false, hue: "#ff2d78" },
+  { name: "Omar", initials: "O", speaking: true, hue: "#8b5cf6" },
 ];
 
-const SCREENSHOTS = [
-  { title: "Live lobby", desc: "Chill • Music • Karaoke • Games", color: "#5e6579", icon: Users },
-  { title: "8-seat stage", desc: "Tap to take mic, host controls", color: "#7c5948", icon: Mic },
-  { title: "Gifts & Gems", desc: "70% to host as Gems", color: "#7c3aed", icon: Gift },
-  { title: "Ludo + Reaction", desc: "Play without leaving voice", color: "#0ea5e9", icon: Gamepad2 },
+const WAVES = [10, 22, 34, 18, 40, 26, 14, 32, 20, 44, 24, 12, 30, 16, 38, 22];
+
+const ROOM_FEATURES = [
+  {
+    icon: Mic,
+    title: "Eight seats, one stage",
+    body: "Take any empty seat to speak. The room shows who is talking, so nobody talks over anyone. Mute, unmute and leave whenever you want.",
+  },
+  {
+    icon: Gift,
+    title: "Gifts that actually pay the host",
+    body: "Send gifts during a room. The host keeps 70% of every gift as Gems, and everyone earns XP for showing up and playing.",
+  },
+  {
+    icon: Swords,
+    title: "Gift Rush and PK battles",
+    body: "Host a 60-second Gift Rush, or challenge another room to a PK battle. Send the most gift value before the timer runs out.",
+  },
+  {
+    icon: MessagesSquare,
+    title: "Chat, DMs and video calls",
+    body: "Room chat for the moment, direct messages for later. Start a one-to-one voice or video call, and share your screen if you want to.",
+  },
 ];
 
-function Stars({ n }: { n: number }) {
-  return (
-    <span className="flex gap-0.5">
-      {Array.from({ length: 5 }, (_, i) => (
-        <Star key={i} size={12} className={i < n ? "fill-amber-400 text-amber-400" : "text-white/20"} />
-      ))}
-    </span>
-  );
-}
+const GAMES = [
+  { icon: "🎲", name: "Ludo Roll", body: "Roll the dice and push your token around the board." },
+  { icon: "⚡", name: "Reaction", body: "Time how fast you can tap when the panel turns green." },
+  { icon: "🎯", name: "Trivia", body: "Answer questions and beat your own score." },
+  { icon: "🧠", name: "Memory", body: "Flip cards and match every pair in as few moves as you can." },
+];
 
 export default function Home() {
+  const router = useRouter();
   const ready = useSession((s) => s.ready);
   const user = useSession((s) => s.user);
-  const router = useRouter();
 
   useEffect(() => {
-    if (ready && user) {
-      router.replace("/lobby");
-    }
+    if (ready && user) router.replace("/lobby");
   }, [ready, user, router]);
 
-  if (!ready) return <div className="flex justify-center py-20 text-sm text-white/40">Loading…</div>;
-
-  const isAuthed = !!user;
-  const authCta = isAuthed ? (
-    <Link href="/lobby" className="shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-2 text-xs font-bold text-black transition hover:bg-white/85 sm:px-5 sm:text-sm">
-      Go to Lobby <ArrowRight size={14} className="ml-1 inline" />
-    </Link>
-  ) : (
-    <Link href="/login" className="shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-2 text-xs font-bold text-black transition hover:bg-white/85 sm:px-5 sm:text-sm">
-      Sign Up / Log In
-    </Link>
-  );
+  if (!ready) return <div className="flex justify-center py-24 text-sm text-paper-faint">Loading…</div>;
 
   return (
-    <div className="w-full pb-6">
-      {/* Cloud-style top strip: full-width on all devices, inner content capped */}
-      <header className="sticky left-0 right-0 top-0 z-20 w-full border-b border-white/5 bg-[#0d0d12]/90 py-2.5 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-4 sm:gap-3">
+    <div className="min-h-dvh">
+      <header className="sticky top-0 z-30 border-b border-line bg-ink/85 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3">
           <span className="flex shrink-0 items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg bg-black/40 object-contain ring-1 ring-white/10" />
-            <span className="hidden text-sm font-black tracking-tight sm:inline">MS-ROOMS</span>
+            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain ring-1 ring-line-strong" />
+            <span className="font-display text-base font-extrabold tracking-tight">MS-ROOMS</span>
           </span>
-          {authCta}
-          <nav className="ml-auto flex min-w-0 shrink items-center gap-0.5 text-sm font-semibold text-white/55 sm:gap-1" aria-label="Landing">
-            <Link href="#features-top" className="hidden shrink-0 rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white sm:inline">Why play</Link>
-            <Link href="#features" className="hidden shrink-0 rounded-full px-3 py-1.5 hover:bg-white/5 hover:text-white sm:inline">Features</Link>
-            <Link href="/wallet" className="shrink-0 whitespace-nowrap rounded-full px-2 py-1.5 hover:bg-white/5 hover:text-white sm:px-3">Pricing</Link>
-            <Link href="#download" className="shrink-0 whitespace-nowrap rounded-full px-2 py-1.5 hover:bg-white/5 hover:text-white sm:px-3">Download</Link>
+          <nav className="ml-auto flex items-center gap-1 text-sm font-semibold">
+            <a href="#how" className="hidden rounded-full px-3 py-1.5 text-paper-dim transition hover:bg-white/5 hover:text-paper sm:block">
+              How it works
+            </a>
+            <a href="#games" className="hidden rounded-full px-3 py-1.5 text-paper-dim transition hover:bg-white/5 hover:text-paper sm:block">
+              Games
+            </a>
+            <a href="#apps" className="hidden rounded-full px-3 py-1.5 text-paper-dim transition hover:bg-white/5 hover:text-paper sm:block">
+              Apps
+            </a>
+            <Link
+              href="/login"
+              className="rounded-full bg-paper px-4 py-2 text-sm font-bold text-ink transition hover:bg-paper/85"
+            >
+              Sign in
+            </Link>
           </nav>
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-5xl space-y-10 px-4 pt-6">
-      {/* Hero — what it is + why to sign up and play */}
-      <section id="features-top" className="relative overflow-hidden rounded-3xl border border-white/10 bg-[#15151d] p-6 sm:p-10">
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:24px_24px] opacity-30" aria-hidden />
-        <div className="relative">
-          <p className="inline-flex items-center gap-1.5 rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-xs font-bold text-violet-200">
-            <Mic size={14} /> Live voice parties in your browser
-          </p>
-          <h1 className="mt-4 max-w-2xl text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">
-            Grab a mic. Join a room. Play.
-          </h1>
-          <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/60 sm:text-base">
-            MS-ROOMS is live audio rooms with gifts, games, and leaderboards — no install.
-            Sign up free with phone, email, or Google, get <span className="font-bold text-white">100 coins to start</span>,
-            take a mic seat, and play Ludo without leaving the voice.
-          </p>
-          <div className="mt-6 flex flex-wrap items-center gap-2">
-            {isAuthed ? (
-              <Link href="/lobby" className="rounded-full bg-white px-6 py-3 text-sm font-bold text-black hover:bg-white/85">
-                Go to Lobby{user?.display_name ? ` — ${user.display_name}` : ""}
+      {/* ---- Hero. The one bold moment: a live stage, because the product IS a stage. ---- */}
+      <section className="mx-auto w-full max-w-6xl px-5 pt-14 pb-16 sm:pt-20">
+        <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_1fr]">
+          <div>
+            <span className="inline-flex items-center gap-2 rounded-full border border-live/30 bg-live/10 px-3 py-1 text-xs font-bold text-live">
+              <Radio size={13} /> Live rooms, right now
+            </span>
+
+            <h1 className="mt-5 text-4xl font-extrabold leading-[1.05] sm:text-5xl lg:text-6xl">
+              Grab a mic.
+              <br />
+              Join a room.
+              <br />
+              <span className="text-live">Play.</span>
+            </h1>
+
+            <p className="mt-5 max-w-[52ch] text-base leading-relaxed text-paper-dim sm:text-lg">
+              MS-ROOMS is a live voice party app that runs in your browser. Take a seat on
+              stage, talk to the room, send gifts, play games together and call your friends
+              one to one. Nothing to install.
+            </p>
+
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Link
+                href="/login"
+                className="group inline-flex items-center gap-2 rounded-full bg-live px-6 py-3.5 text-sm font-extrabold text-white transition hover:bg-live/90 active:scale-[0.98]"
+              >
+                Create a free account
+                <ArrowRight size={16} className="transition-transform group-hover:translate-x-0.5" />
               </Link>
-            ) : (
-              <Link href="/login" className="rounded-full bg-white px-6 py-3 text-sm font-bold text-black hover:bg-white/85">
-                Sign Up / Log In — play in seconds
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-2 rounded-full border border-line-strong px-6 py-3.5 text-sm font-bold text-paper transition hover:bg-white/5"
+              >
+                Sign in
               </Link>
-            )}
-            <a href="#download" className="rounded-full border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-white/75 hover:bg-white/10">
-              <span className="inline-flex items-center gap-1.5"><Smartphone size={14} /> Get the app</span>
-            </a>
-            <Link href="/wallet" className="rounded-full border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-white/75 hover:bg-white/10">
-              See pricing
-            </Link>
-          </div>
-          <div className="mt-4 flex items-center gap-2 text-xs text-white/40">
-            <Stars n={5} />
-            <span className="font-bold text-white/60">4.82</span>
-            <span>559+ reviews • 77k+ installs • 10% more value</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Why play here */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="rounded-3xl border border-white/10 bg-[#15151d] p-5">
-          <Gift size={18} className="text-amber-300" />
-          <p className="mt-2 text-2xl font-black">Free <span className="text-sm font-bold text-white/50">to start</span></p>
-          <p className="mt-1 text-sm text-white/55">100 coins on signup plus daily check-in rewards — enough to gift and play from day one.</p>
-        </div>
-        <div className="rounded-3xl border border-white/10 bg-[#15151d] p-5">
-          <Sparkles size={18} className="text-violet-300" />
-          <p className="mt-2 text-2xl font-black">Instant <span className="text-sm font-bold text-white/50">play</span></p>
-          <p className="mt-1 text-sm text-white/55">Rooms, mic seats, and Ludo run right in the browser. Apps for iOS and Android when you want them.</p>
-        </div>
-        <div className="rounded-3xl border border-white/10 bg-[#15151d] p-5">
-          <Crown size={18} className="text-emerald-300" />
-          <p className="mt-2 text-2xl font-black">Fair <span className="text-sm font-bold text-white/50">rewards</span></p>
-          <p className="mt-1 text-sm text-white/55">Hosts keep 70% of gifts as gems, XP unlocks frames and crowns, recharges pay 10% more coins.</p>
-        </div>
-      </section>
-
-      <section id="features" className="rounded-3xl border border-white/10 bg-[#15151d] p-6">
-        <p className="text-xs font-bold uppercase tracking-widest text-violet-300">Who we are</p>
-        <h2 className="mt-1 text-xl font-black tracking-tight">A small team obsessed with voice.</h2>
-        <p className="mt-2 text-sm leading-relaxed text-white/60">
-          We&apos;re MS-ROOMS — a studio portfolio turning party vibes into an open web. Live audio homes where every
-          voice deserves to be heard: intimate rooms, playful gifts, fair 70% host gems, and XP that unlocks frames
-          and leaderboard crowns. Small team, real support (see{" "}
-          <Link href="/support" className="underline decoration-violet-400/50">Support Desk</Link>).
-        </p>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl bg-white/[0.04] p-4">
-            <Mic size={18} className="text-violet-300" />
-            <p className="mt-2 text-sm font-bold">Cloudflare Realtime</p>
-            <p className="text-xs text-white/50">Low-latency voice on Cloudflare Calls SFU + TURN. 8–12 seats, mute/lock, host controls.</p>
-          </div>
-          <div className="rounded-2xl bg-white/[0.04] p-4">
-            <Gamepad2 size={18} className="text-fuchsia-300" />
-            <p className="mt-2 text-sm font-bold">Usable Web UI + Games</p>
-            <p className="text-xs text-white/50">A real web app you can use <span className="font-bold text-white">without install</span>, with embedded Ludo &amp; Reaction that don&apos;t break the voice.</p>
-          </div>
-          <div className="rounded-2xl bg-white/[0.04] p-4">
-            <Crown size={18} className="text-amber-300" />
-            <p className="mt-2 text-sm font-bold">Fair economy</p>
-            <p className="text-xs text-white/50">Coins (hard), Gems (70% to hosts, redeemable), XP (badges). 10% cheaper than market: 27.5k / $5 vs 25k.</p>
-          </div>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {isAuthed ? (
-            <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Go to Lobby → live rooms</Link>
-          ) : (
-            <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Sign Up / Log In → live rooms</Link>
-          )}
-          <Link href="/wallet" className="rounded-full bg-white/5 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/10">See pricing</Link>
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-end justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Screenshots</h2>
-          <span className="text-xs text-white/30">Web UI • not just app APK</span>
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {SCREENSHOTS.map((s) => (
-            <div key={s.title} className="overflow-hidden rounded-3xl border border-white/10 bg-[#15151d]">
-              <div className="flex h-36 items-center justify-center" style={{ background: `linear-gradient(135deg, ${s.color}, #0d0d12)` }}>
-                <s.icon size={34} className="text-white/85" />
-              </div>
-              <div className="p-3">
-                <p className="text-sm font-bold">{s.title}</p>
-                <p className="text-xs text-white/45">{s.desc}</p>
-              </div>
             </div>
-          ))}
+
+            <p className="mt-4 text-sm text-paper-faint">
+              New accounts start with 100 coins and a 100 coin daily check-in.
+            </p>
+          </div>
+
+          {/* Live stage visual */}
+          <div className="relative rounded-[2rem] border border-line bg-ink-raised p-6">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <span className="live-dot inline-block h-2 w-2 rounded-full bg-live" />
+                Late Check-In
+              </span>
+              <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs font-semibold text-paper-dim">
+                Chill
+              </span>
+            </div>
+
+            <div className="mt-5 grid grid-cols-3 gap-3">
+              {STAGE.map((s) => (
+                <div key={s.name} className="flex flex-col items-center gap-2">
+                  <div
+                    className={`relative flex h-14 w-14 items-center justify-center rounded-full text-lg font-extrabold text-white ${
+                      s.speaking ? "ring-2 ring-join ring-offset-2 ring-offset-ink-raised" : ""
+                    }`}
+                    style={{ background: `linear-gradient(135deg, ${s.hue}, #2a2a3d)` }}
+                  >
+                    {s.initials}
+                  </div>
+                  <span className="max-w-full truncate text-xs font-semibold text-paper-dim">{s.name}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 flex h-14 items-end justify-center gap-1.5 rounded-2xl bg-black/25 px-4">
+              {WAVES.map((h, i) => (
+                <span
+                  key={i}
+                  className="wave-bar w-1.5 rounded-full bg-live"
+                  style={{ height: `${h}px`, animationDelay: `${i * 70}ms` }}
+                />
+              ))}
+            </div>
+
+            <div className="mt-5 flex items-center justify-between rounded-2xl bg-black/25 px-4 py-3">
+              <span className="flex items-center gap-2 text-sm font-bold text-coin">
+                <Coins size={15} /> 2,480
+              </span>
+              <span className="flex items-center gap-2 text-sm font-semibold text-paper-dim">
+                <Gift size={15} /> Nadia sent 🚀
+              </span>
+            </div>
+          </div>
         </div>
-        <p className="mt-2 text-center text-xs text-white/30">Swipe lobby → take a mic seat → send gifts → play — all inside the browser.</p>
       </section>
 
-      <section className="rounded-3xl border border-fuchsia-400/20 bg-gradient-to-br from-fuchsia-500/10 to-violet-500/10 p-6">
-        <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-fuchsia-200"><Gamepad2 size={13} /> Our main difference: usable web game</p>
-        <h3 className="mt-1 text-lg font-black">Voice + play, no download.</h3>
-        <p className="mt-1 text-sm text-white/60">Ludo dice + Reaction tap run directly in the room pane. Try it after you <Link href="/lobby" className="underline">open the lobby</Link>.</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {isAuthed ? (
-            <Link href="/lobby" className="rounded-full bg-white px-4 py-2 text-xs font-bold text-black">Play now — open lobby</Link>
-          ) : (
-            <Link href="/login" className="rounded-full bg-white px-4 py-2 text-xs font-bold text-black">Sign up to play</Link>
-          )}
-          <Link href="/lobby" className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold text-white">Browse rooms</Link>
+      {/* ---- How it works ---- */}
+      <section id="how" className="border-t border-line bg-ink-raised/40">
+        <div className="mx-auto w-full max-w-6xl px-5 py-16">
+          <h2 className="max-w-[24ch] text-2xl font-extrabold sm:text-3xl">What a room actually feels like</h2>
+          <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-paper-dim sm:text-base">
+            Every room is a live stage with eight seats. Listeners can sit back and listen, or
+            grab a seat and join the conversation.
+          </p>
+
+          <div className="mt-9 grid gap-4 sm:grid-cols-2">
+            {ROOM_FEATURES.map((f) => (
+              <div key={f.title} className="rounded-3xl border border-line bg-ink-raised p-5">
+                <f.icon size={20} className="text-live" />
+                <h3 className="mt-3 text-base font-bold">{f.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-paper-dim">{f.body}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section className="rounded-3xl border border-white/10 bg-[#15151d] p-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Reviews</h2>
-          <span className="flex items-center gap-1.5 text-xs text-white/50"><Star size={12} className="fill-amber-400 text-amber-400" /> 4.8 • 559 reviews • 50k+ installs</span>
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {REVIEWS.map((r) => (
-            <div key={r.name} className="rounded-2xl bg-white/[0.04] p-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-bold">{r.name}</p>
-                <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/50">{r.tag}</span>
-              </div>
-              <div className="mt-1 flex items-center gap-2">
-                <Stars n={r.stars} />
-                <span className="text-xs text-white/40">{r.date}</span>
-              </div>
-              <p className="mt-2 flex gap-1.5 text-sm leading-relaxed text-white/75">
-                <Quote size={14} className="mt-0.5 shrink-0 text-white/20" /> {r.text}
+      {/* ---- Games ---- */}
+      <section id="games" className="border-t border-line">
+        <div className="mx-auto w-full max-w-6xl px-5 py-16">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-extrabold sm:text-3xl">Games you can play mid-conversation</h2>
+              <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-paper-dim sm:text-base">
+                Play without leaving the room. The voice never drops while you do.
               </p>
             </div>
-          ))}
+            <Gamepad2 size={28} className="text-paper-faint" />
+          </div>
+
+          <div className="mt-9 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {GAMES.map((g) => (
+              <div key={g.name} className="rounded-3xl border border-line bg-ink-raised p-5">
+                <span className="text-3xl" aria-hidden>
+                  {g.icon}
+                </span>
+                <h3 className="mt-3 text-base font-bold">{g.name}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-paper-dim">{g.body}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section id="download" className="rounded-3xl border border-white/10 bg-gradient-to-br from-violet-600/15 to-fuchsia-600/10 p-6 text-center">
-        <h2 className="text-xl font-black tracking-tight">Get the app — or just use the web.</h2>
-        <p className="mx-auto mt-1 max-w-xl text-sm text-white/60">Native when you want it, web when you need it. Same login, same coins/gems/XP everywhere. 10% more value than market on every recharge.</p>
-        <div className="mt-4 flex flex-col justify-center gap-2 sm:flex-row">
-          <a href="#" aria-label="Download for iOS" onClick={(e) => e.preventDefault()}
-            className="flex items-center justify-center gap-2 rounded-2xl bg-black px-6 py-3 text-sm font-bold text-white ring-1 ring-white/10 hover:bg-black/80">
-            <Apple size={18} /> Download for iOS <span className="text-xs font-normal text-white/60">App Store — soon</span>
-          </a>
-          <a href="#" aria-label="Download for Android" onClick={(e) => e.preventDefault()}
-            className="flex items-center justify-center gap-2 rounded-2xl bg-black px-6 py-3 text-sm font-bold text-white ring-1 ring-white/10 hover:bg-black/80">
-            <Smartphone size={18} /> Download for Android <span className="text-xs font-normal text-white/60">Play — soon</span>
-          </a>
-        </div>
-        <p className="mt-2 text-xs text-white/30">Placeholders until store review — web app is live now at <Link href="/lobby" className="underline">/lobby</Link>.</p>
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
-          {isAuthed ? (
-            <Link href="/lobby" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Go to Lobby — live now</Link>
-          ) : (
-            <Link href="/login" className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-black hover:bg-white/85">Create account — free 100 coins</Link>
-          )}
-          <Link href="/wallet" className="rounded-full bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/15">See 10% bonus pricing</Link>
+      {/* ---- Web app ---- */}
+      <section id="web" className="border-t border-line bg-ink-raised/40">
+        <div className="mx-auto grid w-full max-w-6xl items-center gap-10 px-5 py-16 lg:grid-cols-2">
+          <div>
+            <span className="inline-flex items-center gap-2 rounded-full border border-join/30 bg-join/10 px-3 py-1 text-xs font-bold text-join">
+              <Sparkles size={13} /> No download needed
+            </span>
+            <h2 className="mt-4 text-2xl font-extrabold sm:text-3xl">The whole app, in your browser</h2>
+            <p className="mt-3 max-w-[54ch] text-sm leading-relaxed text-paper-dim sm:text-base">
+              Sign in on a laptop and you get the full game: lobby, rooms, gifts, games, chat,
+              voice and video calls. Audio runs on Cloudflare&apos;s global network, so a room
+              sounds the same whether you are on fast fibre or a phone hotspot.
+            </p>
+            <ul className="mt-6 space-y-2.5">
+              {[
+                "Voice rooms for up to eight people on stage",
+                "Voice and video one-to-one calls with screen sharing",
+                "Coins, Gems and XP that follow your account",
+                "Works on Chrome, Edge, Safari and Firefox",
+              ].map((line) => (
+                <li key={line} className="flex items-start gap-2.5 text-sm text-paper-dim">
+                  <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-join" />
+                  {line}
+                </li>
+              ))}
+            </ul>
+            <Link
+              href="/login"
+              className="mt-7 inline-flex items-center gap-2 rounded-full bg-paper px-6 py-3 text-sm font-extrabold text-ink transition hover:bg-paper/85"
+            >
+              Open the web app
+              <ArrowRight size={16} />
+            </Link>
+          </div>
+
+          <div className="rounded-[2rem] border border-line bg-ink-raised p-6">
+            <p className="text-xs font-semibold text-paper-faint">Room controls</p>
+            <div className="mt-4 grid grid-cols-4 gap-3">
+              {STAGE.slice(0, 4).map((s) => (
+                <div key={s.name} className="flex flex-col items-center gap-2">
+                  <div
+                    className={`flex h-12 w-12 items-center justify-center rounded-full text-base font-extrabold text-white ${
+                      s.speaking ? "ring-2 ring-join" : ""
+                    }`}
+                    style={{ background: `linear-gradient(135deg, ${s.hue}, #2a2a3d)` }}
+                  >
+                    {s.initials}
+                  </div>
+                  <span className="truncate text-[11px] font-semibold text-paper-dim">{s.name}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 flex items-center gap-2">
+              <span className="flex items-center gap-2 rounded-full bg-join/15 px-3 py-2 text-xs font-bold text-join">
+                <Mic size={13} /> Mic on
+              </span>
+              <span className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-2 text-xs font-semibold text-paper-dim">
+                <Gift size={13} /> Gift
+              </span>
+              <span className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-2 text-xs font-semibold text-paper-dim">
+                <Video size={13} /> Call
+              </span>
+            </div>
+          </div>
         </div>
       </section>
 
-      <footer className="rounded-3xl border border-white/5 bg-black/20 p-4 text-center text-xs leading-relaxed text-white/35">
-        <p className="flex flex-wrap items-center justify-center gap-2">
-          <span className="flex items-center gap-1"><Headset size={12} /> Support</span>
-          <Link href="/support" className="underline">Help desk</Link> • <Link href="/admin" className="underline">Admin</Link> • <Link href="/wallet" className="underline">Pricing</Link> • <Link href="/lobby" className="underline">Lobby</Link>
-        </p>
-        <p className="mt-1 flex flex-wrap items-center justify-center gap-2">
-          <Shield size={12} /> © MS-ROOMS — portfolio + live voice. Built web-first.
-        </p>
+      {/* ---- Native apps ---- */}
+      <section id="apps" className="border-t border-line">
+        <div className="mx-auto w-full max-w-6xl px-5 py-16">
+          <h2 className="text-2xl font-extrabold sm:text-3xl">Android and iPhone apps are on the way</h2>
+          <p className="mt-3 max-w-[62ch] text-sm leading-relaxed text-paper-dim sm:text-base">
+            We are building native MS-ROOMS apps for Android and iPhone. They are still in
+            development and not released yet, so there is nothing to download today. Everything
+            below is what we are targeting for the first public release.
+          </p>
+
+          <div className="mt-9 grid gap-4 sm:grid-cols-2">
+            {[
+              {
+                icon: Smartphone,
+                name: "Android",
+                note: "In development",
+                points: [
+                  "Native app with the same rooms, gifts and games",
+                  "Push notifications for rooms your friends are in",
+                  "Lockscreen and Bluetooth controls for the mic",
+                ],
+              },
+              {
+                icon: Apple,
+                name: "iPhone",
+                note: "In development",
+                points: [
+                  "Native app tuned for iOS audio and background handling",
+                  "Same accounts, coins and Gems as the web app",
+                  "Widgets for jumping straight into a live room",
+                ],
+              },
+            ].map((app) => (
+              <div key={app.name} className="rounded-3xl border border-line bg-ink-raised p-6">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2.5">
+                    <app.icon size={20} className="text-paper-dim" />
+                    <span className="font-display text-lg font-extrabold">{app.name}</span>
+                  </span>
+                  <span className="rounded-full border border-coin/30 bg-coin/10 px-2.5 py-1 text-[11px] font-bold text-coin">
+                    {app.note}
+                  </span>
+                </div>
+                <ul className="mt-5 space-y-2">
+                  {app.points.map((p) => (
+                    <li key={p} className="flex items-start gap-2.5 text-sm text-paper-dim">
+                      <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-coin" />
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-5 text-xs text-paper-faint">
+                  Nothing to install yet. Use the web app in the meantime.
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ---- Closing CTA ---- */}
+      <section className="border-t border-line bg-ink-raised/40">
+        <div className="mx-auto w-full max-w-3xl px-5 py-20 text-center">
+          <h2 className="text-2xl font-extrabold sm:text-3xl">Start with 100 coins</h2>
+          <p className="mx-auto mt-3 max-w-[46ch] text-sm leading-relaxed text-paper-dim sm:text-base">
+            Make an account, open a room, take a seat. It takes about a minute.
+          </p>
+          <Link
+            href="/login"
+            className="mt-7 inline-flex items-center gap-2 rounded-full bg-live px-7 py-4 text-sm font-extrabold text-white transition hover:bg-live/90 active:scale-[0.98]"
+          >
+            Create your account
+            <ArrowRight size={16} />
+          </Link>
+        </div>
+      </section>
+
+      <footer className="border-t border-line">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-8 text-xs text-paper-faint">
+          <span className="flex items-center gap-2">
+            <Shield size={12} /> MS-ROOMS
+          </span>
+          <nav className="flex items-center gap-4">
+            <Link href="/login" className="transition hover:text-paper">Sign in</Link>
+            <Link href="/support" className="transition hover:text-paper">Support</Link>
+            <span className="flex items-center gap-1.5">
+              <Headset size={12} /> Audio on Cloudflare
+            </span>
+          </nav>
+        </div>
       </footer>
-      </div>
     </div>
   );
 }

@@ -639,3 +639,46 @@ export interface PrivateCallStatus {
 export async function privateCallStatus(roomId: string): Promise<PrivateCallStatus> {
   return req(`/api/rooms/private-call/status?room_id=${encodeURIComponent(roomId)}`, { cache: "no-store" });
 }
+
+// ---- WebRTC signaling (Cloudflare TURN media path) ----
+// TURN relays media, but peers still exchange SDP/ICE through these endpoints.
+export type SignalKind = "offer" | "answer" | "ice" | "bye" | "renegotiate";
+
+export interface SignalMessage {
+  id: string;
+  from: string;
+  kind: SignalKind;
+  payload: string;
+}
+
+export async function publishSignal(input: {
+  room_id: string;
+  to_user_id: string;
+  kind: SignalKind;
+  payload: string;
+}): Promise<void> {
+  await req(`/api/signal/publish`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function pollSignals(roomId: string): Promise<SignalMessage[]> {
+  const data = await req<{ signals?: SignalMessage[] }>(
+    `/api/signal/poll?room_id=${encodeURIComponent(roomId)}`,
+    { cache: "no-store" }
+  );
+  return data.signals ?? [];
+}
+
+export interface SignalPeer {
+  user_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  is_muted: number;
+}
+
+export async function signalPeers(roomId: string): Promise<SignalPeer[]> {
+  const data = await req<{ peers?: SignalPeer[] }>(
+    `/api/signal/peers?room_id=${encodeURIComponent(roomId)}`,
+    { cache: "no-store" }
+  );
+  return data.peers ?? [];
+}

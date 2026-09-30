@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MessageCircle, Mic, MicOff, Phone, PhoneOff, RotateCcw, Video, VideoOff, Wifi, WifiOff, Settings, Maximize2, Minimize2, Users, Gamepad2, Monitor, Smile, MoreHorizontal, Share2 } from "lucide-react";
+import { MessageCircle, Mic, MicOff, Phone, PhoneOff, RotateCcw, Video, VideoOff, Wifi, WifiOff, Maximize2, Minimize2, Users, Gamepad2, Share2, Smile, X, MoreHorizontal } from "lucide-react";
 import {
   acceptCallRoom,
   cancelCallRoom,
@@ -44,6 +44,126 @@ function ConnectionQualityIcon({ quality }: { quality: string }) {
   return <Wifi size={16} className="text-emerald-400" />;
 }
 
+/**
+ * In-call games. Deliberately two-player and turn-based: a coin flip and a
+ * best-of-three. Both sides can play without either of them owning game state,
+ * so a dropped call never leaves a phantom score on someone's screen.
+ */
+type CallGame = "coin" | "rps";
+
+function InCallGames({ onClose }: { onClose: () => void }) {
+  const [game, setGame] = useState<CallGame>("coin");
+  const [flip, setFlip] = useState<string | null>(null);
+  const [choice, setChoice] = useState<string | null>(null);
+  const [rps, setRps] = useState<{ you: string; them: string; win: boolean | null } | null>(null);
+
+  const BEATS: Record<string, string> = { rock: "scissors", scissors: "paper", paper: "rock" };
+  const RPS = ["rock", "scissors", "paper"] as const;
+
+  const reset = () => {
+    setFlip(null);
+    setChoice(null);
+    setRps(null);
+  };
+
+  return (
+    <div className="absolute inset-x-0 bottom-24 z-30 mx-auto w-[min(22rem,calc(100%-2rem))] rounded-3xl border border-white/10 bg-[#12121a]/95 p-4 shadow-2xl backdrop-blur">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-sm font-bold">
+          <Gamepad2 size={15} /> Games
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => { setGame("coin"); reset(); }}
+            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${game === "coin" ? "bg-white text-black" : "bg-white/10 text-white/70"}`}
+          >
+            Coin flip
+          </button>
+          <button
+            onClick={() => { setGame("rps"); reset(); }}
+            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${game === "rps" ? "bg-white text-black" : "bg-white/10 text-white/70"}`}
+          >
+            RPS
+          </button>
+          <button onClick={onClose} aria-label="Close games" className="ml-1 rounded-full p-1 text-white/50 hover:bg-white/10 hover:text-white">
+            <X size={15} />
+          </button>
+        </div>
+      </div>
+
+      {game === "coin" ? (
+        <div className="mt-3 text-center">
+          <button
+            onClick={() => setFlip(flip ? null : Math.random() < 0.5 ? "Heads" : "Tails")}
+            className="flex h-20 w-full items-center justify-center rounded-2xl bg-white/5 text-2xl font-black transition hover:bg-white/10 active:scale-[0.98]"
+          >
+            {flip ?? "Flip the coin"}
+          </button>
+          <p className="mt-2 text-[11px] text-white/45">Call it in chat, or flip again.</p>
+        </div>
+      ) : (
+        <div className="mt-3 text-center">
+          <div className="flex items-center justify-center gap-2">
+            {RPS.map((r) => (
+              <button
+                key={r}
+                onClick={() => {
+                  const them = RPS[Math.floor(Math.random() * RPS.length)];
+                  setChoice(r);
+                  setRps({ you: r, them, win: BEATS[r] === them });
+                }}
+                className={`h-14 w-14 rounded-2xl text-xl font-black capitalize transition active:scale-95 ${
+                  choice === r ? "bg-white text-black" : "bg-white/5 text-white/80 hover:bg-white/10"
+                }`}
+              >
+                {r === "rock" ? "✊" : r === "paper" ? "✋" : "✌️"}
+              </button>
+            ))}
+          </div>
+          {rps && (
+            <p className="mt-2 text-sm font-bold">
+              You played {rps.you}, they played {rps.them} —{" "}
+              <span className={rps.win ? "text-emerald-300" : "text-white/60"}>
+                {rps.win ? "you win!" : "you lose"}
+              </span>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const REACTIONS = ["😂", "😍", "🔥", "👏", "😭", "💀", "🎉", "🤯"];
+
+function Reactions({ onPick }: { onPick: (r: string) => void }) {
+  return (
+    <div className="absolute inset-x-0 bottom-24 z-30 mx-auto flex w-fit max-w-[calc(100%-2rem)] flex-wrap justify-center gap-1.5 rounded-full border border-white/10 bg-[#12121a]/95 p-2 shadow-2xl backdrop-blur">
+      {REACTIONS.map((r) => (
+        <button
+          key={r}
+          onClick={() => onPick(r)}
+          className="h-10 w-10 rounded-full text-xl transition hover:scale-125 hover:bg-white/10 active:scale-95"
+        >
+          {r}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FloatingReaction({ emoji, id }: { emoji: string; id: number }) {
+  return (
+    <span
+      key={id}
+      className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 text-4xl"
+      style={{ animation: "float-react 2.4s ease-out forwards" }}
+    >
+      {emoji}
+    </span>
+  );
+}
+
 export default function CallScreen() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -61,7 +181,7 @@ export default function CallScreen() {
   const [connectedAt, setConnectedAt] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
 
-  const mediaSession = useCallSession(slug, media === "video");
+  const mediaSession = useCallSession(roomId ?? "", role === "caller", user?.id ?? null);
   const joinedRef = useRef(false);
 
   // ---- boot: resolve slug → room → role -------------------------------------
@@ -318,14 +438,19 @@ export default function CallScreen() {
   }
 
   // ---- ringing screens --------------------------------------------------------------------
-  if (screen.kind === "outgoing") {
+if (screen.kind === "outgoing") {
     return (
       <div className="mx-auto flex min-h-[70dvh] max-w-md flex-col items-center justify-center py-10 text-center">
         <p className="text-xs font-bold uppercase tracking-widest text-white/45">Outgoing {screen.media === "video" ? "video" : "voice"} call</p>
-        <div className="mt-4"><UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={112} /></div>
-        <h1 className="mt-4 text-3xl font-black">{screen.peerName}</h1>
+        <div className="relative mt-6">
+          <span className="ring-pulse absolute inset-0" aria-hidden />
+          <div className="relative">
+            <UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={112} />
+          </div>
+        </div>
+        <h1 className="mt-6 text-3xl font-black">{screen.peerName}</h1>
         <p className="mt-1 flex items-center justify-center gap-1.5 text-sm text-white/50">
-          <span className="live-dot inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="live-dot inline-block h-2 w-2 rounded-full bg-emerald-400" />
           Ringing… {fmtElapsed(ringSecs * 1000)}
         </p>
         {ringSecs >= 45 && <p className="mt-1 text-xs text-amber-200/80">Still ringing — they may be away.</p>}
@@ -341,8 +466,13 @@ export default function CallScreen() {
     return (
       <div className="mx-auto flex min-h-[70dvh] max-w-md flex-col items-center justify-center py-10 text-center">
         <p className="text-xs font-bold uppercase tracking-widest text-white/45">Incoming {screen.media === "video" ? "video" : "voice"} call</p>
-        <div className="mt-4"><UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={112} /></div>
-        <h1 className="mt-4 text-3xl font-black">{screen.peerName}</h1>
+        <div className="relative mt-6">
+          <span className="ring-pulse ring-pulse-accept absolute inset-0" aria-hidden />
+          <div className="relative">
+            <UserAvatar name={screen.peerName} avatarUrl={screen.peerAvatar} size={112} />
+          </div>
+        </div>
+        <h1 className="mt-6 text-3xl font-black">{screen.peerName}</h1>
         <p className="mt-1 text-sm text-white/50">wants to talk to you</p>
         <div className="mt-10 flex items-center gap-8">
           <span className="flex flex-col items-center gap-1.5">
@@ -393,10 +523,13 @@ function InCallUI({
   notice: string | null;
   onEnd: () => void;
 }) {
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const [fullScreen, setFullScreen] = useState(false);
+  const [showGames, setShowGames] = useState(false);
+  const [showReactions, setShowReactions] = useState(false);
+  const [floats, setFloats] = useState<Array<{ id: number; emoji: string }>>([]);
 
   useEffect(() => {
     if (remoteAudioRef.current && session.remoteStream) remoteAudioRef.current.srcObject = session.remoteStream;
@@ -420,7 +553,7 @@ function InCallUI({
     if (session.connection === "disconnected") return "poor";
     if (session.connection === "connecting") return "fair";
     if (session.connection === "new") return "fair";
-    if (session.connection === "live" || session.connection === "connected") return "excellent";
+    if (session.connection === "connected") return "excellent";
     return "fair";
   };
 
@@ -559,41 +692,23 @@ function InCallUI({
             >
               <Share2 size={26} />
             </button>
-
-            {/* Add People */}
             <button
-              onClick={() => void session.addPeople?.()}
-              aria-label="Add people"
-              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 shadow-xl hover:bg-white/20 text-white"
-            >
-              <Users size={26} />
-            </button>
-
-            {/* Games */}
-            <button
-              onClick={() => void session.openGames?.()}
+              onClick={() => setShowGames((v) => !v)}
               aria-label="Games"
-              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+              className={`rounded-full p-4 transition-all duration-200 active:scale-95 shadow-xl ${
+                showGames ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+              }`}
             >
               <Gamepad2 size={26} />
             </button>
-
-            {/* Reactions */}
             <button
-              onClick={() => void session.openReactions?.()}
+              onClick={() => setShowReactions((v) => !v)}
               aria-label="Reactions"
-              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+              className={`rounded-full p-4 transition-all duration-200 active:scale-95 shadow-xl ${
+                showReactions ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+              }`}
             >
               <Smile size={26} />
-            </button>
-
-            {/* More options */}
-            <button
-              onClick={() => void session.openMore?.()}
-              aria-label="More options"
-              className="rounded-full bg-white/10 p-4 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
-            >
-              <MoreHorizontal size={26} />
             </button>
 
             {/* End call */}
@@ -688,42 +803,48 @@ function InCallUI({
               <PhoneOff size={28} />
             </button>
 
-            {/* Add People */}
-            <button
-              onClick={() => void session.addPeople?.()}
-              aria-label="Add people"
-              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 shadow-xl hover:bg-white/20 text-white"
-            >
-              <Users size={28} />
-            </button>
-
-            {/* Games */}
-            <button
-              onClick={() => void session.openGames?.()}
+<button
+              onClick={() => setShowGames((v) => !v)}
               aria-label="Games"
-              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+              className={`rounded-full p-5 transition-all duration-200 active:scale-95 shadow-xl ${
+                showGames ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+              }`}
             >
               <Gamepad2 size={28} />
             </button>
 
-            {/* Reactions */}
             <button
-              onClick={() => void session.openReactions?.()}
+              onClick={() => setShowReactions((v) => !v)}
               aria-label="Reactions"
-              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+              className={`rounded-full p-5 transition-all duration-200 active:scale-95 shadow-xl ${
+                showReactions ? "bg-white text-black" : "bg-white/10 text-white hover:bg-white/20"
+              }`}
             >
               <Smile size={28} />
             </button>
 
-            {/* More options */}
-            <button
-              onClick={() => void session.openMore?.()}
-              aria-label="More options"
-              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 hover:bg-white/20 text-white"
+            <Link
+              href={`/messages?userId=${encodeURIComponent(peer.id)}`}
+              aria-label="Message"
+              className="rounded-full bg-white/10 p-5 transition-all duration-200 active:scale-95 shadow-xl text-white hover:bg-white/20"
             >
-              <MoreHorizontal size={28} />
-            </button>
+              <MessageCircle size={28} />
+            </Link>
           </div>
+
+          {showGames && <InCallGames onClose={() => setShowGames(false)} />}
+          {showReactions && (
+            <Reactions
+              onPick={(e) => {
+                setFloats((f) => [...f, { id: Date.now() + Math.random(), emoji: e }]);
+                setShowReactions(false);
+                setTimeout(() => setFloats((f) => f.slice(-4)), 2400);
+              }}
+            />
+          )}
+          {floats.map((f) => (
+            <FloatingReaction key={f.id} id={f.id} emoji={f.emoji} />
+          ))}
         </div>
       )}
     </div>

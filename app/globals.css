@@ -1,19 +1,59 @@
 @import "tailwindcss";
 
+/*
+ * MS-ROOMS design tokens.
+
+ * Dark is a functional choice here, not a default: this is a late-night social
+ * product and the neon-on-black look is what the category reads as "live". So
+ * the base is a true near-black rather than a tinted grey, and accents are
+ * semantic rather than decorative — each one means something:
+ *
+ *   live/pink    something is happening right now (on air, ringing, gifting)
+ *   join/mint    you are connected (mic on, peer connected, balance healthy)
+ *   coin/gold    currency and rewards
+ *   arc/violet   brand chrome and primary actions
+ */
 :root {
   color-scheme: dark;
-  --background: #0d0d12;
-  --foreground: #f7f5f2;
+
+  --ink: #07070b;
+  --ink-raised: #101017;
+  --ink-overlay: #16161f;
+  --ink-line: rgba(255, 255, 255, 0.09);
+  --ink-line-strong: rgba(255, 255, 255, 0.16);
+
+  --paper: #f4f2f8;
+  --paper-dim: rgba(244, 242, 248, 0.62);
+  --paper-faint: rgba(244, 242, 248, 0.38);
+
+  --live: #ff2d78;
+  --join: #00e5a0;
+  --coin: #ffc53d;
+  --arc: #8b5cf6;
+
   --ease-out: cubic-bezier(0.2, 0.9, 0.3, 1);
   --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.2);
-  --duration-fast: 150ms;
-  --duration-normal: 200ms;
-  --duration-slow: 300ms;
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-ink: var(--ink);
+  --color-ink-raised: var(--ink-raised);
+  --color-ink-overlay: var(--ink-overlay);
+  --color-line: var(--ink-line);
+  --color-line-strong: var(--ink-line-strong);
+  --color-paper: var(--paper);
+  --color-paper-dim: var(--paper-dim);
+  --color-paper-faint: var(--paper-faint);
+  --color-live: var(--live);
+  --color-join: var(--join);
+  --color-coin: var(--coin);
+  --color-arc: var(--arc);
+
+  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-body), ui-sans-serif, system-ui, sans-serif;
 }
 
 * {
@@ -25,7 +65,7 @@ html {
   width: 100%;
   max-width: 100vw;
   overflow-x: clip;
-  background: var(--background);
+  background: var(--ink);
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
@@ -35,17 +75,29 @@ body {
   max-width: 100vw;
   overflow-x: clip;
   margin: 0;
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
   background:
-    radial-gradient(600px 320px at 20% -5%, rgba(139, 92, 246, 0.18), transparent 60%),
-    radial-gradient(520px 300px at 90% 0%, rgba(236, 72, 153, 0.12), transparent 60%),
-    var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    radial-gradient(760px 420px at 12% -8%, rgba(255, 45, 120, 0.16), transparent 62%),
+    radial-gradient(620px 380px at 92% 2%, rgba(139, 92, 246, 0.15), transparent 62%),
+    var(--ink);
+  color: var(--paper);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Headings, buttons and anything acting as a display element pick up the
+   brand face. Body copy stays on Outfit. */
+h1,
+h2,
+h3,
+h4,
+.font-display {
+  font-family: var(--font-display), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.02em;
 }
 
 ::selection {
-  background: rgba(251, 191, 36, 0.35);
+  background: rgba(255, 45, 120, 0.35);
 }
 
 /* Professional physics rules */
@@ -287,7 +339,7 @@ select:focus {
   justify-content: space-between;
   padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(13, 13, 18, 0.92);
+  background: var(--ink);
   backdrop-filter: blur(12px);
 }
 
@@ -316,7 +368,7 @@ select:focus {
   padding-left: calc(8px + env(safe-area-inset-left));
   padding-right: calc(8px + env(safe-area-inset-right));
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(13, 13, 18, 0.96);
+  background: var(--ink);
   backdrop-filter: blur(12px);
 }
 
@@ -508,6 +560,58 @@ select:focus {
 /* PK battle bars */
 .pk-bar {
   transition: width 0.8s ease;
+}
+
+/* Call ringing: concentric pulse behind the avatar */
+.ring-pulse::before,
+.ring-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 2px solid rgba(236, 72, 153, 0.6);
+  animation: ring-out 2s cubic-bezier(0.2, 0.8, 0.3, 1) infinite;
+}
+.ring-pulse::after {
+  animation-delay: 1s;
+}
+
+@keyframes ring-out {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+
+.ring-pulse-accept::before,
+.ring-pulse-accept::after {
+  border-color: rgba(16, 185, 129, 0.7);
+}
+
+/* In-call emoji reactions drifting up the screen */
+@keyframes float-react {
+  0% { transform: translate(-50%, 0) scale(0.5); opacity: 0; }
+  15% { transform: translate(-50%, -20px) scale(1.15); opacity: 1; }
+  100% { transform: translate(-50%, -220px) scale(0.9); opacity: 0; }
+}
+
+/* Landing hero: live waveform bars */
+.wave-bar {
+  transform-origin: center;
+  animation: wave 1.1s ease-in-out infinite;
+}
+.wave-bar:nth-child(2n) { animation-duration: 0.8s; }
+.wave-bar:nth-child(3n) { animation-duration: 1.4s; }
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-pulse::before,
+  .ring-pulse::after,
+  .wave-bar {
+    animation: none !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,65 +1,99 @@
 "use client";
 
 /**
- * Cloudflare-native realtime voice layer.
+ * Cloudflare TURN realtime media layer.
  *
- * Entirely on the Cloudflare stack: the Worker backend (`workers/backend.ts`)
- * brokers Cloudflare Calls SFU sessions and short-lived TURN credentials.
- * The browser uses only Web-standard WebRTC (RTCPeerConnection + getUserMedia).
- * No external media servers or third-party SDKs.
+ * Everything runs on Cloudflare: the Worker brokers short-lived TURN
+ * credentials (`GET /api/turn`) and relays WebRTC signaling through D1
+ * (`/api/signal/*`). The browser uses plain WebRTC. No third-party media SDK.
  *
- * When Calls credentials are not configured on the Worker, `getTurnConfig()`
- * reports `configured: false` and the hook runs in local preview mode
- * (microphone level meter only, no remote streaming) instead of failing.
+ * Why signaling at all? TURN solves NAT traversal and gives us a relay, but two
+ * browsers still have to exchange SDP offers/answers and ICE candidates before
+ * a single audio sample moves. That exchange is what `/api/signal` provides, and
+ * it is what makes TURN the actual transport rather than a fallback.
+ *
+ * Topology:
+ *   - 1:1 calls  → a single peer connection (caller always offers).
+ *   - Room audio → full mesh across whoever is on a mic (capped, see MESH_CAP).
+ *
+ * Mesh is the right call at our seat count: every participant sends its own
+ * audio N-1 times, so uplink grows with the room. Past MESH_CAP peers the
+ * additional upstream cost hurts more than the added latency, so we stop
+ * connecting and show the room as "full" instead of silently degrading audio.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, pollSignals, publishSignal, signalPeers, type SignalKind } from "@/lib/api";
 
-export type VoiceStatus = "preview" | "requesting" | "live" | "denied" | "error";
+/** Beyond this many mesh peers we stop adding connections (see file header). */
+export const MESH_CAP = 7;
 
-export interface TurnConfig {
+const POLL_MS = 900;
+const ICE_REPUBLISH_MS = 2500;
+const PEER_REFRESH_MS = 6000;
+const HANGUP_MS = 12_000;
+
+// ---------------------------------------------------------------------------
+// TURN credentials
+// ---------------------------------------------------------------------------
+
+export interface TurnStatus {
   configured: boolean;
-  urls: string[];
-  username: string | null;
-  credential: string | null;
-  iceServers: RTCIceServer[] | null;
   setupHint: string | null;
 }
 
-export async function getTurnConfig(): Promise<TurnConfig> {
+/**
+ * Fetch fresh TURN credentials. Cloudflare mints short-lived username/credential
+ * pairs, so this must run per session rather than being cached forever — a
+ * relay that rejects stale auth silently degrades to direct-only connectivity
+ * and then fails for anyone behind a symmetric NAT.
+ */
+async function fetchIceServers(): Promise<RTCIceServer[]> {
   const res = await fetch(`${API_BASE}/api/turn`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`turn request failed: ${res.status}`);
+  if (!res.ok) return [];
   const data = (await res.json()) as {
-    ok: boolean;
+    ok?: boolean;
     configured?: boolean;
-    turn?: { urls: string[]; username: string; credential: string } | null;
     iceServers?: RTCIceServer[] | null;
     setup?: string;
   };
-  if (!data.ok) throw new Error("Firebase JWK fetch failed");
-  const iceServers = Array.isArray(data.iceServers) && data.iceServers.length > 0 ? data.iceServers : null;
-  return {
-    configured: data.configured === true && (iceServers != null || data.turn != null),
-    urls: data.turn?.urls ?? [],
-    username: data.turn?.username ?? null,
-    credential: data.turn?.credential ?? null,
-    iceServers,
-    setupHint: data.setup ?? null,
-  };
+  if (!data.ok || data.configured !== true) return [];
+  return Array.isArray(data.iceServers) ? data.iceServers : [];
 }
 
-async function postCallsSession(offerSdp: string, room: string): Promise<string | null> {
-  const res = await fetch(`${API_BASE}/api/calls/session`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sdp: offerSdp, room }),
-  });
-  if (res.status === 501) return null; // Calls not configured -> preview mode
-  if (!res.ok) throw new Error(`calls session failed: ${res.status}`);
-  const data = (await res.json()) as { ok: boolean; answer?: string };
-  if (!data.ok || typeof data.answer !== "string") throw new Error("bad calls answer");
-  return data.answer;
+export async function probeTurn(): Promise<TurnStatus> {
+  try {
+    const res = await fetch(`${API_BASE}/api/turn`, { cache: "no-store" });
+    const data = (await res.json()) as { ok?: boolean; configured?: boolean; setup?: string };
+    return { configured: data.ok === true && data.configured === true, setupHint: data.setup ?? null };
+  } catch {
+    return { configured: false, setupHint: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
+function friendlyMediaError(err: unknown, wantVideo: boolean): string {
+  const code = (err as { code?: string })?.code ?? "";
+  const msg = err instanceof Error ? err.message : String(err);
+  if (code === "NotAllowedError" || /permission|denied/i.test(msg)) {
+    return wantVideo
+      ? "Camera and mic are blocked. Allow access in your browser's address bar, then rejoin."
+      : "Microphone is blocked. Allow access in your browser's address bar, then rejoin.";
+  }
+  if (code === "NotFoundError" || /not found/i.test(msg)) {
+    return wantVideo ? "No camera or microphone found on this device." : "No microphone found on this device.";
+  }
+  if (code === "NotReadableError") {
+    return "Your microphone is in use by another app. Close it and try again.";
+  }
+  return msg || "Could not start the microphone.";
 }
 
 function rmsLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): number {
@@ -72,224 +106,305 @@ function rmsLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): numb
   return Math.min(1, Math.sqrt(sum / buffer.length) * 2.5);
 }
 
-export function useCloudflareVoice(roomSlug: string) {
-  const [status, setStatus] = useState<VoiceStatus>("preview");
-  const [micOn, setMicOn] = useState(false);
-  const [level, setLevel] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+/** One shared capture + meter for the whole session; many PCs read from it. */
+function createLocalCapture(wantVideo: boolean) {
+  let disposed = false;
+  const streamPromise = navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: wantVideo
+      ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
+      : false,
+  });
 
-  const streamRef = useRef<MediaStream | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const rafRef = useRef<number>(0);
-  const audioRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; buf: Uint8Array<ArrayBuffer> } | null>(null);
+  let ctx: AudioContext | null = null;
+  let analyser: AnalyserNode | null = null;
+  let buf: Uint8Array<ArrayBuffer> | null = null;
+  let raf = 0;
 
-  const stopMeter = useCallback(() => {
-    cancelAnimationFrame(rafRef.current);
-    audioRef.current?.ctx.close().catch(() => undefined);
-    audioRef.current = null;
-    setLevel(0);
-  }, []);
-
-  const stopAll = useCallback(() => {
-    stopMeter();
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    pcRef.current?.close();
-    pcRef.current = null;
-    setMicOn(false);
-    setStatus("preview");
-  }, [stopMeter]);
-
-  useEffect(() => stopAll, [stopAll]);
-
-  const toggleMic = useCallback(async () => {
-    if (micOn) {
-      stopAll();
-      return;
-    }
-    setError(null);
-    setStatus("requesting");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
-      streamRef.current = stream;
-
-      // Local level meter (works with or without the SFU).
-      const Ctx = window.AudioContext;
-      const ctx = new Ctx();
-      const src = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      src.connect(analyser);
-      const buf = new Uint8Array(analyser.fftSize);
-      audioRef.current = { ctx, analyser, buf };
-      const tick = () => {
-        const a = audioRef.current;
-        if (a) setLevel(rmsLevel(a.analyser, a.buf));
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      tick();
-
-      // Cloudflare path: TURN for NAT traversal + Calls SFU session.
-      // Backend returns `iceServers` verbatim from
-      // rtc.live.cloudflare.com/.../generate-ice-servers (STUN + TURN entries).
-      // Pass them straight to RTCPeerConnection.
-      let iceServers: RTCIceServer[] = [];
-      try {
-        const turn = await getTurnConfig();
-        if (turn.configured && turn.iceServers && turn.iceServers.length > 0) {
-          iceServers = turn.iceServers;
-        } else if (turn.configured && turn.urls.length > 0) {
-          iceServers = [
-            {
-              urls: turn.urls,
-              username: turn.username ?? undefined,
-              credential: turn.credential ?? undefined,
-            },
-          ];
+  return {
+    streamPromise,
+    startMeter(onLevel: (v: number) => void) {
+      void streamPromise.then((stream) => {
+        if (disposed || ctx) return;
+        try {
+          ctx = new AudioContext();
+          const src = ctx.createMediaStreamSource(stream);
+          analyser = ctx.createAnalyser();
+          analyser.fftSize = 512;
+          src.connect(analyser);
+          buf = new Uint8Array(analyser.fftSize);
+          const tick = () => {
+            if (!analyser || !buf) return;
+            onLevel(rmsLevel(analyser, buf));
+            raf = requestAnimationFrame(tick);
+          };
+          tick();
+        } catch {
+          /* meter is cosmetic — never block media on it */
         }
-      } catch {
-        iceServers = [];
-      }
-
-      const pc = new RTCPeerConnection({ iceServers });
-      pcRef.current = pc;
-      stream.getAudioTracks().forEach((t) => pc.addTrack(t, stream));
-
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
-      await pc.setLocalDescription(offer);
-      const answer = await postCallsSession(offer.sdp ?? "", roomSlug);
-      if (answer) {
-        await pc.setRemoteDescription({ type: "answer", sdp: answer });
-        setStatus("live");
-      } else {
-        // Calls not configured: stay in preview mode with local mic pipeline.
-        setStatus("preview");
-      }
-      setMicOn(true);
-    } catch (e) {
-      stopAll();
-      if (e instanceof DOMException && e.name === "NotAllowedError") {
-        setStatus("denied");
-        setError("Microphone permission was denied.");
-      } else {
-        setStatus("error");
-        setError(e instanceof Error ? e.message : "Could not start the microphone.");
-      }
-    }
-  }, [micOn, roomSlug, stopAll]);
-
-  return { status, micOn, level, error, toggleMic, leave: stopAll };
+      });
+    },
+    dispose() {
+      disposed = true;
+      cancelAnimationFrame(raf);
+      void ctx?.close().catch(() => undefined);
+      ctx = null;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
-// 1:1 call media session (voice + video).
-//
-// Unlike the room hook above (mic preview + optional SFU), a call MUST render
-// the remote party: we expose `remoteStream` (attach to <audio>/<video>) and
-// `localStream` (self preview / PiP). Signalling reuses the same Worker
-// broker (POST /api/calls/session) — the SDP simply carries video when the
-// local stream has a camera track.
+// 1:1 calls
+// ---------------------------------------------------------------------------
+
 export type CallPhase = "idle" | "joining" | "live" | "ended" | "error";
 
-export function useCallSession(roomSlug: string, withVideo: boolean) {
+export interface CallSession {
+  phase: CallPhase;
+  error: string | null;
+  micOn: boolean;
+  camOn: boolean;
+  videoMode: boolean;
+  screenShareOn: boolean;
+  localStream: MediaStream | null;
+  remoteStream: MediaStream | null;
+  connection: RTCPeerConnectionState | "new";
+  liveSince: number | null;
+  usingRelay: boolean;
+  join: (wantVideo: boolean) => Promise<void>;
+  toggleMic: () => void;
+  toggleCam: () => void;
+  toggleScreenShare: () => Promise<void>;
+  leave: () => void;
+}
+
+/**
+ * One-to-one call. `roomId` is the private room id and `caller` decides who
+ * offers, so the handshake is deterministic and needs no extra negotiation.
+ */
+export function useCallSession(roomId: string, caller: boolean, myUserId: string | null): CallSession {
   const [phase, setPhase] = useState<CallPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [micOn, setMicOn] = useState(true);
-  const [camOn, setCamOn] = useState(withVideo);
-  const [videoMode, setVideoMode] = useState(withVideo);
+  const [camOn, setCamOn] = useState(false);
+  const [videoMode, setVideoMode] = useState(false);
   const [screenShareOn, setScreenShareOn] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [connection, setConnection] = useState<string>("new");
+  const [connection, setConnection] = useState<RTCPeerConnectionState | "new">("new");
   const [liveSince, setLiveSince] = useState<number | null>(null);
+  const [usingRelay, setUsingRelay] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const withVideoRef = useRef(withVideo);
-  withVideoRef.current = withVideo;
+  const captureRef = useRef<ReturnType<typeof createLocalCapture> | null>(null);
+  const localRef = useRef<MediaStream | null>(null);
+  const screenTrackRef = useRef<MediaStreamTrack | null>(null);
+  const camTrackRef = useRef<MediaStreamTrack | null>(null);
+  const levelCbRef = useRef<((v: number) => void) | null>(null);
+  const closedRef = useRef(false);
 
   const teardown = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+    captureRef.current?.dispose();
+    captureRef.current = null;
+    localRef.current?.getTracks().forEach((t) => t.stop());
+    localRef.current = null;
+    screenTrackRef.current = null;
+    camTrackRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
     setLiveSince(null);
+    setScreenShareOn(false);
+    levelCbRef.current = null;
   }, []);
 
-  useEffect(() => teardown, [teardown]);
+  const join = useCallback(
+    async (wantVideo: boolean) => {
+      teardown();
+      closedRef.current = false;
+      setError(null);
+      setPhase("joining");
+      setVideoMode(wantVideo);
+      setCamOn(wantVideo);
+      setMicOn(true);
 
-  const join = useCallback(async (wantVideo: boolean) => {
-    teardown();
-    setError(null);
-    setPhase("joining");
-    setVideoMode(wantVideo);
-    setCamOn(wantVideo);
-    setMicOn(true);
-    try {
-      // Friendly pre-permission errors (standard rule: never fail silently).
       if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-        throw new Error("This browser can't access the microphone. Try Chrome, Edge, or Safari.");
+        setError("This browser can't access a microphone. Try Chrome, Edge or Safari.");
+        setPhase("error");
+        return;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-        video: wantVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false,
-      });
-      streamRef.current = stream;
-      setLocalStream(stream);
 
-      let iceServers: RTCIceServer[] = [];
+      const capture = createLocalCapture(wantVideo);
+      captureRef.current = capture;
+      levelCbRef.current = null;
+
+      let stream: MediaStream;
       try {
-        const turn = await getTurnConfig();
-        if (turn.configured && turn.iceServers && turn.iceServers.length > 0) {
-          iceServers = turn.iceServers;
-        } else if (turn.configured && turn.urls.length > 0) {
-          iceServers = [{ urls: turn.urls, username: turn.username ?? undefined, credential: turn.credential ?? undefined }];
-        }
-      } catch {
-        iceServers = [];
+        stream = await capture.streamPromise;
+      } catch (e) {
+        if (closedRef.current) return;
+        capture.dispose();
+        setError(friendlyMediaError(e, wantVideo));
+        setPhase("error");
+        return;
+      }
+      if (closedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
 
-      const pc = new RTCPeerConnection({ iceServers });
+      localRef.current = stream;
+      setLocalStream(stream);
+      camTrackRef.current = stream.getVideoTracks()[0] ?? null;
+
+      let ice: RTCIceServer[] = [];
+      try {
+        ice = await fetchIceServers();
+      } catch {
+        ice = [];
+      }
+      if (closedRef.current) return;
+
+      const pc = new RTCPeerConnection({ iceServers: ice, bundlePolicy: "max-bundle" });
       pcRef.current = pc;
+
       const remote = new MediaStream();
       setRemoteStream(remote);
       pc.ontrack = (ev) => {
-        ev.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
+        const s = ev.streams[0];
+        if (s) {
+          s.getTracks().forEach((t) => {
+            if (!remote.getTracks().some((r) => r.id === t.id)) remote.addTrack(t);
+          });
+        } else {
+          remote.addTrack(ev.track);
+        }
       };
-      pc.onconnectionstatechange = () => setConnection(pc.connectionState);
-      stream.getAudioTracks().forEach((t) => pc.addTrack(t, stream));
-      stream.getVideoTracks().forEach((t) => pc.addTrack(t, stream));
+      pc.onconnectionstatechange = () => {
+        setConnection(pc.connectionState);
+        if (pc.connectionState === "connected") {
+          setPhase("live");
+          setLiveSince((t) => t ?? Date.now());
+        }
+        if (pc.connectionState === "failed") {
+          setPhase("error");
+          setError("The connection failed. Both sides may be behind a strict network.");
+        }
+      };
+      // Relay is only chosen after all direct routes fail — this flag tells the
+      // UI whether audio is riding Cloudflare or a direct peer-to-peer path.
+      const signal = async (kind: SignalKind, payload: unknown) => {
+        try {
+          await publishSignal({
+            room_id: roomId,
+            to_user_id: "*",
+            kind,
+            payload: typeof payload === "string" ? payload : JSON.stringify(payload),
+          });
+        } catch {
+          /* the poll loop retries via ICE re-publish */
+        }
+      };
 
-      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: wantVideo });
-      await pc.setLocalDescription(offer);
-      const answer = await postCallsSession(offer.sdp ?? "", roomSlug);
-      if (!answer) throw new Error("Voice service isn't configured yet. Try again later.");
-      await pc.setRemoteDescription({ type: "answer", sdp: answer });
-      setPhase("live");
-      setLiveSince(Date.now());
-    } catch (e) {
-      teardown();
-      if (e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError")) {
-        setError(
-          wantVideo
-            ? "Camera/mic blocked. Tap the camera icon in the address bar, allow access, then rejoin."
-            : "Microphone blocked. Tap the mic icon in the address bar, allow access, then rejoin."
-        );
-      } else if (e instanceof DOMException && e.name === "NotFoundError") {
-        setError(wantVideo ? "No camera or microphone found on this device." : "No microphone found on this device.");
-      } else {
-        setError(e instanceof Error ? e.message : "Could not join the call.");
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate && ev.candidate.type === "relay") setUsingRelay(true);
+        if (ev.candidate) void signal("ice", ev.candidate.toJSON());
+      };
+
+      // Answer-first for the callee: wait for the caller's offer.
+      if (!caller) {
+        const poll = async () => {
+          if (closedRef.current || !pcRef.current) return;
+          try {
+            const signals = await pollSignals(roomId);
+            for (const sig of signals) {
+              // Both sides broadcast to '*', so drop anything we sent ourselves.
+              if (myUserId && sig.from === myUserId) continue;
+              if (sig.kind === "offer") {
+                await pc.setRemoteDescription({ type: "offer", sdp: sig.payload });
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                await signal("answer", answer.sdp ?? "");
+              } else if (sig.kind === "ice" && sig.payload) {
+                try {
+                  await pc.addIceCandidate(JSON.parse(sig.payload));
+                } catch {
+                  /* stale candidate */
+                }
+              } else if (sig.kind === "bye") {
+                setPhase("ended");
+                return;
+              }
+            }
+          } catch {
+            /* retry next tick */
+          }
+          if (!closedRef.current) setTimeout(poll, POLL_MS);
+        };
+        setTimeout(poll, POLL_MS);
+        return;
       }
-      setPhase("error");
-    }
-  }, [roomSlug, teardown]);
+
+      // Caller drives the handshake.
+      try {
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: wantVideo });
+        await pc.setLocalDescription(offer);
+        // Re-publish until an answer lands; poll CONSUMES, so a dropped offer
+        // would otherwise hang the call forever.
+        let answered = false;
+        const announce = async () => {
+          if (answered || closedRef.current) return;
+          const cur = pcRef.current?.localDescription;
+          if (cur?.sdp) await signal("offer", cur.sdp);
+        };
+        await announce();
+        const repeat = setInterval(() => void announce(), ICE_REPUBLISH_MS);
+
+        const poll = async () => {
+          if (closedRef.current || !pcRef.current) {
+            clearInterval(repeat);
+            return;
+          }
+          try {
+            const signals = await pollSignals(roomId);
+            for (const sig of signals) {
+              if (myUserId && sig.from === myUserId) continue;
+              if (sig.kind === "answer" && sig.payload && pcRef.current?.signalingState !== "stable") {
+                answered = true;
+                clearInterval(repeat);
+                await pc.setRemoteDescription({ type: "answer", sdp: sig.payload });
+                setPhase("live");
+                setLiveSince(Date.now());
+              } else if (sig.kind === "ice" && sig.payload) {
+                try {
+                  await pcRef.current?.addIceCandidate(JSON.parse(sig.payload));
+                } catch {
+                  /* stale candidate */
+                }
+              } else if (sig.kind === "bye") {
+                setPhase("ended");
+                clearInterval(repeat);
+                return;
+              }
+            }
+          } catch {
+            /* retry next tick */
+          }
+          if (!closedRef.current) setTimeout(poll, POLL_MS);
+        };
+        setTimeout(poll, POLL_MS);
+      } catch (e) {
+        if (closedRef.current) return;
+        setError(e instanceof Error ? e.message : "Could not start the call.");
+        setPhase("error");
+      }
+    },
+    [roomId, caller, myUserId, teardown]
+  );
 
   const toggleMic = useCallback(() => {
-    const s = streamRef.current;
+    const s = localRef.current;
     if (!s) return;
     const next = !micOn;
     s.getAudioTracks().forEach((t) => {
@@ -298,104 +413,431 @@ export function useCallSession(roomSlug: string, withVideo: boolean) {
     setMicOn(next);
   }, [micOn]);
 
-  const toggleCam = useCallback(() => {
-    const s = streamRef.current;
-    const videoTracks = s?.getVideoTracks() ?? [];
-    // Voice call → turning the camera on rejoins with video (clean SDP).
-    if (videoTracks.length === 0 && !videoMode) {
-      void join(true);
+  const toggleCam = useCallback(async () => {
+    const s = localRef.current;
+    if (!s) return;
+    const tracks = s.getVideoTracks();
+    // Audio-only call → turning the camera on needs a fresh offer with video.
+    if (tracks.length === 0 || !videoMode) {
+      await join(true);
       return;
     }
     const next = !camOn;
-    videoTracks.forEach((t) => {
+    tracks.forEach((t) => {
       t.enabled = next;
     });
     setCamOn(next);
   }, [camOn, videoMode, join]);
 
   const toggleScreenShare = useCallback(async () => {
-    const s = streamRef.current;
-    if (!s) return;
-    const next = !screenShareOn;
-    try {
-      if (next) {
-        // Start screen sharing
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        });
-        // Replace video track with screen share
-        const videoTrack = screenStream.getVideoTracks()[0];
-        const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
-        if (sender && videoTrack) {
-          await sender.replaceTrack(videoTrack);
-        }
-        // Handle screen share ended by user
-        videoTrack.onended = async () => {
-          setScreenShareOn(false);
-          // Switch back to camera if it was on
-          if (camOn) {
-            const camStream = await navigator.mediaDevices.getUserMedia({
-              video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-              audio: false,
-            });
-            const camTrack = camStream.getVideoTracks()[0];
-            const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
-            if (sender && camTrack) {
-              await sender.replaceTrack(camTrack);
-            }
-          }
-        };
-        setScreenShareOn(true);
-      } else {
-        // Stop screen sharing, switch back to camera
-        if (camOn) {
-          const camStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-            audio: false,
-          });
-          const camTrack = camStream.getVideoTracks()[0];
-          const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
-          if (sender && camTrack) {
-            await sender.replaceTrack(camTrack);
-          }
-        }
-        setScreenShareOn(false);
-      }
-    } catch (e) {
-      console.error("Screen share error:", e);
-      setScreenShareOn(false);
+    const pc = pcRef.current;
+    const s = localRef.current;
+    if (!pc || !s) return;
+    const sender = pc.getSenders().find((x) => x.track?.kind === "video");
+    if (!sender) {
+      setError("Turn on your camera before sharing your screen.");
+      return;
     }
-  }, [camOn]);
-
-  const addPeople = useCallback(() => {
-    // TODO: Implement add people to call (group calls)
-    console.log("Add people to call - not yet implemented");
-    // This would open a modal to select contacts to add to the call
-  }, []);
-
-  const openGames = useCallback(() => {
-    // TODO: Implement in-call games
-    console.log("Open games - not yet implemented");
-    // This would open a games panel
-  }, []);
-
-  const openReactions = useCallback(() => {
-    // TODO: Implement reactions/emoji picker
-    console.log("Open reactions - not yet implemented");
-    // This would open an emoji/reactions picker
-  }, []);
-
-  const openMore = useCallback(() => {
-    // TODO: Implement more options menu
-    console.log("Open more options - not yet implemented");
-    // This would open a more options menu
-  }, []);
+    if (screenShareOn) {
+      // Swap back to the camera (or drop video entirely if it is off).
+      await sender.replaceTrack(camTrackRef.current);
+      setScreenShareOn(false);
+      return;
+    }
+    try {
+      const display = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 15, max: 30 } },
+        audio: false,
+      });
+      const track = display.getVideoTracks()[0];
+      if (!track) return;
+      await sender.replaceTrack(track);
+      screenTrackRef.current = track;
+      setScreenShareOn(true);
+      // The browser's own "Stop sharing" bar ends the track without our UI.
+      track.onended = () => {
+        setScreenShareOn(false);
+        screenTrackRef.current = null;
+        void sender.replaceTrack(camTrackRef.current);
+      };
+    } catch (e) {
+      if (!isAbort(e)) setError("Screen share was blocked or unavailable.");
+    }
+  }, [screenShareOn]);
 
   const leave = useCallback(() => {
+    closedRef.current = true;
+    // Tell the other side so they don't sit in a dead call.
+    void publishSignal({ room_id: roomId, to_user_id: "*", kind: "bye", payload: "" }).catch(() => undefined);
     teardown();
+    setConnection("new");
     setPhase("ended");
-  }, [teardown]);
+  }, [roomId, teardown]);
 
-  return { phase, error, micOn, camOn, videoMode, screenShareOn, localStream, remoteStream, connection, liveSince, join, toggleMic, toggleCam, toggleScreenShare, addPeople, openGames, openReactions, openMore, leave };
+  useEffect(() => () => teardown(), [teardown]);
+
+  // Drop the call server-side if we vanish without pressing the button.
+  useEffect(() => {
+    if (!roomId) return;
+    const onLeave = () => {
+      void publishSignal({ room_id: roomId, to_user_id: "*", kind: "bye", payload: "" }).catch(() => undefined);
+    };
+    window.addEventListener("pagehide", onLeave);
+    return () => window.removeEventListener("pagehide", onLeave);
+  }, [roomId]);
+
+  return {
+    phase,
+    error,
+    micOn,
+    camOn,
+    videoMode,
+    screenShareOn,
+    localStream,
+    remoteStream,
+    connection,
+    liveSince,
+    usingRelay,
+    join,
+    toggleMic,
+    toggleCam,
+    toggleScreenShare,
+    leave,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Room voice (mesh)
+// ---------------------------------------------------------------------------
+
+export type RoomVoiceStatus = "off" | "connecting" | "live" | "denied" | "error";
+
+export interface RoomPeerVoice {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  muted: boolean;
+  speaking: boolean;
+  relayed: boolean;
+}
+
+export interface RoomVoice {
+  status: RoomVoiceStatus;
+  micOn: boolean;
+  level: number;
+  error: string | null;
+  peers: RoomPeerVoice[];
+  turnReady: boolean;
+  speakingUserIds: string[];
+  toggleMic: () => void;
+  leave: () => void;
+}
+
+export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice {
+  const [status, setStatus] = useState<RoomVoiceStatus>("off");
+  const [micOn, setMicOn] = useState(false);
+  const [level, setLevel] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [peers, setPeers] = useState<RoomPeerVoice[]>([]);
+  const [turnReady, setTurnReady] = useState(false);
+  const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
+
+  const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const streamsRef = useRef<Map<string, MediaStream>>(new Map());
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const captureRef = useRef<ReturnType<typeof createLocalCapture> | null>(null);
+  const localRef = useRef<MediaStream | null>(null);
+  const peersRef = useRef<SignalPeerish[]>([]);
+  const activeRef = useRef(false);
+  const speakingRef = useRef(new Set<string>());
+  const analyserMapRef = useRef<Map<string, AnalyserNode>>(new Map());
+
+  const stopAll = useCallback(() => {
+    activeRef.current = false;
+    captureRef.current?.dispose();
+    captureRef.current = null;
+    localRef.current?.getTracks().forEach((t) => t.stop());
+    localRef.current = null;
+    pcsRef.current.forEach((pc) => pc.close());
+    pcsRef.current.clear();
+    streamsRef.current.clear();
+    analyserMapRef.current.clear();
+    void audioCtxRef.current?.close().catch(() => undefined);
+    audioCtxRef.current = null;
+    speakingRef.current.clear();
+    setPeers([]);
+    setSpeakingUserIds([]);
+    setLevel(0);
+    setMicOn(false);
+    setStatus("off");
+  }, []);
+
+  const ensurePeer = useCallback(
+    (peerId: string, ice: RTCIceServer[]) => {
+      let pc = pcsRef.current.get(peerId);
+      if (pc) return pc;
+      pc = new RTCPeerConnection({ iceServers: ice, bundlePolicy: "max-bundle" });
+      pcsRef.current.set(peerId, pc);
+      const remote = new MediaStream();
+      streamsRef.current.set(peerId, remote);
+
+      pc.ontrack = (ev) => {
+        const s = ev.streams[0];
+        const tracks = s ? s.getTracks() : [ev.track];
+        let audioTrack: MediaStreamTrack | null = null;
+        for (const tr of tracks) {
+          if (!remote.getTracks().some((r) => r.id === tr.id)) remote.addTrack(tr);
+          if (tr.kind === "audio" && !audioTrack) audioTrack = tr;
+        }
+        // Drive a per-peer speaking meter for the seat ring.
+        if (audioTrack && !analyserMapRef.current.has(peerId)) {
+          try {
+            if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+            const ctx = audioCtxRef.current;
+            const src = ctx.createMediaStreamSource(remote);
+            const an = ctx.createAnalyser();
+            an.fftSize = 256;
+            src.connect(an);
+            analyserMapRef.current.set(peerId, an);
+            const buf = new Uint8Array(an.fftSize);
+            const tick = () => {
+              if (!activeRef.current) return;
+              if (rmsLevel(an, buf) > 0.14) speakingRef.current.add(peerId);
+              else speakingRef.current.delete(peerId);
+              setSpeakingUserIds([...speakingRef.current]);
+              requestAnimationFrame(tick);
+            };
+            tick();
+          } catch {
+            /* meter is cosmetic */
+          }
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        if (pc?.connectionState === "failed") {
+          pc.close();
+          pcsRef.current.delete(peerId);
+          analyserMapRef.current.delete(peerId);
+          streamsRef.current.delete(peerId);
+        }
+      };
+
+      localRef.current?.getTracks().forEach((t) => pc?.addTrack(t, localRef.current as MediaStream));
+      return pc;
+    },
+    []
+  );
+
+  const toggleMic = useCallback(async () => {
+    if (micOn) {
+      localRef.current?.getAudioTracks().forEach((t) => {
+        t.enabled = false;
+      });
+      setMicOn(false);
+      return;
+    }
+    setError(null);
+
+    if (!localRef.current) {
+      const capture = createLocalCapture(false);
+      captureRef.current = capture;
+      capture.startMeter(setLevel);
+      let stream: MediaStream;
+      try {
+        stream = await capture.streamPromise;
+      } catch (e) {
+        capture.dispose();
+        setError(friendlyMediaError(e, false));
+        setStatus("denied");
+        return;
+      }
+      localRef.current = stream;
+      // Existing PCs were created before we had a stream; backfill their tracks.
+      pcsRef.current.forEach((pc) => {
+        stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+      });
+      setMicOn(true);
+      return;
+    }
+
+    localRef.current.getAudioTracks().forEach((t) => {
+      t.enabled = true;
+    });
+    setMicOn(true);
+  }, [micOn]);
+
+  // Full session: capture + TURN + peer discovery + signaling loop.
+  useEffect(() => {
+    if (!roomId || !myUserId) return;
+    let disposed = false;
+
+    (async () => {
+      setStatus("connecting");
+      let ice: RTCIceServer[] = [];
+      try {
+        ice = await fetchIceServers();
+      } catch {
+        ice = [];
+      }
+      if (disposed) return;
+      setTurnReady(ice.length > 0);
+
+      const capture = createLocalCapture(false);
+      captureRef.current = capture;
+      let stream: MediaStream;
+      try {
+        stream = await capture.streamPromise;
+      } catch (e) {
+        if (disposed) return;
+        capture.dispose();
+        setError(friendlyMediaError(e, false));
+        setStatus("denied");
+        return;
+      }
+      if (disposed) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      // Captured but muted until the user actually taps the mic.
+      stream.getTracks().forEach((t) => {
+        t.enabled = false;
+      });
+      localRef.current = stream;
+      capture.startMeter(setLevel);
+      activeRef.current = true;
+      setMicOn(false);
+      setStatus("live");
+
+      const signal = async (to: string, kind: SignalKind, payload: unknown) => {
+        try {
+          await publishSignal({
+            room_id: roomId,
+            to_user_id: to,
+            kind,
+            payload: typeof payload === "string" ? payload : JSON.stringify(payload),
+          });
+        } catch {
+          /* retried by the loop */
+        }
+      };
+
+      // Deterministic pairing: the lexicographically smaller id always offers,
+      // so a pair never creates two competing offers.
+      const offerTo = async (peerId: string) => {
+        if (disposed || pcsRef.current.size >= MESH_CAP) return;
+        const pc = ensurePeer(peerId, ice);
+        if (pc.signalingState !== "stable") return;
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        await signal(peerId, "offer", offer.sdp ?? "");
+      };
+
+      const acceptOffer = async (peerId: string, sdp: string) => {
+        if (disposed || pcsRef.current.size >= MESH_CAP) return;
+        const pc = ensurePeer(peerId, ice);
+        await pc.setRemoteDescription({ type: "offer", sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await signal(peerId, "answer", answer.sdp ?? "");
+      };
+
+      const refreshPeers = async () => {
+        if (disposed) return;
+        try {
+          const list = await signalPeers(roomId);
+          peersRef.current = list;
+          const cap = Math.min(MESH_CAP, list.length);
+          setPeers(
+            list.slice(0, cap).map((p) => ({
+              userId: p.user_id,
+              displayName: p.display_name ?? "Guest",
+              avatarUrl: p.avatar_url,
+              muted: p.is_muted === 1,
+              speaking: speakingRef.current.has(p.user_id),
+              relayed: false,
+            }))
+          );
+          // Connect to anyone we haven't, as the designated offerer.
+          for (const p of list) {
+            if (myUserId < p.user_id && !pcsRef.current.has(p.user_id)) {
+              await offerTo(p.user_id);
+            }
+          }
+          // Re-offer to peers that never answered (poll consumes signals).
+          for (const pc of pcsRef.current.values()) {
+            if (pc.signalingState === "have-local-offer") await signal("*", "renegotiate", "");
+          }
+        } catch {
+          /* peer list is best-effort */
+        }
+      };
+
+      await refreshPeers();
+      const peerTimer = setInterval(() => void refreshPeers(), PEER_REFRESH_MS);
+
+      const poll = async () => {
+        if (disposed || !activeRef.current) return;
+        try {
+          const signals = await pollSignals(roomId);
+          for (const sig of signals) {
+            if (sig.from === myUserId) continue;
+            const pc = pcsRef.current.get(sig.from);
+            if (sig.kind === "offer" && sig.payload) {
+              await acceptOffer(sig.from, sig.payload);
+            } else if (sig.kind === "answer" && sig.payload && pc && pc.signalingState !== "stable") {
+              await pc.setRemoteDescription({ type: "answer", sdp: sig.payload });
+            } else if (sig.kind === "ice" && sig.payload && pc) {
+              try {
+                await pc.addIceCandidate(JSON.parse(sig.payload));
+              } catch {
+                /* stale */
+              }
+            } else if (sig.kind === "bye") {
+              pc?.close();
+              pcsRef.current.delete(sig.from);
+              streamsRef.current.delete(sig.from);
+              analyserMapRef.current.delete(sig.from);
+            }
+          }
+        } catch {
+          /* retry */
+        }
+        if (!disposed) setTimeout(poll, POLL_MS);
+      };
+      setTimeout(poll, POLL_MS);
+
+      return () => {
+        disposed = true;
+        clearInterval(peerTimer);
+      };
+    })();
+
+    return () => {
+      disposed = true;
+      void publishSignal({ room_id: roomId, to_user_id: "*", kind: "bye", payload: "" }).catch(() => undefined);
+      stopAll();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, myUserId]);
+
+  // Keep the seat-ring "speaking" flags fresh for peers we already track.
+  useEffect(() => {
+    if (!speakingUserIds.length) return;
+    setPeers((prev) =>
+      prev.map((p) => (p.speaking !== speakingUserIds.includes(p.userId)
+        ? { ...p, speaking: speakingUserIds.includes(p.userId) }
+        : p))
+    );
+  }, [speakingUserIds]);
+
+  return { status, micOn, level, error, peers, turnReady, speakingUserIds, toggleMic, leave: stopAll };
+}
+
+// Local mirror of the API peer row, kept here so the hook doesn't need the type
+// import at module scope (avoids pulling the API module into the SSR bundle).
+interface SignalPeerish {
+  user_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  is_muted: number;
 }

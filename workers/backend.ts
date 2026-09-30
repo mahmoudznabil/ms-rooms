@@ -240,6 +240,15 @@ if (request.method === "OPTIONS") {
   const origin = request.headers.get("Origin") || "";
   const j = (data: unknown, status = 200) => json(data, status, origin);
 
+  // These shadow the module-level helpers for every call site inside fetch().
+  // They matter: a cross-origin caller can only read a response body when the
+  // ACAO header is present, so an error thrown from one of the many
+  // `badRequest("…")` call sites that omit the origin would otherwise reach the
+  // browser as an opaque CORS failure instead of the real message.
+  const badRequest = (message: string, _origin?: string) => json({ ok: false, error: message }, 400, origin);
+  const notFound = (message = "Not found", _origin?: string) => json({ ok: false, error: message }, 404, origin);
+  const conflict = (message: string, _origin?: string) => json({ ok: false, error: message }, 409, origin);
+
   if (!env.DB) {
     return j({ ok: false, error: "D1 binding `DB` is not configured." }, 500);
   }
@@ -1434,8 +1443,24 @@ return j({ ok: true, ended: true });
         if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
         
         const userId = (session as Record<string, unknown>).user_id as string;
-        
-        // Delete all user data (cascading deletes will handle related records)
+
+        // Delete children before the parent. D1 enforces foreign keys, so a bare
+        // `DELETE FROM users` aborts the moment the account still owns a room or
+        // has an open session — which left this endpoint silently failing for
+        // exactly the active users most likely to request deletion.
+        await env.DB.prepare(`DELETE FROM rtc_signals WHERE from_user_id = ? OR to_user_id = ?`)
+          .bind(userId, userId).run();
+        await env.DB.prepare(`DELETE FROM seats WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM conversation_participants WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(
+          `DELETE FROM conversations
+           WHERE created_by = ?
+             AND id NOT IN (SELECT conversation_id FROM conversation_participants)`
+        ).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM messages WHERE sender_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM rooms WHERE host_user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM admin_sessions WHERE admin_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
         
         // Also delete the session
@@ -3010,6 +3035,112 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
         await env.DB.prepare(`INSERT INTO ai_usage_events (id, user_id, feature, model, latency_ms, ok) VALUES (?, ?, ?, ?, ?, ?)`)
           .bind(newId("ai"), userId, feature, model, latency, ok).run();
         return j({ ok: true });
+      }
+
+      // ---- WebRTC signaling relay (makes TURN the real media path) ----------
+      // Cloudflare TURN handles NAT traversal and relay, but two browsers still
+      // must trade SDP offers/answers and ICE candidates before media flows.
+      // These endpoints are that exchange, backed by D1 so it works from any
+      // Worker instance with no sticky-session requirement.
+      //
+      //   POST /api/signal/publish  { room_id, to_user_id, kind, payload }
+      //   GET  /api/signal/poll     ?room_id=...
+      //   GET  /api/signal/peers    ?room_id=...
+      //
+      // Poll CONSUMES: rows are deleted as they are returned, so each signal is
+      // delivered exactly once. That is safe because offers are idempotent — a
+      // client that misses one simply re-publishes after a short timeout.
+      // Anything unclaimed after 60s is swept, so closed tabs cannot leak rows.
+      const SIGNAL_TTL_MS = 60_000;
+
+      if (path === "/api/signal/publish" && request.method === "POST") {
+        const callerId = await sessionUserId();
+        if (!callerId) return j({ ok: false, error: "Sign in to use voice." }, 401);
+        const body = await readJson<{
+          room_id?: unknown;
+          to_user_id?: unknown;
+          kind?: unknown;
+          payload?: unknown;
+        }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        const toUserId = typeof body?.to_user_id === "string" ? body.to_user_id : "";
+        const kind = typeof body?.kind === "string" ? body.kind : "";
+        if (!roomId || !toUserId) return badRequest("room_id and to_user_id are required.");
+        if (!["offer", "answer", "ice", "bye", "renegotiate"].includes(kind)) {
+          return badRequest("kind must be offer, answer, ice, bye or renegotiate.");
+        }
+        // Cap the SDP/ICE blob so one peer cannot flood the queue.
+        const payload = typeof body?.payload === "string" ? body.payload.slice(0, 60000) : "";
+        // Do not let a peer signal a room it is not actually sitting in.
+        const seat = await env.DB.prepare(
+          `SELECT 1 AS x FROM seats WHERE room_id = ? AND user_id = ? LIMIT 1`
+        ).bind(roomId, callerId).first();
+        if (!seat) return j({ ok: false, error: "You are not in this room." }, 403);
+
+        await env.DB.prepare(
+          `INSERT INTO rtc_signals (id, room_id, from_user_id, to_user_id, kind, payload, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(newId("sig"), roomId, callerId, toUserId, kind, payload, Date.now())
+          .run();
+
+        // Opportunistic sweep keeps the table small without a cron dependency.
+        await env.DB.prepare(`DELETE FROM rtc_signals WHERE created_at < ?`)
+          .bind(Date.now() - SIGNAL_TTL_MS)
+          .run();
+
+        return j({ ok: true });
+      }
+
+      if (path === "/api/signal/poll" && request.method === "GET") {
+        const callerId = await sessionUserId();
+        if (!callerId) return j({ ok: false, error: "Sign in to use voice." }, 401);
+        const roomId = url.searchParams.get("room_id") ?? "";
+        if (!roomId) return badRequest("room_id is required.");
+
+        // Sweep first so a long-idle room never returns dead signals.
+        await env.DB.prepare(`DELETE FROM rtc_signals WHERE created_at < ?`)
+          .bind(Date.now() - SIGNAL_TTL_MS)
+          .run();
+
+        // to_user_id = '*' is a room-wide broadcast (used for 'bye' on leave).
+        const rows = await env.DB.prepare(
+          `SELECT id, from_user_id, kind, payload FROM rtc_signals
+           WHERE room_id = ? AND (to_user_id = ? OR to_user_id = '*')
+           ORDER BY created_at ASC LIMIT 200`
+        ).bind(roomId, callerId).all();
+
+        const signals = (rows.results ?? []) as Array<Record<string, unknown>>;
+        if (signals.length > 0) {
+          const ids = signals.map((s) => s.id as string);
+          await env.DB.prepare(
+            `DELETE FROM rtc_signals WHERE id IN (${ids.map(() => "?").join(",")})`
+          ).bind(...ids).run();
+        }
+        return j({
+          ok: true,
+          signals: signals.map((s) => ({
+            id: s.id,
+            from: s.from_user_id,
+            kind: s.kind,
+            payload: s.payload ?? "",
+          })),
+        });
+      }
+
+      // Live peer list for mesh rooms: who else is on a mic right now.
+      if (path === "/api/signal/peers" && request.method === "GET") {
+        const callerId = await sessionUserId();
+        if (!callerId) return j({ ok: false, error: "Sign in to use voice." }, 401);
+        const roomId = url.searchParams.get("room_id") ?? "";
+        if (!roomId) return badRequest("room_id is required.");
+        const rows = await env.DB.prepare(
+          `SELECT s.user_id, u.display_name, u.avatar_url, s.is_muted
+           FROM seats s JOIN users u ON u.id = s.user_id
+           WHERE s.room_id = ? AND s.user_id IS NOT NULL AND s.user_id != ?
+           ORDER BY s.seat_index ASC`
+        ).bind(roomId, callerId).all();
+        return j({ ok: true, peers: rows.results ?? [] });
       }
 
       return notFound();
