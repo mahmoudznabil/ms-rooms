@@ -32,13 +32,15 @@ function env(name: string, fallback: string): string {
 
 // Web App config — project: ms-rooms-auth (59506321553)
 // Values come from NEXT_PUBLIC_* when present, otherwise the known web config.
+// (An earlier revision hardcoded these and ignored the env — if you point the
+// build at a different Firebase project and login breaks, this was why.)
 const firebaseConfig = {
-  apiKey: "AIzaSyBgPuvvc8zt7y9dhB0_ZfeptaRAdRjZkmk",
-  authDomain: "ms-rooms-auth.firebaseapp.com",
-  projectId: "ms-rooms-auth",
-  storageBucket: "ms-rooms-auth.firebasestorage.app",
-  messagingSenderId: "59506321553",
-  appId: "1:59506321553:web:d5db8040d4ce22667ef730"
+  apiKey: env("NEXT_PUBLIC_FIREBASE_API_KEY", "AIzaSyBgPuvvc8zt7y9dhB0_ZfeptaRAdRjZkmk"),
+  authDomain: env("NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN", "ms-rooms-auth.firebaseapp.com"),
+  projectId: env("NEXT_PUBLIC_FIREBASE_PROJECT_ID", "ms-rooms-auth"),
+  storageBucket: env("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET", "ms-rooms-auth.firebasestorage.app"),
+  messagingSenderId: env("NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID", "59506321553"),
+  appId: env("NEXT_PUBLIC_FIREBASE_APP_ID", "1:59506321553:web:d5db8040d4ce22667ef730")
 };
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);

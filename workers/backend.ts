@@ -149,12 +149,17 @@ function isRateLimited(key: string, path: string, method: string): boolean {
 let userIdentitySchemaReady = false;
 
 // ---- Firebase ID token verification (security layer) ----
-// Project: ms-room-audio (887561048772). Firebase ID tokens are RS256 JWTs
+// Project: ms-rooms-auth (59506321553). Firebase ID tokens are RS256 JWTs
 // issued by securetoken.google.com and are verified with Google's rotating
 // public JWKs. Never accept a decoded-but-unverified payload here: doing so
 // would let an attacker forge any firebase_uid (including a master admin).
-const FIREBASE_PROJECT_ID = "ms-rooms-auth";
-const FIREBASE_ISSUER = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
+// Env.FIREBASE_PROJECT_ID overrides the constant (e.g. staging vs prod
+// projects); it must match the project the frontend signs in against,
+// otherwise every sync fails with "Invalid or expired Firebase ID token."
+function firebaseProjectId(env: Env): string {
+  const override = (env as unknown as Record<string, string | undefined>).FIREBASE_PROJECT_ID;
+  return override && override.length > 0 ? override : "ms-rooms-auth";
+}
 const FIREBASE_JWKS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
@@ -206,6 +211,18 @@ async function verifyAdminPassword(password: string, stored: string): Promise<bo
   }
   // Legacy unsalted SHA-256 (to be upgraded on next successful login).
   return (await sha256hex(password)) === stored;
+}
+/**
+ * `Secure` cookies are silently rejected over http, which breaks session
+ * persistence on localhost dev. Production is always https, so only emit
+ * `Secure` there.
+ */
+function secureFlag(request: Request): string {
+  try {
+    return new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  } catch {
+    return "; Secure";
+  }
 }
 function readAdminToken(request: Request): string {
   const header = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
@@ -259,7 +276,7 @@ async function getFirebaseJwks(forceRefresh = false): Promise<FirebaseJwk[]> {
   return keys;
 }
 
-async function verifyFirebaseIdToken(idToken: string): Promise<{
+async function verifyFirebaseIdToken(idToken: string, projectId: string): Promise<{
   uid: string;
   email?: string | null;
   phone?: string | null;
@@ -300,7 +317,7 @@ async function verifyFirebaseIdToken(idToken: string): Promise<{
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (payload.aud !== FIREBASE_PROJECT_ID || payload.iss !== FIREBASE_ISSUER) return null;
+  if (payload.aud !== projectId || payload.iss !== `https://securetoken.google.com/${projectId}`) return null;
   const sub = typeof payload.sub === "string" ? payload.sub : "";
   if (!sub || sub.length > 128) return null;
   const exp = Number(payload.exp ?? 0);
@@ -382,7 +399,7 @@ if (request.method === "OPTIONS") {
     const token = await generateCsrfToken();
     const headers = new Headers(corsFor(request, origin));
     headers.set("Content-Type", "application/json");
-    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
+    headers.set("Set-Cookie", `csrf_token=${token}; HttpOnly${secureFlag(request)}; SameSite=Lax; Path=/; Max-Age=${24 * 60 * 60}`);
     return new Response(JSON.stringify({ ok: true, csrf_token: token }), {
       status: 200,
       headers,
@@ -1045,7 +1062,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(cookieToken).run();
         }
         const cookieHeaders = corsFor(request, origin);
-        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly${secureFlag(request)}; SameSite=Lax; Path=/; Max-Age=0`;
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -1055,14 +1072,14 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       // ---- Firebase Auth (phone, email/password, email link, Google)  ----
       // Security layer: Firebase is the identity provider, D1 is the source of truth.
       // The client signs in with Firebase, gets an ID token, then POSTs it here.
-      // We verify the token via Google tokeninfo (aud == ms-room-audio), then upsert
+      // We verify the token signature + aud/iss, then upsert
       // the D1 user by firebase_uid so coins/xp/rooms/moments follow the identity
       // across any device. All progress mutations remain server-side in D1.
       if (path === "/api/auth/firebase" && request.method === "POST") {
         const idToken = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         if (!idToken) return json({ ok: false, error: "Missing Firebase ID token." }, 401);
         await ensureUserIdentityColumns();
-        const verified = await verifyFirebaseIdToken(idToken);
+        const verified = await verifyFirebaseIdToken(idToken, firebaseProjectId(env));
         if (!verified) return json({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
         const body = await readJson<{
           firebase_uid?: unknown;
@@ -1139,7 +1156,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         } catch {}
         // Set HttpOnly cookie
         const cookieHeaders = corsFor(request, origin);
-        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
+        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly${secureFlag(request)}; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
         return new Response(JSON.stringify({ ok: true, user, isNew }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
@@ -1581,7 +1598,7 @@ return j({ ok: true, ended: true });
         
         // Clear session cookie
         const cookieHeaders = corsFor(request, origin);
-        cookieHeaders["Set-Cookie"] = `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        cookieHeaders["Set-Cookie"] = `session=; HttpOnly${secureFlag(request)}; SameSite=Lax; Path=/; Max-Age=0`;
         
         return new Response(JSON.stringify({ ok: true, message: "Account and all data deleted" }), {
           status: 200,
@@ -2085,7 +2102,7 @@ return j({
         await env.DB.prepare(`INSERT INTO admin_sessions (id, admin_id, role, expires_at) VALUES (?, ?, ?, datetime('now', '+12 hours'))`).bind(token, row.id, row.role).run();
         await env.DB.prepare(`UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
         const headers = corsFor(request, origin);
-        headers["Set-Cookie"] = `admin_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${12 * 60 * 60}`;
+        headers["Set-Cookie"] = `admin_session=${token}; HttpOnly${secureFlag(request)}; SameSite=Lax; Path=/; Max-Age=${12 * 60 * 60}`;
         return new Response(
           JSON.stringify({ ok: true, admin: { id: row.id, username: row.username, display_name: row.display_name, role: row.role }, token }),
           { status: 200, headers: { "Content-Type": "application/json", ...headers } }
@@ -2101,7 +2118,7 @@ return j({
           } catch {}
         }
         const headers = corsFor(request, origin);
-        headers["Set-Cookie"] = `admin_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        headers["Set-Cookie"] = `admin_session=; HttpOnly${secureFlag(request)}; SameSite=Lax; Path=/; Max-Age=0`;
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "Content-Type": "application/json", ...headers },
@@ -2120,7 +2137,7 @@ return j({
       if (path === "/api/admin/firebase" && request.method === "POST") {
         const idToken = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         if (!idToken) return json({ ok: false, error: "Missing Firebase ID token." }, 401);
-        const verified = await verifyFirebaseIdToken(idToken);
+        const verified = await verifyFirebaseIdToken(idToken, firebaseProjectId(env));
         if (!verified) return json({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
         const email = (verified.email ?? "").trim().toLowerCase();
         if (!verified.emailVerified || verified.provider !== "google.com") {

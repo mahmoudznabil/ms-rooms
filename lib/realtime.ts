@@ -744,13 +744,29 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
   }, []);
 
   const ensurePeer = useCallback(
-    (peerId: string, ice: RTCIceServer[]) => {
+    (peerId: string, ice: RTCIceServer[], roomId: string) => {
       let pc = pcsRef.current.get(peerId);
       if (pc) return pc;
       pc = new RTCPeerConnection({ iceServers: ice, bundlePolicy: "max-bundle" });
       pcsRef.current.set(peerId, pc);
       const remote = new MediaStream();
       streamsRef.current.set(peerId, remote);
+
+      // Trickle our ICE candidates to this peer (addressed, not broadcast).
+      // Without this the TURN relay candidate — allocated asynchronously after
+      // setLocalDescription — never reaches the peer and no media flows.
+      pc.onicecandidate = (ev) => {
+        if (!ev.candidate) return;
+        const init = ev.candidate.toJSON();
+        void (async () => {
+          try {
+            const { publishSignal } = await import("@/lib/api");
+            await publishSignal({ room_id: roomId, to_user_id: peerId, kind: "ice", payload: JSON.stringify(init) });
+          } catch {
+            // poll-loop re-offer / restartIce recovers; candidates are best-effort
+          }
+        })();
+      };
 
       pc.ontrack = (ev) => {
         const s = ev.streams[0];
@@ -961,7 +977,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
       const offerTo = async (peerId: string) => {
         // Enforce MESH_CAP on the offerer; the answerer path enforces it too.
         if (disposed || (!pcsRef.current.has(peerId) && pcsRef.current.size >= MESH_CAP)) return;
-        const pc = ensurePeer(peerId, ice);
+        const pc = ensurePeer(peerId, ice, roomId);
         iceServersRef.current = ice;
         if (pc.signalingState !== "stable") return;
         // Perfect negotiation: attach renegotiation so unmute/addTrack re-offers.
@@ -983,7 +999,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
       const acceptOffer = async (peerId: string, sdp: string) => {
         // Enforce MESH_CAP on the answerer: ignore unbounded inbound offers.
         if (disposed || (!pcsRef.current.has(peerId) && pcsRef.current.size >= MESH_CAP)) return;
-        const pc = ensurePeer(peerId, ice);
+        const pc = ensurePeer(peerId, ice, roomId);
         iceServersRef.current = ice;
         pc.onnegotiationneeded = () => {
           void (async () => {
