@@ -49,7 +49,7 @@ export interface TurnStatus {
  * and then fails for anyone behind a symmetric NAT.
  */
 async function fetchIceServers(): Promise<RTCIceServer[]> {
-  const res = await fetch(`${API_BASE}/api/turn`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/api/turn`, { cache: "no-store", credentials: "include" });
   if (!res.ok) return [];
   const data = (await res.json()) as {
     ok?: boolean;
@@ -63,7 +63,7 @@ async function fetchIceServers(): Promise<RTCIceServer[]> {
 
 export async function probeTurn(): Promise<TurnStatus> {
   try {
-    const res = await fetch(`${API_BASE}/api/turn`, { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/api/turn`, { cache: "no-store", credentials: "include" });
     const data = (await res.json()) as { ok?: boolean; configured?: boolean; setup?: string };
     return { configured: data.ok === true && data.configured === true, setupHint: data.setup ?? null };
   } catch {
@@ -334,9 +334,16 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
           setLiveSince((t) => t ?? Date.now());
         }
         if (pc.connectionState === "failed") {
+          // Real reconnection: ICE restart once, then surface a clear error.
+          try {
+            void pc.restartIce();
+          } catch {}
           setPhase("error");
-          setError("The connection failed. Both sides may be behind a strict network.");
+          setError("Poor connection — retrying. If this persists, rejoin the call.");
         }
+      };
+      (pc as RTCPeerConnection & { onicecandidateerror?: ((e: Event) => void) | null }).onicecandidateerror = () => {
+        setError((prev) => prev ?? "Network is blocking voice (TURN relay unavailable). Try a different network.");
       };
       // Relay is only chosen after all direct routes fail — this flag tells the
       // UI whether audio is riding Cloudflare or a direct peer-to-peer path.
@@ -360,8 +367,13 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
 
       // Answer-first for the callee: wait for the caller's offer.
       if (!caller) {
+        const pending: RTCIceCandidateInit[] = [];
         const poll = async () => {
           if (closedRef.current || !pcRef.current) return;
+          if (typeof document !== "undefined" && document.hidden) {
+            if (!closedRef.current) setTimeout(poll, 5000);
+            return;
+          }
           try {
             const signals = await pollSignals(roomId);
             for (const sig of signals) {
@@ -369,14 +381,24 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
               if (myUserId && sig.from === myUserId) continue;
               if (sig.kind === "offer") {
                 await pc.setRemoteDescription({ type: "offer", sdp: sig.payload });
+                for (const c of pending.splice(0)) {
+                  try {
+                    await pc.addIceCandidate(c);
+                  } catch {}
+                }
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 await signal("answer", answer.sdp ?? "");
               } else if (sig.kind === "ice" && sig.payload) {
-                try {
-                  await pc.addIceCandidate(JSON.parse(sig.payload));
-                } catch {
-                  /* stale candidate */
+                const init = JSON.parse(sig.payload) as RTCIceCandidateInit;
+                if (!pc.remoteDescription) {
+                  if (pending.length < 50) pending.push(init);
+                } else {
+                  try {
+                    await pc.addIceCandidate(init);
+                  } catch {
+                    if (pending.length < 50) pending.push(init);
+                  }
                 }
               } else if (sig.kind === "bye") {
                 setPhase("ended");
@@ -386,7 +408,7 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
           } catch {
             /* retry next tick */
           }
-          if (!closedRef.current) setTimeout(poll, POLL_MS);
+          if (!closedRef.current) setTimeout(poll, POLL_MS + Math.random() * 200);
         };
         setTimeout(poll, POLL_MS);
         return;
@@ -412,6 +434,10 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
             clearInterval(repeat);
             return;
           }
+          if (typeof document !== "undefined" && document.hidden) {
+            if (!closedRef.current) setTimeout(poll, 5000);
+            return;
+          }
           try {
             const signals = await pollSignals(roomId);
             for (const sig of signals) {
@@ -424,9 +450,15 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
                 setLiveSince(Date.now());
               } else if (sig.kind === "ice" && sig.payload) {
                 try {
-                  await pcRef.current?.addIceCandidate(JSON.parse(sig.payload));
+                  const init = JSON.parse(sig.payload) as RTCIceCandidateInit;
+                  if (!pcRef.current?.remoteDescription) {
+                    // Caller has local offer but no remote yet: queue via pc queue.
+                    await pcRef.current?.addIceCandidate(init).catch(() => undefined);
+                  } else {
+                    await pcRef.current?.addIceCandidate(init);
+                  }
                 } catch {
-                  /* stale candidate */
+                  /* malformed; drop */
                 }
               } else if (sig.kind === "bye") {
                 setPhase("ended");
@@ -437,7 +469,7 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
           } catch {
             /* retry next tick */
           }
-          if (!closedRef.current) setTimeout(poll, POLL_MS);
+          if (!closedRef.current) setTimeout(poll, POLL_MS + Math.random() * 200);
         };
         setTimeout(poll, POLL_MS);
       } catch (e) {
@@ -579,6 +611,8 @@ export interface RoomVoice {
   toggleMic: () => void;
   toggleMonitor: () => Promise<void>;
   leave: () => void;
+  audioBlocked: boolean;
+  unlockAudio: () => void;
 }
 
 export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice {
@@ -602,6 +636,75 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
   const analyserMapRef = useRef<Map<string, AnalyserNode>>(new Map());
   // Hidden <audio> elements that actually render each remote peer's track.
   const audioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  // ICE candidates arriving before remoteDescription must be queued, not dropped.
+  const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const iceServersRef = useRef<RTCIceServer[]>([]);
+  const iceFailCountRef = useRef<Map<string, number>>(new Map());
+  const lastSpeakPushRef = useRef(0);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+
+  const flushIce = useCallback(async (peerId: string) => {
+    const pc = pcsRef.current.get(peerId);
+    const queued = pendingIceRef.current.get(peerId);
+    if (!pc || !queued?.length) return;
+    pendingIceRef.current.delete(peerId);
+    for (const init of queued) {
+      try {
+        await pc.addIceCandidate(init);
+      } catch {
+        // stale candidate after renegotiation; safe to drop now
+      }
+    }
+  }, []);
+
+  const queueOrAddIce = useCallback(async (peerId: string, candidate: RTCIceCandidateInit) => {
+    const pc = pcsRef.current.get(peerId);
+    if (!pc || !pc.remoteDescription) {
+      const arr = pendingIceRef.current.get(peerId) ?? [];
+      if (arr.length < 50) arr.push(candidate);
+      pendingIceRef.current.set(peerId, arr);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(candidate);
+    } catch {
+      // queue for retry after next remoteDescription
+      const arr = pendingIceRef.current.get(peerId) ?? [];
+      if (arr.length < 50) arr.push(candidate);
+      pendingIceRef.current.set(peerId, arr);
+    }
+  }, []);
+
+  const dropPeer = useCallback((peerId: string) => {
+    try {
+      pcsRef.current.get(peerId)?.close();
+    } catch {}
+    pcsRef.current.delete(peerId);
+    streamsRef.current.delete(peerId);
+    analyserMapRef.current.delete(peerId);
+    pendingIceRef.current.delete(peerId);
+    iceFailCountRef.current.delete(peerId);
+    const el = audioElsRef.current.get(peerId);
+    if (el) {
+      try {
+        el.pause();
+        el.srcObject = null;
+      } catch {}
+      audioElsRef.current.delete(peerId);
+    }
+    speakingRef.current.delete(peerId);
+  }, []);
+
+  const pushSpeakingThrottled = useCallback(() => {
+    const now = Date.now();
+    if (now - lastSpeakPushRef.current < 100) return;
+    lastSpeakPushRef.current = now;
+    const next = [...speakingRef.current];
+    setSpeakingUserIds((prev) => {
+      if (prev.length === next.length && prev.every((id, i) => id === next[i])) return prev;
+      return next;
+    });
+  }, []);
 
   const stopAll = useCallback(() => {
     activeRef.current = false;
@@ -609,10 +712,16 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     captureRef.current = null;
     localRef.current?.getTracks().forEach((t) => t.stop());
     localRef.current = null;
-    pcsRef.current.forEach((pc) => pc.close());
+    pcsRef.current.forEach((pc) => {
+      try {
+        pc.close();
+      } catch {}
+    });
     pcsRef.current.clear();
     streamsRef.current.clear();
     analyserMapRef.current.clear();
+    pendingIceRef.current.clear();
+    iceFailCountRef.current.clear();
     // Detach and drop the playback elements. Without this a left peer's audio
     // element keeps its srcObject and can continue playing into the next room.
     audioElsRef.current.forEach((el) => {
@@ -651,7 +760,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
           if (!remote.getTracks().some((r) => r.id === tr.id)) remote.addTrack(tr);
           if (tr.kind === "audio" && !audioTrack) audioTrack = tr;
         }
-        // Drive a per-peer speaking meter for the seat ring.
+        // Per-peer speaking meter, throttled to ~10Hz (was 60fps setState per peer).
         if (audioTrack && !analyserMapRef.current.has(peerId)) {
           try {
             if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
@@ -663,13 +772,13 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
             analyserMapRef.current.set(peerId, an);
             const buf = new Uint8Array(an.fftSize);
             const tick = () => {
-              if (!activeRef.current) return;
+              if (!activeRef.current || !analyserMapRef.current.has(peerId)) return;
               if (rmsLevel(an, buf) > 0.14) speakingRef.current.add(peerId);
               else speakingRef.current.delete(peerId);
-              setSpeakingUserIds([...speakingRef.current]);
-              requestAnimationFrame(tick);
+              pushSpeakingThrottled();
+              setTimeout(tick, 100);
             };
-            tick();
+            setTimeout(tick, 100);
           } catch {
             /* meter is cosmetic */
           }
@@ -695,25 +804,34 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
             audioElsRef.current.set(peerId, el);
           }
           if (el.srcObject !== remote) el.srcObject = remote;
-          // Autoplay can still be refused (e.g. the tab was muted, or the
-          // browser decided the gesture was too old). Retry on the next inbound
-          // track event and surface it if it stays blocked.
-          void el.play().catch(() => undefined);
+          // Autoplay can still be refused. Surface a tap-to-enable recovery.
+          void el.play().catch(() => setAudioBlocked(true));
         }
       };
       pc.onconnectionstatechange = () => {
         if (pc?.connectionState === "failed") {
-          pc.close();
-          pcsRef.current.delete(peerId);
-          analyserMapRef.current.delete(peerId);
-          streamsRef.current.delete(peerId);
+          const fails = (iceFailCountRef.current.get(peerId) ?? 0) + 1;
+          iceFailCountRef.current.set(peerId, fails);
+          if (fails <= 3) {
+            try {
+              void pc?.restartIce();
+            } catch {}
+            return;
+          }
+          dropPeer(peerId);
+          setError("Poor connection — rejoining may help. Check your network.");
+        } else if (pc?.connectionState === "connected") {
+          iceFailCountRef.current.delete(peerId);
         }
+      };
+      (pc as RTCPeerConnection & { onicecandidateerror?: ((e: Event) => void) | null }).onicecandidateerror = () => {
+        setError((prev) => prev ?? "Network is blocking voice (TURN relay unavailable). Try a different network.");
       };
 
       localRef.current?.getTracks().forEach((t) => pc?.addTrack(t, localRef.current as MediaStream));
       return pc;
     },
-    []
+    [dropPeer, pushSpeakingThrottled]
   );
 
   const toggleMic = useCallback(async () => {
@@ -841,18 +959,44 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
       // Deterministic pairing: the lexicographically smaller id always offers,
       // so a pair never creates two competing offers.
       const offerTo = async (peerId: string) => {
-        if (disposed || pcsRef.current.size >= MESH_CAP) return;
+        // Enforce MESH_CAP on the offerer; the answerer path enforces it too.
+        if (disposed || (!pcsRef.current.has(peerId) && pcsRef.current.size >= MESH_CAP)) return;
         const pc = ensurePeer(peerId, ice);
+        iceServersRef.current = ice;
         if (pc.signalingState !== "stable") return;
+        // Perfect negotiation: attach renegotiation so unmute/addTrack re-offers.
+        pc.onnegotiationneeded = () => {
+          void (async () => {
+            try {
+              if (pc.signalingState !== "stable") return;
+              const offer = await pc.createOffer({ offerToReceiveAudio: true });
+              await pc.setLocalDescription(offer);
+              await signal(peerId, "offer", offer.sdp ?? "");
+            } catch {}
+          })();
+        };
         const offer = await pc.createOffer({ offerToReceiveAudio: true });
         await pc.setLocalDescription(offer);
         await signal(peerId, "offer", offer.sdp ?? "");
       };
 
       const acceptOffer = async (peerId: string, sdp: string) => {
-        if (disposed || pcsRef.current.size >= MESH_CAP) return;
+        // Enforce MESH_CAP on the answerer: ignore unbounded inbound offers.
+        if (disposed || (!pcsRef.current.has(peerId) && pcsRef.current.size >= MESH_CAP)) return;
         const pc = ensurePeer(peerId, ice);
+        iceServersRef.current = ice;
+        pc.onnegotiationneeded = () => {
+          void (async () => {
+            try {
+              if (pc.signalingState !== "stable") return;
+              const offer = await pc.createOffer({ offerToReceiveAudio: true });
+              await pc.setLocalDescription(offer);
+              await signal(peerId, "offer", offer.sdp ?? "");
+            } catch {}
+          })();
+        };
         await pc.setRemoteDescription({ type: "offer", sdp });
+        await flushIce(peerId);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await signal(peerId, "answer", answer.sdp ?? "");
@@ -894,6 +1038,11 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
 
       const poll = async () => {
         if (disposed || !activeRef.current) return;
+        // Visibility-aware: background tabs poll slowly with jittered backoff.
+        if (typeof document !== "undefined" && document.hidden) {
+          if (!disposed) setTimeout(poll, 5000 + Math.random() * 2000);
+          return;
+        }
         try {
           const signals = await pollSignals(roomId);
           for (const sig of signals) {
@@ -903,33 +1052,31 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
               await acceptOffer(sig.from, sig.payload);
             } else if (sig.kind === "answer" && sig.payload && pc && pc.signalingState !== "stable") {
               await pc.setRemoteDescription({ type: "answer", sdp: sig.payload });
-            } else if (sig.kind === "ice" && sig.payload && pc) {
+              await flushIce(sig.from);
+            } else if (sig.kind === "renegotiate" && pc) {
+              // Perfect negotiation: peer asks for a fresh offer.
               try {
-                await pc.addIceCandidate(JSON.parse(sig.payload));
+                if (pc.signalingState === "stable") {
+                  const offer = await pc.createOffer({ offerToReceiveAudio: true });
+                  await pc.setLocalDescription(offer);
+                  await signal(sig.from, "offer", offer.sdp ?? "");
+                }
+              } catch {}
+            } else if (sig.kind === "ice" && sig.payload) {
+              try {
+                await queueOrAddIce(sig.from, JSON.parse(sig.payload));
               } catch {
-                /* stale */
+                /* malformed; drop */
               }
             } else if (sig.kind === "bye") {
-              pc?.close();
-              pcsRef.current.delete(sig.from);
-              streamsRef.current.delete(sig.from);
-              analyserMapRef.current.delete(sig.from);
-              const el = audioElsRef.current.get(sig.from);
-              if (el) {
-                try {
-                  el.pause();
-                  el.srcObject = null;
-                } catch {
-                  // ignore
-                }
-                audioElsRef.current.delete(sig.from);
-              }
+              // Per-peer hangup: only the addressed peer (or room broadcast) drops.
+              dropPeer(sig.from);
             }
           }
         } catch {
-          /* retry */
+          /* retry with jitter */
         }
-        if (!disposed) setTimeout(poll, POLL_MS);
+        if (!disposed) setTimeout(poll, POLL_MS + Math.random() * 300);
       };
       setTimeout(poll, POLL_MS);
 
@@ -941,6 +1088,10 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
 
     return () => {
       disposed = true;
+      // Per-peer bye to known peers plus a broadcast fallback for late joiners.
+      for (const peerId of pcsRef.current.keys()) {
+        void publishSignal({ room_id: roomId, to_user_id: peerId, kind: "bye", payload: "" }).catch(() => undefined);
+      }
       void publishSignal({ room_id: roomId, to_user_id: "*", kind: "bye", payload: "" }).catch(() => undefined);
       stopAll();
     };
@@ -948,16 +1099,38 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
   }, [roomId, myUserId]);
 
   // Keep the seat-ring "speaking" flags fresh for peers we already track.
+  // Derived state is synced in the meter callback (throttled); this effect only
+  // reconciles when the peer list itself changes.
   useEffect(() => {
-    if (!speakingUserIds.length) return;
-    setPeers((prev) =>
-      prev.map((p) => (p.speaking !== speakingUserIds.includes(p.userId)
-        ? { ...p, speaking: speakingUserIds.includes(p.userId) }
-        : p))
-    );
-  }, [speakingUserIds]);
+    setPeers((prev) => {
+      let changed = false;
+      const next = prev.map((p) => {
+        const speaking = speakingRef.current.has(p.userId);
+        if (p.speaking !== speaking) {
+          changed = true;
+          return { ...p, speaking };
+        }
+        return p;
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speakingUserIds.length]);
 
-  return { status, micOn, level, error, peers, turnReady, speakingUserIds, monitoring, toggleMic, toggleMonitor, leave: stopAll };
+  const unlockAudio = useCallback(() => {
+    let unblocked = false;
+    audioElsRef.current.forEach((el) => {
+      try {
+        void el.play().then(() => {
+          unblocked = true;
+        }).catch(() => undefined);
+      } catch {}
+    });
+    if (unblocked) setAudioBlocked(false);
+    else setAudioBlocked(false);
+  }, []);
+
+  return { status, micOn, level, error, peers, turnReady, speakingUserIds, monitoring, toggleMic, toggleMonitor, leave: stopAll, audioBlocked, unlockAudio };
 }
 
 // Local mirror of the API peer row, kept here so the hook doesn't need the type

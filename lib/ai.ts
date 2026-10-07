@@ -67,7 +67,10 @@ export async function aiModerateContent(content: string, context = "chat"): Prom
     return parsed;
   } catch {
     logAIEvent("moderate", Date.now() - started, false);
-    return { allowed: true, reason: "", severity: "none" };
+    // Fail closed: when the moderator is unreachable, block and surface a
+    // retry instead of letting potentially abusive content through.
+    // Callers must handle allowed:false (chat UI shows "try again").
+    return { allowed: false, reason: "Moderation unavailable. Try again.", severity: "medium" };
   }
 }
 

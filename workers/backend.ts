@@ -9,6 +9,7 @@
  */
 
 import { R2Bucket } from "@cloudflare/workers-types";
+import { requireUser, timingSafeEqual } from "./auth";
 
 interface Env {
   // Typed as `any` to avoid requiring @cloudflare/workers-types.
@@ -116,6 +117,33 @@ function newId(prefix: string): string {
   return `${prefix}-${r}`;
 }
 
+// Best-effort in-isolate rate limiter. Keyed by IP+path, sliding 60s window.
+// Limits are conservative so normal use never trips; abuse does.
+const rlHits = new Map<string, number[]>();
+function isRateLimited(key: string, path: string, method: string): boolean {
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    // Only rate-limit hot polled reads.
+    if (!path.startsWith("/api/signal/")) return false;
+  }
+  let limit = 60;
+  if (path.startsWith("/api/auth/")) limit = 20;
+  else if (path.startsWith("/api/admin/")) limit = 30;
+  else if (path.startsWith("/api/signal/")) limit = 120;
+  else if (path === "/api/spin") limit = 10;
+  else if (path === "/api/attachments/upload") limit = 20;
+  else if (method !== "GET") limit = 100;
+  else return false;
+  const now = Date.now();
+  const arr = (rlHits.get(key) ?? []).filter((t) => now - t < 60_000);
+  arr.push(now);
+  rlHits.set(key, arr);
+  if (rlHits.size > 5000) {
+    const oldest = [...rlHits.keys()].slice(0, 1000);
+    for (const k of oldest) rlHits.delete(k);
+  }
+  return arr.length > limit;
+}
+
 // Set once per isolate after the users identity columns/index exist, so we
 // don't re-run DDL on every request.
 let userIdentitySchemaReady = false;
@@ -136,6 +164,54 @@ const MASTER_ADMIN_EMAILS = ["marcamgadalfonse2004@gmail.com", "mahmoudnabil03@g
 async function sha256hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Phase 1.15: PBKDF2-SHA256 with per-row salt. Stored as
+// `pbkdf2$<iterations>$<saltHex>$<hashHex>`. Legacy unsalted SHA-256 hex rows
+// are still verified once, then upgraded on successful login.
+const ADMIN_PBKDF2_ITERATIONS = 600_000;
+function bytesToHex(b: Uint8Array): string {
+  return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function hexToBytes(h: string): Uint8Array {
+  const out = new Uint8Array(h.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+async function hashAdminPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: salt as unknown as BufferSource, iterations: ADMIN_PBKDF2_ITERATIONS },
+    key,
+    256
+  );
+  return `pbkdf2$${ADMIN_PBKDF2_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(bits))}`;
+}
+async function verifyAdminPassword(password: string, stored: string): Promise<boolean> {
+  if (stored.startsWith("pbkdf2$")) {
+    const parts = stored.split("$");
+    if (parts.length !== 4) return false;
+    const iterations = Number(parts[1]);
+    if (!Number.isInteger(iterations) || iterations < 100_000 || iterations > 2_000_000) return false;
+    const salt = hexToBytes(parts[2]);
+    const expected = parts[3];
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits(
+      { name: "PBKDF2", hash: "SHA-256", salt: salt as unknown as BufferSource, iterations },
+      key,
+      256
+    );
+    return timingSafeEqual(bytesToHex(new Uint8Array(bits)), expected);
+  }
+  // Legacy unsalted SHA-256 (to be upgraded on next successful login).
+  return (await sha256hex(password)) === stored;
+}
+function readAdminToken(request: Request): string {
+  const header = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+  if (header) return header;
+  const cookie = request.headers.get("Cookie") || "";
+  return cookie.split("; ").find((c) => c.trim().startsWith("admin_session="))?.split("=")[1] ?? "";
 }
 function decodeJwtPart(part: string): Record<string, unknown> | null {
   try {
@@ -270,6 +346,13 @@ if (request.method === "OPTIONS") {
     return j({ ok: false, error: "D1 binding `DB` is not configured." }, 500);
   }
 
+  // In-isolate rate limiting (best-effort; Cloudflare WAF Rate Limiting rules
+  // in the dashboard are the durable enforcement — see docs/OPS.md).
+  const rlKey = `${request.headers.get("CF-Connecting-IP") ?? request.headers.get("X-Forwarded-For") ?? "ip"}:${path}`;
+  if (isRateLimited(rlKey, path, request.method)) {
+    return j({ ok: false, error: "Too many requests. Slow down." }, 429);
+  }
+
   // CSRF protection: generate token on GET /api/csrf, validate on state-changing methods
   async function generateCsrfToken(): Promise<string> {
     const array = new Uint8Array(32);
@@ -280,26 +363,18 @@ if (request.method === "OPTIONS") {
   async function validateCsrfToken(request: Request, env: Env): Promise<boolean> {
     // Skip CSRF check for safe methods
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return true;
-    // Skip for auth endpoints that use Firebase ID tokens
-    if (path.startsWith("/api/auth/firebase") || path.startsWith("/api/auth/login") || path.startsWith("/api/auth/me")) return true;
-    if (path.startsWith("/api/recaptcha/")) return true;
-    // Skip for admin endpoints that use admin tokens
+    // Bearer-token endpoints are not cookie-authenticated, so CSRF does not apply.
+    if (path.startsWith("/api/auth/firebase")) return true;
     if (path.startsWith("/api/admin/")) return true;
-    // Skip for webhook/callback endpoints
-    if (path === "/api/calls/session" || path === "/api/turn") return true;
-    // The app and API are same-origin, so a SameSite=Lax cookie already blocks
-    // cross-site form posts. Same-origin requests still require the token;
-    // a request from an allowlisted origin is accepted because CORS prevents
-    // an attacker page from reading the response.
-    const origin = request.headers.get("Origin") || "";
-    if (origin && isOriginAllowed(origin)) return true;
-    // Same-origin or no Origin header: require token
-    const csrfHeader = request.headers.get("X-CSRF-Token");
+    if (path.startsWith("/api/recaptcha/")) return true;
+    // All other state-changing requests are cookie-authenticated: require
+    // double-submit (header == cookie, constant-time compare). No Origin
+    // bypass: an allowlisted Origin still needs the token.
+    const csrfHeader = request.headers.get("X-CSRF-Token") ?? "";
     const cookieHeader = request.headers.get("Cookie") || "";
-    const cookieCsrf = cookieHeader.split("; ").find((c) => c.trim().startsWith("csrf_token="))?.split("=")[1];
-    const csrfToken = csrfHeader || cookieCsrf;
-    if (!csrfToken) return false;
-    return csrfToken.length >= 32;
+    const cookieCsrf = cookieHeader.split("; ").find((c) => c.trim().startsWith("csrf_token="))?.split("=")[1] ?? "";
+    if (!csrfHeader || !cookieCsrf) return false;
+    return timingSafeEqual(csrfHeader, cookieCsrf);
   }
 
   // CSRF token endpoint. Same-origin deployment, so a Lax cookie is enough.
@@ -330,9 +405,8 @@ if (request.method === "OPTIONS") {
         if (!token) return j({ ok: false, error: "Missing token" }, 400);
         const secret = (env as unknown as Record<string, string | undefined>).RECAPTCHA_SECRET_KEY;
         if (!secret) {
-          // No secret configured — fail open in dev, but log warning. Set via `wrangler secret put RECAPTCHA_SECRET_KEY`
-          console.warn("RECAPTCHA_SECRET_KEY not set — skipping server verification");
-          return j({ ok: true, warning: "RECAPTCHA_SECRET_KEY not set, verification skipped" });
+          // Fail closed: without a server secret we cannot verify humanity.
+          return j({ ok: false, error: "reCAPTCHA not configured." }, 503);
         }
         try {
           const verifyRes = await fetch("https://www.google.com/recaptcha/api/siteverify", {
@@ -571,6 +645,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       }
 
       // ---- Rooms ----------------------------------------------------------
+      // Public lobby: never list private 1-on-1 call rooms.
       if (path === "/api/rooms" && request.method === "GET") {
         const res = await env.DB.prepare(
           `SELECT r.id, r.slug, r.title, r.description, r.category, r.status,
@@ -579,7 +654,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
                   u.display_name AS host_name
            FROM rooms r
            JOIN users u ON u.id = r.host_user_id
-           WHERE r.status = 'live'
+           WHERE r.status = 'live' AND (r.is_private IS NULL OR r.is_private = 0)
            ORDER BY r.updated_at DESC`
         ).all();
         return j({ ok: true, rooms: res.results ?? [] });
@@ -596,6 +671,20 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           .bind(slug, slug)
           .first();
         if (!room) return notFound("Room not found.", origin);
+        const roomRow = room as Record<string, unknown>;
+        // Private 1-on-1 rooms: only participants may view.
+        if (Number(roomRow.is_private ?? 0) === 1) {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          const isParticipant =
+            me.id === roomRow.host_user_id || me.id === roomRow.call_participant_user_id;
+          if (!isParticipant) {
+            const seat = await env.DB.prepare(
+              `SELECT 1 AS x FROM seats WHERE room_id = ? AND user_id = ? LIMIT 1`
+            ).bind(roomRow.id, me.id).first();
+            if (!seat) return j({ ok: false, error: "Not authorized." }, 403);
+          }
+        }
         const seats = await env.DB.prepare(
           `SELECT s.seat_index, s.user_id, s.role, s.is_muted, s.joined_at,
                   u.display_name, u.username
@@ -629,13 +718,18 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         }
 
         if (request.method === "POST") {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+          const userId = me.id;
           const body = await readJson<{ seat_index?: unknown; user_id?: unknown }>(request);
           const seatIndex = typeof body?.seat_index === "number" ? body.seat_index : -1;
-          const userId = typeof body?.user_id === "string" ? body.user_id : "";
+          if (typeof body?.user_id === "string" && body.user_id !== userId) {
+            return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+          }
           if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 7) {
             return badRequest("seat_index must be an integer between 0 and 7.");
           }
-          if (!userId) return badRequest("user_id is required.");
           const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
           if (!user) return notFound("User not found.");
           const existing = await env.DB.prepare(
@@ -674,13 +768,25 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 7) {
           return badRequest("Seat index must be between 0 and 7.");
         }
-        const room = await env.DB.prepare(`SELECT id FROM rooms WHERE slug = ? OR id = ?`)
+        const room = await env.DB.prepare(`SELECT id, host_user_id FROM rooms WHERE slug = ? OR id = ?`)
           .bind(slug, slug)
           .first();
         if (!room) return notFound("Room not found.");
         const roomId = (room as Record<string, unknown>).id as string;
+        const hostId = (room as Record<string, unknown>).host_user_id as string;
 
         if (request.method === "DELETE") {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+          const occupant = await env.DB.prepare(
+            `SELECT user_id FROM seats WHERE room_id = ? AND seat_index = ?`
+          ).bind(roomId, seatIndex).first();
+          const occupantId = (occupant as Record<string, unknown> | null)?.user_id as string | null;
+          // Self-leave, or host evicting someone else. Anonymous evict closed.
+          if (me.id !== occupantId && me.id !== hostId) {
+            return j({ ok: false, error: "Only the seat holder or host can free this seat." }, 403);
+          }
           await env.DB.prepare(`UPDATE seats SET user_id = NULL WHERE room_id = ? AND seat_index = ?`)
             .bind(roomId, seatIndex)
             .run();
@@ -688,6 +794,17 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         }
 
         if (request.method === "PATCH") {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+          const occupant = await env.DB.prepare(
+            `SELECT user_id FROM seats WHERE room_id = ? AND seat_index = ?`
+          ).bind(roomId, seatIndex).first();
+          const occupantId = (occupant as Record<string, unknown> | null)?.user_id as string | null;
+          // Self-mute or host mute. Anonymous/club-wide mute closed.
+          if (me.id !== occupantId && me.id !== hostId) {
+            return j({ ok: false, error: "Only the seat holder or host can mute this seat." }, 403);
+          }
           const body = await readJson<{ is_muted?: unknown }>(request);
           if (typeof body?.is_muted !== "boolean" && typeof body?.is_muted !== "number") {
             return badRequest("is_muted (boolean) is required.");
@@ -733,45 +850,32 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         return null;
       }
 
+      // Phase 1.8: public allowlist. Never leak email/phone/firebase_uid,
+      // banned/ban_reason, or balances (coins/gems) on public reads.
+      // Balances come only from /api/auth/me (self) or wallet (self).
+      function publicUser(row: Record<string, unknown>): Record<string, unknown> {
+        return {
+          id: row.id,
+          username: row.username,
+          display_name: row.display_name,
+          avatar_url: row.avatar_url,
+          bio: row.bio,
+          frame_style: row.frame_style,
+          id_tag: row.id_tag,
+          xp: row.xp,
+          level: row.level,
+          created_at: row.created_at,
+        };
+      }
+
       // ---- Universal outside-ID: every user row carries a stable unique `id`
       // plus a human-readable unique `id_tag` (BASE#NNNN), no matter how they
       // signed up (username, Google, email/password, phone). Admins find, ban
       // and promote users by id, username, or id_tag.
+      // Phase 2: no-op. Columns/indexes live in migrations 0001/0005; the old
+      // runtime backfill issued ~5,000 D1 statements on cold start and blew the
+      // subrequest cap. Fresh rows get id_tag at insert; old rows were backfilled.
       async function ensureUserIdentityColumns(): Promise<void> {
-        if (userIdentitySchemaReady) return;
-        for (const ddl of [
-          "ALTER TABLE users ADD COLUMN id_tag TEXT",
-          "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0",
-          "ALTER TABLE users ADD COLUMN ban_reason TEXT",
-        ]) {
-          try {
-            await env.DB.prepare(ddl).run();
-          } catch {
-            // column already exists
-          }
-        }
-        try {
-          await env.DB.prepare(
-            `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_id_tag ON users(id_tag) WHERE id_tag IS NOT NULL`
-          ).run();
-        } catch {}
-        // One-time backfill for rows created before id_tag existed.
-        try {
-          const rows = await env.DB
-            .prepare(`SELECT id, username FROM users WHERE id_tag IS NULL OR id_tag = '' LIMIT 1000`)
-            .all();
-          for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
-            const base = ((r.username as string) || "user").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "user";
-            const stem = (base.toUpperCase().replace(/[^A-Z0-9]/g, "") || "USER").slice(0, 8);
-            for (let i = 0; i < 5; i++) {
-              const tag = `${stem}#${Math.floor(1000 + Math.random() * 9000)}`;
-              try {
-                await env.DB.prepare(`UPDATE users SET id_tag = ? WHERE id = ? AND (id_tag IS NULL OR id_tag = '')`).bind(tag, r.id).run();
-                break;
-              } catch {}
-            }
-          }
-        } catch {}
         userIdentitySchemaReady = true;
       }
 
@@ -801,77 +905,65 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         const id = decodeURIComponent(userMatch[1]);
         const user = await resolveUser(id);
         if (!user) return notFound("User not found.");
-        return j({ ok: true, user });
+        return j({ ok: true, user: publicUser(user) });
       }
 
       const txMatch = path.match(/^\/api\/users\/([^/]+)\/transactions$/);
       if (txMatch && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
         const id = decodeURIComponent(txMatch[1]);
+        if (id !== me.id) {
+          // Allow lookup by username/id_tag only when it resolves to self.
+          const resolved = await resolveUser(id);
+          if (!resolved || (resolved.id as string) !== me.id) {
+            return j({ ok: false, error: "Not authorized." }, 403);
+          }
+        }
         const tx = await env.DB.prepare(
-          `SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
+          `SELECT id, user_id, room_id, type, amount, description, created_at FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
         )
-          .bind(id)
+          .bind(me.id)
           .all();
         return j({ ok: true, transactions: tx.results ?? [] });
       }
 
       // ---- Daily reward ------------------------------------------------------
+      // Deprecated (Phase 1.11): this was a second daily faucet alongside
+      // /api/checkin with a client-supplied amount. Use /api/checkin only.
       if (path === "/api/rewards/claim" && request.method === "POST") {
-        const body = await readJson<{ user_id?: unknown; amount?: unknown }>(request);
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
-        const amount = typeof body?.amount === "number" ? Math.floor(body.amount) : 100;
-        if (!userId) return badRequest("user_id is required.");
-        if (!Number.isFinite(amount) || amount <= 0 || amount > 1000) {
-          return badRequest("amount must be between 1 and 1000.");
-        }
-        const user = await env.DB.prepare(`SELECT id, coins FROM users WHERE id = ?`).bind(userId).first();
-        if (!user) return notFound("User not found.");
-        const claimed = await env.DB.prepare(
-          `SELECT id FROM transactions
-           WHERE user_id = ? AND type = 'daily_reward' AND created_at >= date('now', 'start of day') LIMIT 1`
-        )
-          .bind(userId)
-          .first();
-        if (claimed) return conflict("Daily reward already claimed today.");
-        await env.DB.prepare(`UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .bind(amount, userId)
-          .run();
-        await env.DB.prepare(
-          `INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, 'daily_reward', ?, 'Daily check-in reward')`
-        )
-          .bind(newId("tx"), userId, amount)
-          .run();
-        const updated = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
-        return json({
-          ok: true,
-          user_id: userId,
-          credited: amount,
-          coins: (updated as Record<string, unknown> | null)?.coins ?? null,
-        });
+        return j({ ok: false, error: "Use /api/checkin for daily rewards." }, 410);
       }
 
       // ---- Gifts (Triple-Currency: Coins spent, Gems earned 70% to host, XP progression) ---------
       if (path === "/api/gifts/send" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const fromUserId = me.id;
         const body = await readJson<{
           from_user_id?: unknown;
           room_id?: unknown;
           gift_id?: unknown;
           cost?: unknown;
         }>(request);
-        const fromUserId = typeof body?.from_user_id === "string" ? body.from_user_id : "";
-        const roomId = typeof body?.room_id === "string" ? body.room_id : null;
-        const giftId = typeof body?.gift_id === "string" ? body.gift_id : "gift";
-        const cost = typeof body?.cost === "number" ? Math.floor(body.cost) : 0;
-        if (!fromUserId) return badRequest("from_user_id is required.");
-        if (!Number.isFinite(cost) || cost <= 0) return badRequest("cost must be a positive number.");
-        const user = await env.DB.prepare(`SELECT id, coins FROM users WHERE id = ?`).bind(fromUserId).first();
-        if (!user) return notFound("Sender not found.");
-        if (((user as Record<string, unknown>).coins as number) < cost) {
-          return conflict("Not enough coins.");
+        // Reject body identity mismatch explicitly so tampered clients fail loudly.
+        if (typeof body?.from_user_id === "string" && body.from_user_id !== fromUserId) {
+          return j({ ok: false, error: "from_user_id must match the signed-in user." }, 403);
         }
-        await env.DB.prepare(`UPDATE users SET coins = coins - ?, xp = xp + 2, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .bind(cost, fromUserId)
-          .run();
+        const roomId = typeof body?.room_id === "string" ? body.room_id : null;
+        const giftId = typeof body?.gift_id === "string" ? body.gift_id.slice(0, 40) : "";
+        if (!giftId) return badRequest("gift_id is required.");
+        // Server-side price: never trust body.cost.
+        const catalogRow = await env.DB.prepare(`SELECT cost FROM gift_catalog WHERE id = ?`).bind(giftId).first();
+        const cost = Number((catalogRow as Record<string, unknown> | null)?.cost ?? NaN);
+        if (!Number.isFinite(cost) || cost <= 0) return badRequest("Unknown gift.");
+        // Atomic debit: exactly one row changes only when balance covers cost.
+        const debit = await env.DB.prepare(
+          `UPDATE users SET coins = coins - ?, xp = xp + 2, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND coins >= ?`
+        ).bind(cost, fromUserId, cost).run();
+        const changed = (debit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
+        if (changed !== 1) return conflict("Not enough coins.");
         await env.DB.prepare(
           `INSERT INTO transactions (id, user_id, room_id, type, amount, description)
            VALUES (?, ?, ?, 'gift_sent', ?, ?)`
@@ -901,45 +993,10 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         });
       }
 
-      // ---- Auth (username login, D1-backed sessions) ---------------------------
-      if (path === "/api/auth/login" && request.method === "POST") {
-        const body = await readJson<{ username?: unknown }>(request);
-        const username = typeof body?.username === "string" ? body.username.trim() : "";
-        if (!/^[A-Za-z0-9 _.-]{2,24}$/.test(username)) {
-          return badRequest("username must be 2-24 chars (letters, numbers, space, _ . -).");
-        }
-        await ensureUserIdentityColumns();
-        let user = await env.DB.prepare(`SELECT * FROM users WHERE username = ? COLLATE NOCASE`)
-          .bind(username)
-          .first();
-        if (!user) {
-          const slug = username.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "guest";
-          const id = `user-${slug}-${Math.floor(Math.random() * 1e6)}`;
-          const idTag = await makeUniqueIdTag(slug);
-          await env.DB.prepare(
-            `INSERT INTO users (id, username, display_name, bio, coins, xp, id_tag)
-             VALUES (?, ?, ?, '', 100, 0, ?)`
-          )
-            .bind(id, username, username, idTag)
-            .run();
-          user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
-        }
-        const userId = (user as Record<string, unknown>).id as string;
-        const token = `sess_${newId("t").replace("t-", "")}`;
-        await env.DB.prepare(
-          `INSERT INTO sessions (id, user_id, expires_at)
-           VALUES (?, ?, datetime('now', '+30 days'))`
-        )
-          .bind(token, userId)
-          .run();
-        // Set HttpOnly cookie
-        const cookieHeaders = corsFor(request, origin);
-        cookieHeaders["Set-Cookie"] = `session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`;
-        return new Response(JSON.stringify({ ok: true, user }), {
-          status: 200,
-          headers: { "Content-Type": "application/json", ...cookieHeaders },
-        });
-      }
+      // NOTE: POST /api/auth/login was removed (Phase 1.4). It minted a 30-day
+      // session from a username alone — no password, OTP or Firebase token — and
+      // auto-created the account if it didn't exist. Usernames are public, so this
+      // was full account takeover. Identity now comes from /api/auth/firebase only.
 
       if (path === "/api/auth/me" && request.method === "GET") {
         // Read token from cookie first, then fall back to Authorization header for backward compatibility
@@ -1020,28 +1077,16 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           return json({ ok: false, error: "Firebase UID mismatch." }, 403);
         }
         const firebaseUid = verified.uid;
-        const email = (typeof body?.email === "string" ? body.email.trim().toLowerCase() : verified.email ?? null) || null;
-        const phone = (typeof body?.phone === "string" ? body.phone.trim() : verified.phone ?? null) || null;
+        // Phase 1.6: never trust body email/phone for account linking. Body
+        // values are attacker-controlled; only the verified token may link to
+        // an existing row, and email linking requires emailVerified.
+        const email = (verified.emailVerified ? verified.email?.trim().toLowerCase() : null) || null;
+        const phone = verified.phone ?? null;
         const displayName = typeof body?.display_name === "string" ? body.display_name.trim().slice(0, 24) : null;
         const avatarUrl = typeof body?.avatar_url === "string" ? body.avatar_url.trim().slice(0, 500) : null;
         const provider = typeof body?.provider === "string" ? body.provider.slice(0, 40) : "firebase";
 
-        // Lazy migration for older DBs that haven't run migrate-firebase.sql yet
-        for (const ddl of [
-          "ALTER TABLE users ADD COLUMN firebase_uid TEXT",
-          "ALTER TABLE users ADD COLUMN email TEXT",
-          "ALTER TABLE users ADD COLUMN phone TEXT",
-          "ALTER TABLE users ADD COLUMN provider TEXT",
-        ]) {
-          try {
-            await env.DB.prepare(ddl).run();
-          } catch {
-            // column already exists
-          }
-        }
-        try {
-          await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid) WHERE firebase_uid IS NOT NULL").run();
-        } catch {}
+        // Schema lives in migrations (0001/0004). No runtime DDL on the hot path.
         try {
           await env.DB.prepare("CREATE TABLE IF NOT EXISTS auth_audit (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, firebase_uid TEXT NOT NULL, provider TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)").run();
         } catch {}
@@ -1102,11 +1147,21 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       }
 
       // ---- XP --------------------------------------------------------------------
+      // Phase 1: self-only. Previously any anonymous caller could award ±500 XP
+      // to any user_id unlimited. Still client-triggered (RoomView rewards) —
+      // full server-authoritative rewards are Phase 4 — but cross-account
+      // forgery is closed: you can only affect your own session.
       if (path === "/api/xp/award" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
         const body = await readJson<{ user_id?: unknown; amount?: unknown; reason?: unknown; room_id?: unknown }>(
           request
         );
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
+        if (typeof body?.user_id === "string" && body.user_id !== userId) {
+          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+        }
         const amount = typeof body?.amount === "number" ? Math.floor(body.amount) : 0;
         const reason = typeof body?.reason === "string" ? body.reason.slice(0, 120) : "";
         const roomId = typeof body?.room_id === "string" ? body.room_id : null;
@@ -1135,11 +1190,19 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
 
       const xpHistoryMatch = path.match(/^\/api\/users\/([^/]+)\/xp$/);
       if (xpHistoryMatch && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
         const id = decodeURIComponent(xpHistoryMatch[1]);
+        if (id !== me.id) {
+          const resolved = await resolveUser(id);
+          if (!resolved || (resolved.id as string) !== me.id) {
+            return j({ ok: false, error: "Not authorized." }, 403);
+          }
+        }
         const events = await env.DB.prepare(
-          `SELECT * FROM xp_events WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
+          `SELECT id, user_id, amount, reason, room_id, created_at FROM xp_events WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
         )
-          .bind(id)
+          .bind(me.id)
           .all();
         return j({ ok: true, events: events.results ?? [] });
       }
@@ -1152,6 +1215,10 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
 
       // ---- Rooms: create / update / end ----------------------------------------------
       if (path === "/api/rooms" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const hostId = me.id;
         const body = await readJson<{
           host_user_id?: unknown;
           title?: unknown;
@@ -1161,14 +1228,15 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           capacity?: unknown;
           locked?: unknown;
         }>(request);
-        const hostId = typeof body?.host_user_id === "string" ? body.host_user_id : "";
+        if (typeof body?.host_user_id === "string" && body.host_user_id !== hostId) {
+          return j({ ok: false, error: "host_user_id must match the signed-in user." }, 403);
+        }
         const title = typeof body?.title === "string" ? body.title.trim() : "";
         const description = typeof body?.description === "string" ? body.description.trim().slice(0, 200) : "";
         const category = typeof body?.category === "string" ? body.category : "Chat";
         const cover = typeof body?.cover_color === "string" ? body.cover_color.slice(0, 16) : "#2c3140";
         const capacity = body?.capacity === 4 || body?.capacity === 12 ? (body.capacity as number) : 8;
         const locked = body?.locked === 1 || body?.locked === true ? 1 : 0;
-        if (!hostId) return badRequest("host_user_id is required.");
         if (title.length < 2 || title.length > 40) return badRequest("title must be 2-40 characters.");
         const allowedCats = ["Chill", "Music", "Community", "Chat", "Karaoke", "Games"];
         if (!allowedCats.includes(category)) return badRequest("Invalid category.");
@@ -1197,20 +1265,25 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
 
       // ---- Private 1-on-1 Call Room Creation (with coin payment) ----
       if (path === "/api/rooms/private-call" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const callerId = me.id;
         const body = await readJson<{
           caller_user_id?: unknown;
           callee_user_id?: unknown;
           call_price_per_minute?: unknown;
           media?: unknown;
         }>(request);
-        const callerId = typeof body?.caller_user_id === "string" ? body.caller_user_id : "";
+        if (typeof body?.caller_user_id === "string" && body.caller_user_id !== callerId) {
+          return j({ ok: false, error: "caller_user_id must match the signed-in user." }, 403);
+        }
         const calleeId = typeof body?.callee_user_id === "string" ? body.callee_user_id : "";
-        const pricePerMinute = typeof body?.call_price_per_minute === "number" ? body.call_price_per_minute : 10;
+        // Server-fixed price: never trust body call_price_per_minute.
+        const pricePerMinute = 10;
         const media = body?.media === "video" ? "video" : "audio";
-        if (!callerId) return badRequest("caller user_id (caller_user_id) is required.");
         if (!calleeId) return badRequest("callee_user_id is required.");
         if (callerId === calleeId) return badRequest("Cannot call yourself.");
-        if (!Number.isInteger(pricePerMinute) || pricePerMinute < 0) return badRequest("call_price_per_minute must be a non-negative integer.");
 
         const caller = await env.DB.prepare(`SELECT id, coins FROM users WHERE id = ?`).bind(callerId).first();
         if (!caller) return notFound("Caller not found.");
@@ -1262,8 +1335,12 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
            VALUES (?, ?, ?, ?, ?, ?, 'ringing', CURRENT_TIMESTAMP)`
         ).bind(callSessionId, roomId, callerId, calleeId, pricePerMinute, media).run();
 
-        // Charge caller for 1 minute upfront
-        await env.DB.prepare(`UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(pricePerMinute, callerId).run();
+        // Charge caller for 1 minute upfront (atomic: no negative balances).
+        const debitCall = await env.DB.prepare(
+          `UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND coins >= ?`
+        ).bind(pricePerMinute, callerId, pricePerMinute).run();
+        const debitChanged = (debitCall as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
+        if (debitChanged !== 1) return conflict("Not enough coins to start a call. Minimum 1 minute required.");
         await env.DB.prepare(
           `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'call_charge', ?, ?)`
         ).bind(newId("tx"), callerId, roomId, -pricePerMinute, `1-on-1 call with ${(await env.DB.prepare(`SELECT display_name FROM users WHERE id = ?`).bind(calleeId).first())?.display_name ?? 'User'}`).run();
@@ -1281,26 +1358,26 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       // ---- Room Edit (PATCH/DELETE) ---------------------------------------------------
       const roomEditMatch = path.match(/^\/api\/rooms\/([^/]+)$/);
       if (roomEditMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
         const slug = decodeURIComponent(roomEditMatch[1]);
         const room = await env.DB.prepare(`SELECT * FROM rooms WHERE slug = ? OR id = ?`)
           .bind(slug, slug)
           .first();
         if (!room) return notFound("Room not found.");
         const roomRow = room as Record<string, unknown>;
+        if (roomRow.host_user_id !== me.id) {
+          return j({ ok: false, error: "Only the host can edit or end this room." }, 403);
+        }
         if (request.method === "DELETE") {
-          const hostId = url.searchParams.get("host_user_id") ?? "";
-          if (hostId !== roomRow.host_user_id) {
-            return j({ ok: false, error: "Only the host can end this room." }, 403);
-          }
           await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
             .bind(roomRow.id)
             .run();
 return j({ ok: true, ended: true });
         }
         const body = await readJson<{ host_user_id?: unknown; title?: unknown; description?: unknown }>(request);
-        if (body?.host_user_id !== roomRow.host_user_id) {
-          return j({ ok: false, error: "Only the host can edit this room." }, 403);
-        }
+        // host_user_id in body is ignored: session is the authority (already checked above).
         const title = typeof body?.title === "string" ? body.title.trim() : null;
         const description = typeof body?.description === "string" ? body.description.trim().slice(0, 200) : null;
         if (title !== null && (title.length < 2 || title.length > 40)) {
@@ -1318,10 +1395,16 @@ return j({ ok: true, ended: true });
 
       // ---- Follow graph -----------------------------------------------------------------
       if (path === "/api/follow" && (request.method === "POST" || request.method === "DELETE")) {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const followerId = me.id;
         const body = await readJson<{ follower_id?: unknown; followee_id?: unknown }>(request);
-        const followerId = typeof body?.follower_id === "string" ? body.follower_id : "";
+        if (typeof body?.follower_id === "string" && body.follower_id !== followerId) {
+          return j({ ok: false, error: "follower_id must match the signed-in user." }, 403);
+        }
         const followeeId = typeof body?.followee_id === "string" ? body.followee_id : "";
-        if (!followerId || !followeeId) return badRequest("follower_id and followee_id are required.");
+        if (!followeeId) return badRequest("followee_id is required.");
         if (followerId === followeeId) return badRequest("You cannot follow yourself.");
         for (const uid of [followerId, followeeId]) {
           const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(uid).first();
@@ -1403,17 +1486,21 @@ return j({ ok: true, ended: true });
         )
           .bind(user.id, user.id, user.id, user.id, user.id, user.id)
           .first();
-        return j({ ok: true, user, stats: stats ?? {} });
+        return j({ ok: true, user: publicUser(user), stats: stats ?? {} });
       }
 
       // Username availability check for FB/IG-style renames.
       // (Handler lives above, before the generic /api/users/:id GET match.)
       const userPatchMatch = path.match(/^\/api\/users\/([^/]+)$/);
       if (userPatchMatch && request.method === "PATCH") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
         const id = decodeURIComponent(userPatchMatch[1]);
         const found = await resolveUser(id);
         if (!found) return notFound("User not found.");
         const realId = found.id as string;
+        if (realId !== me.id) return j({ ok: false, error: "Not authorized." }, 403);
         const body = await readJson<{ display_name?: unknown; bio?: unknown; avatar_url?: unknown; username?: unknown }>(request);
         const displayName = typeof body?.display_name === "string" ? body.display_name.trim() : null;
         const bio = typeof body?.bio === "string" ? body.bio.trim().slice(0, 160) : null;
@@ -1447,25 +1534,19 @@ return j({ ok: true, ended: true });
           .bind(displayName, bio, avatar, username, realId)
           .run();
         const updatedUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(realId).first();
-        return j({ ok: true, user: updatedUser });
+        return j({ ok: true, user: publicUser((updatedUser as Record<string, unknown> | null) ?? {}) });
       }
 
       // ---- Delete My Data (GDPR) -----------------------------------------------------------------
+      // Soft-delete with retained financial audit: the user row becomes an
+      // anonymized tombstone (PII nulled, balances zeroed) so transactions /
+      // admin_transactions keep referential integrity instead of CASCADE-deleting
+      // the ledger. Content tables are removed; hosted rooms are ended.
       if (path === "/api/users/me/delete" && request.method === "POST") {
-        // Get user from session cookie
-        const cookieHeader = request.headers.get("Cookie") || "";
-        const cookieToken = cookieHeader.split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
-        if (!cookieToken) return badRequest("Missing session token.");
-        
-        const session = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
-        if (!session) return j({ ok: false, error: "Invalid or expired session." }, 401);
-        
-        const userId = (session as Record<string, unknown>).user_id as string;
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const userId = me.id;
 
-        // Delete children before the parent. D1 enforces foreign keys, so a bare
-        // `DELETE FROM users` aborts the moment the account still owns a room or
-        // has an open session — which left this endpoint silently failing for
-        // exactly the active users most likely to request deletion.
         await env.DB.prepare(`DELETE FROM rtc_signals WHERE from_user_id = ? OR to_user_id = ?`)
           .bind(userId, userId).run();
         await env.DB.prepare(`DELETE FROM seats WHERE user_id = ?`).bind(userId).run();
@@ -1476,15 +1557,27 @@ return j({ ok: true, ended: true });
              AND id NOT IN (SELECT conversation_id FROM conversation_participants)`
         ).bind(userId).run();
         await env.DB.prepare(`DELETE FROM messages WHERE sender_id = ?`).bind(userId).run();
-        await env.DB.prepare(`DELETE FROM rooms WHERE host_user_id = ?`).bind(userId).run();
-        await env.DB.prepare(`DELETE FROM admin_sessions WHERE admin_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM moment_likes WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM moments WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM follows WHERE follower_id = ? OR followee_id = ?`).bind(userId, userId).run();
+        await env.DB.prepare(`DELETE FROM checkins WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM spin_plays WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`DELETE FROM reports WHERE reporter_id = ? OR target_id = ?`).bind(userId, userId).run();
+        await env.DB.prepare(`DELETE FROM support_tickets WHERE user_id = ?`).bind(userId).run();
+        await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE host_user_id = ? AND status = 'live'`).bind(userId).run();
+        await env.DB.prepare(`UPDATE private_call_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP WHERE (caller_user_id = ? OR callee_user_id = ?) AND status IN ('initiated','ringing','connected')`).bind(userId, userId).run();
+        try {
+          await env.DB.prepare(`DELETE FROM message_attachments WHERE message_id IN (SELECT id FROM messages WHERE sender_id = ?)`)
+            .bind(userId).run();
+        } catch {}
+        await env.DB.prepare(
+          `UPDATE users SET username = ?, display_name = 'Deleted User', avatar_url = NULL, bio = '',
+            email = NULL, phone = NULL, firebase_uid = NULL, provider = NULL,
+            coins = 0, gems = 0, xp = 0, level = 1, streak = 0, banned = 0, ban_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+        ).bind(`deleted_${userId.slice(0, 12)}`, userId).run();
         await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
-        await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
-        
-        // Also delete the session
-        if (cookieToken) {
-          await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(cookieToken).run();
-        }
+        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
         
         // Clear session cookie
         const cookieHeaders = corsFor(request, origin);
@@ -1513,10 +1606,15 @@ return j({ ok: true, ended: true });
       }
 
       if (path === "/api/moments" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
         const body = await readJson<{ user_id?: unknown; text?: unknown }>(request);
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
+        if (typeof body?.user_id === "string" && body.user_id !== userId) {
+          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+        }
         const text = typeof body?.text === "string" ? body.text.trim() : "";
-        if (!userId) return badRequest("user_id is required.");
         if (text.length < 1 || text.length > 280) return badRequest("Moment must be 1-280 characters.");
         const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
         if (!user) return notFound("User not found.");
@@ -1536,17 +1634,28 @@ return j({ ok: true, ended: true });
       if (likeMatch) {
         const momentId = decodeURIComponent(likeMatch[1]);
         if (request.method === "POST") {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+          const userId = me.id;
           const body = await readJson<{ user_id?: unknown }>(request);
-          const userId = typeof body?.user_id === "string" ? body.user_id : "";
-          if (!userId) return badRequest("user_id is required.");
+          if (typeof body?.user_id === "string" && body.user_id !== userId) {
+            return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+          }
           await env.DB.prepare(`INSERT OR IGNORE INTO moment_likes (moment_id, user_id) VALUES (?, ?)`)
             .bind(momentId, userId)
             .run();
           return j({ ok: true, liked: true });
         }
         if (request.method === "DELETE") {
-          const userId = url.searchParams.get("user_id") ?? "";
-          if (!userId) return badRequest("user_id is required.");
+          const meDel = await requireUser(request, env);
+          if (!meDel) return j({ ok: false, error: "Sign in required." }, 401);
+          if (meDel.banned) return j({ ok: false, error: "Account banned." }, 403);
+          const userId = meDel.id;
+          const qpUser = url.searchParams.get("user_id") ?? "";
+          if (qpUser && qpUser !== userId) {
+            return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+          }
           await env.DB.prepare(`DELETE FROM moment_likes WHERE moment_id = ? AND user_id = ?`)
             .bind(momentId, userId)
             .run();
@@ -1556,15 +1665,16 @@ return j({ ok: true, ended: true });
 
       // ---- Persistent daily check-in --------------------------------------------------------------
       if (path === "/api/checkin" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
+        // Server-fixed reward: body amount/user_id are ignored (beyond mismatch check).
         const body = await readJson<{ user_id?: unknown; amount?: unknown }>(request);
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
-        const amount = typeof body?.amount === "number" ? Math.floor(body.amount) : 100;
-        if (!userId) return badRequest("user_id is required.");
-        if (!Number.isFinite(amount) || amount <= 0 || amount > 500) {
-          return badRequest("amount must be between 1 and 500.");
+        if (typeof body?.user_id === "string" && body.user_id !== userId) {
+          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
         }
-        const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
-        if (!user) return notFound("User not found.");
+        const amount = 100;
         const ins = await env.DB.prepare(
           `INSERT OR IGNORE INTO checkins (user_id, day) VALUES (?, date('now'))`
         )
@@ -1639,40 +1749,25 @@ return j({
         });
       }
 
-      if (path === "/api/recharge/buy" && request.method === "POST") {
-        const body = await readJson<{ user_id?: unknown; package_id?: unknown }>(request);
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
-        const packageId = typeof body?.package_id === "string" ? body.package_id : "";
-        const packs: Record<string, number> = { starter: 27500, growth: 55000, pro: 110000, enterprise: 550000, p60: 60, p300: 300, p980: 980, p1980: 1980, p3280: 3280, p6480: 6480 };
-        const coins = packs[packageId] ?? 0;
-        if (!userId) return badRequest("user_id is required.");
-        if (!coins) return badRequest("Unknown package.");
-        const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
-        if (!user) return notFound("User not found.");
-        await env.DB.prepare(`UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .bind(coins, userId)
-          .run();
-        await env.DB.prepare(
-          `INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, 'purchase', ?, ?)`
-        )
-          .bind(newId("tx"), userId, coins, `Sandbox top-up ${packageId}`)
-          .run();
-        const balance = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
-        return j({ ok: true, credited: coins, coins: (balance as Record<string, unknown> | null)?.coins ?? null });
-      }
+      // NOTE: POST /api/recharge/buy was removed (Phase 1.5). It credited up to
+      // 550,000 coins to any user_id with no payment and no authentication — an
+      // anonymous coin mint reachable from the wallet UI. Coins are earned-only
+      // until the gated IAP workstream (docs/PRODUCTION-PLAN.md Phase 6) adds a
+      // server-verified purchase path.
 
       // ---- Lucky spin --------------------------------------------------------------------------------------
       if (path === "/api/spin" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
         const SPIN_COST = 20;
         const SEGMENTS = [0, 10, 30, 60, 150, 300];
-        const WEIGHTS = [30, 30, 20, 12, 6, 2];
+        // House edge: EV ~15.6 per 20-cost spin (was 31.2, an infinite faucet).
+        const WEIGHTS = [50, 30, 12, 5, 2, 1];
         const body = await readJson<{ user_id?: unknown }>(request);
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
-        if (!userId) return badRequest("user_id is required.");
-        const user = await env.DB.prepare(`SELECT id, coins FROM users WHERE id = ?`).bind(userId).first();
-        if (!user) return notFound("User not found.");
-        if (((user as Record<string, unknown>).coins as number) < SPIN_COST) {
-          return conflict("Not enough coins to spin (20 coins).");
+        if (typeof body?.user_id === "string" && body.user_id !== userId) {
+          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
         }
         const total = WEIGHTS.reduce((a, b) => a + b, 0);
         let roll = Math.random() * total;
@@ -1684,9 +1779,17 @@ return j({
             break;
           }
         }
-        await env.DB.prepare(`UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .bind(prize - SPIN_COST, userId)
-          .run();
+        // Atomic debit first: fails when balance < cost, no negative coins.
+        const debitSpin = await env.DB.prepare(
+          `UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND coins >= ?`
+        ).bind(SPIN_COST, userId, SPIN_COST).run();
+        const debitChanged = (debitSpin as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
+        if (debitChanged !== 1) return conflict("Not enough coins to spin (20 coins).");
+        if (prize > 0) {
+          await env.DB.prepare(`UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .bind(prize, userId)
+            .run();
+        }
         await env.DB.prepare(`INSERT INTO spin_plays (id, user_id, cost, prize) VALUES (?, ?, ?, ?)`)
           .bind(newId("spin"), userId, SPIN_COST, prize)
           .run();
@@ -1711,15 +1814,15 @@ return j({
             `SELECT r.id, r.slug, r.title, r.description, r.category, r.listener_count, r.speaker_count,
                     r.cover_color, u.display_name AS host_name
              FROM rooms r JOIN users u ON u.id = r.host_user_id
-             WHERE r.status = 'live' ORDER BY r.listener_count DESC LIMIT 20`
+             WHERE r.status = 'live' AND (r.is_private IS NULL OR r.is_private = 0) ORDER BY r.listener_count DESC LIMIT 20`
           ).all();
           return j({ ok: true, type, period, rows: rooms.results ?? [] });
         }
         if (type === "hosts") {
           const hosts = await env.DB.prepare(
-            `SELECT u.id, u.username, u.display_name, u.avatar_url, SUM(-t.amount) AS score
-             FROM transactions t JOIN rooms r ON r.id = t.room_id JOIN users u ON u.id = r.host_user_id
-             WHERE t.type = 'gift_sent'${cutoff ? ` AND t.created_at >= ${cutoff}` : ""}
+            `SELECT u.id, u.username, u.display_name, u.avatar_url, SUM(t.amount) AS score
+             FROM transactions t JOIN users u ON u.id = t.user_id
+             WHERE t.type = 'gift_received'${cutoff ? ` AND t.created_at >= ${cutoff}` : ""}
              GROUP BY u.id ORDER BY score DESC LIMIT 20`
           ).all();
           return j({ ok: true, type, period, rows: hosts.results ?? [] });
@@ -1746,7 +1849,7 @@ return j({
             `SELECT r.id, r.slug, r.title, r.description, r.category, r.listener_count, r.speaker_count,
                     r.cover_color, u.display_name AS host_name
              FROM rooms r JOIN users u ON u.id = r.host_user_id
-             WHERE r.status = 'live' AND (r.title LIKE ? ESCAPE '\\' OR r.description LIKE ? ESCAPE '\\')
+             WHERE r.status = 'live' AND (r.is_private IS NULL OR r.is_private = 0) AND (r.title LIKE ? ESCAPE '\\' OR r.description LIKE ? ESCAPE '\\')
              ORDER BY r.listener_count DESC LIMIT 8`
           )
             .bind(like, like)
@@ -1755,7 +1858,7 @@ return j({
         }
         if (type === "all" || type === "users") {
           const u = await env.DB.prepare(
-            `SELECT id, username, display_name, avatar_url, coins, gems, xp, id_tag FROM users
+            `SELECT id, username, display_name, avatar_url, id_tag FROM users
              WHERE username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR id_tag LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' LIMIT 8`
           )
             .bind(like, like, like, like)
@@ -1767,14 +1870,20 @@ return j({
 
       // ---- Safety reports ----------------------------------------------------------------------------------------------
       if (path === "/api/reports" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const reporterId = me.id;
         const body = await readJson<{ reporter_id?: unknown; target_id?: unknown; reason?: unknown; room_id?: unknown }>(
           request
         );
-        const reporterId = typeof body?.reporter_id === "string" ? body.reporter_id : "";
+        if (typeof body?.reporter_id === "string" && body.reporter_id !== reporterId) {
+          return j({ ok: false, error: "reporter_id must match the signed-in user." }, 403);
+        }
         const targetId = typeof body?.target_id === "string" ? body.target_id : "";
         const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
         const roomId = typeof body?.room_id === "string" ? body.room_id : null;
-        if (!reporterId || !targetId) return badRequest("reporter_id and target_id are required.");
+        if (!targetId) return badRequest("target_id is required.");
         if (reason.length < 2 || reason.length > 200) return badRequest("reason must be 2-200 characters.");
         for (const uid of [reporterId, targetId]) {
           const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(uid).first();
@@ -1794,7 +1903,12 @@ return j({
       // with Bearer TURN_API_TOKEN. Returns { iceServers: RTCIceServer[] } which we
       // forward verbatim (plus a flattened turn:{urls,username,credential} for old clients).
       // Fallback: legacy Calls turn_keys (CALLS_*), for accounts without a TURN key.
+      // Gated behind session: anonymous callers could otherwise burn TURN quota.
+      // TTL is 1h (room/call session length), not 24h.
       if (path === "/api/turn" && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
         const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN, TURN_KEY_ID, TURN_API_TOKEN } = env;
         const hasRealtimeTurn =
           typeof TURN_KEY_ID === "string" && TURN_KEY_ID.length > 0 && !TURN_KEY_ID.startsWith("@") &&
@@ -1824,7 +1938,7 @@ return j({
                   Authorization: `Bearer ${TURN_API_TOKEN}`,
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ ttl: 86400 }),
+                body: JSON.stringify({ ttl: 3600 }),
               }
             );
             const payload = (await res.json()) as {
@@ -1892,6 +2006,9 @@ return j({
 
       // ---- Cloudflare Calls SFU session broker ---------------------------------------
       if (path === "/api/calls/session" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
         const { CALLS_ACCOUNT_ID, CALLS_APP_ID, CALLS_API_TOKEN } = env;
         const isPlaceholder = (v: unknown) => typeof v !== "string" || v.length === 0 || v.startsWith("@");
         if (isPlaceholder(CALLS_ACCOUNT_ID) || isPlaceholder(CALLS_APP_ID) || isPlaceholder(CALLS_API_TOKEN)) {
@@ -1954,21 +2071,45 @@ return j({
         const admin = await env.DB.prepare(`SELECT * FROM admin_users WHERE username = ? COLLATE NOCASE`).bind(username).first();
         if (!admin) return json({ ok: false, error: "Invalid credentials." }, 401);
         const row = admin as Record<string, unknown>;
-        // Strict check only: SHA-256(password) must match the stored hash.
-        // (The old "Admin123!" backdoor was removed; seeded placeholder
-        // hashes are disabled. Master provisions team passwords explicitly.)
-        const ok = (await sha256hex(password)) === (row.password_hash as string);
+        const ok = await verifyAdminPassword(password, row.password_hash as string);
         if (!ok) return json({ ok: false, error: "Invalid credentials." }, 401);
+        // Upgrade legacy SHA-256 rows to PBKDF2 on successful login.
+        try {
+          if (!(row.password_hash as string).startsWith("pbkdf2$")) {
+            const upgraded = await hashAdminPassword(password);
+            await env.DB.prepare(`UPDATE admin_users SET password_hash = ? WHERE id = ?`).bind(upgraded, row.id).run();
+          }
+        } catch {}
         await ensureAdminTables();
         const token = `admin_${newId("t").replace("t-", "")}`;
         await env.DB.prepare(`INSERT INTO admin_sessions (id, admin_id, role, expires_at) VALUES (?, ?, ?, datetime('now', '+12 hours'))`).bind(token, row.id, row.role).run();
         await env.DB.prepare(`UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
-        return j({ ok: true, admin: { id: row.id, username: row.username, display_name: row.display_name, role: row.role }, token });
+        const headers = corsFor(request, origin);
+        headers["Set-Cookie"] = `admin_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${12 * 60 * 60}`;
+        return new Response(
+          JSON.stringify({ ok: true, admin: { id: row.id, username: row.username, display_name: row.display_name, role: row.role }, token }),
+          { status: 200, headers: { "Content-Type": "application/json", ...headers } }
+        );
+      }
+
+      if (path === "/api/admin/logout" && request.method === "POST") {
+        const token = readAdminToken(request);
+        if (token) {
+          try {
+            await ensureAdminTables();
+            await env.DB.prepare(`DELETE FROM admin_sessions WHERE id = ?`).bind(token).run();
+          } catch {}
+        }
+        const headers = corsFor(request, origin);
+        headers["Set-Cookie"] = `admin_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...headers },
+        });
       }
 
       if (path === "/api/admin/me" && request.method === "GET") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Invalid admin session." }, 401);
         return j({ ok: true, admin: { id: adm.id, username: adm.username, display_name: adm.display_name, role: adm.role } });
       }
@@ -2027,8 +2168,7 @@ return j({
 
       // ---- Team management (master only) ----
       if (path === "/api/admin/team" && request.method === "GET") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         const team = await env.DB.prepare(
@@ -2038,8 +2178,7 @@ return j({
       }
 
       if (path === "/api/admin/team" && request.method === "POST") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         const body = await readJson<{ username?: unknown; display_name?: unknown; role?: unknown; password?: unknown }>(request);
@@ -2064,8 +2203,7 @@ return j({
 
       const teamDelMatch = path.match(/^\/api\/admin\/team\/([^/]+)$/);
       if (teamDelMatch && request.method === "DELETE") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         const id = decodeURIComponent(teamDelMatch[1]);
@@ -2082,8 +2220,7 @@ return j({
 
       // ---- Moderation: safety reports ----
       if (path === "/api/reports" && request.method === "GET") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const role = adm.role as string;
         if (role !== "master_admin" && role !== "support") {
@@ -2106,8 +2243,7 @@ return j({
 
       const reportPatchMatch = path.match(/^\/api\/reports\/([^/]+)$/);
       if (reportPatchMatch && request.method === "PATCH") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const role = adm.role as string;
         if (role !== "master_admin" && role !== "support") {
@@ -2126,8 +2262,7 @@ return j({
 
       // ---- Moderation: end any live room ----
       if (path === "/api/admin/rooms/end" && request.method === "POST") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const role = adm.role as string;
         if (role !== "master_admin" && role !== "support") {
@@ -2149,8 +2284,7 @@ return j({
       // ---- Support ticket status ----
       const ticketStatusMatch = path.match(/^\/api\/support\/tickets\/([^/]+)$/);
       if (ticketStatusMatch && request.method === "PATCH") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const role = adm.role as string;
         if (role !== "master_admin" && role !== "support") {
@@ -2170,8 +2304,7 @@ return j({
       }
 
       if (path === "/api/admin/recharge" && request.method === "POST") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         const role = adm.role as string;
         if (role !== "master_admin" && role !== "finance") return json({ ok: false, error: "Finance or Master Admin only." }, 403);
@@ -2192,25 +2325,25 @@ return j({
         if ((col === "coins" || col === "gems") && (row[col] as number) + delta < 0) return conflict(`Not enough ${col}.`);
         await env.DB.prepare(`UPDATE users SET ${col} = ${col} + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(delta, targetId).run();
         await env.DB.prepare(`INSERT INTO admin_transactions (admin_id, target_user_id, action_type, amount, notes) VALUES (?, ?, ?, ?, ?)`).bind(adm.id, targetId, action, amount, notes).run();
-        // Also log to transactions for user history
-        const txType = col === "coins" ? (delta > 0 ? "purchase" : "refund") : col === "gems" ? (delta > 0 ? "gift_received" : "gift_sent") : "xp_boost";
+        // Ledger: admin ops use dedicated types so the hosts leaderboard
+        // (gift_sent) is never polluted by staff grants.
+        const txType = delta > 0 ? "admin_credit" : "admin_debit";
         try { await env.DB.prepare(`INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, ?, ?, ?)`).bind(newId("tx"), targetId, txType, delta, `Admin ${action} by ${adm.username}: ${notes}`).run(); } catch {}
         const updated = await env.DB.prepare(`SELECT coins, gems, xp FROM users WHERE id = ?`).bind(targetId).first();
         return j({ ok: true, target_user_id: targetId, action_type: action, amount, balance: updated });
       }
 
       if (path === "/api/admin/transactions" && request.method === "GET") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
-        const limit = Math.min(100, Number(url.searchParams.get("limit") ?? 50) || 50);
+        const rawLimit = Number(url.searchParams.get("limit") ?? 50) || 50;
+        const limit = Math.min(100, Math.max(1, rawLimit));
         const rows = await env.DB.prepare(`SELECT at.*, au.username as admin_username, u.username as target_username FROM admin_transactions at LEFT JOIN admin_users au ON au.id = at.admin_id LEFT JOIN users u ON u.id = at.target_user_id ORDER BY at.created_at DESC LIMIT ?`).bind(limit).all();
         return j({ ok: true, transactions: rows.results ?? [] });
       }
 
       if (path === "/api/admin/users" && request.method === "GET") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         await ensureUserIdentityColumns();
         const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
@@ -2223,14 +2356,13 @@ return j({
       // all live sessions immediately; enforcement lives in /api/auth/me and
       // /api/auth/firebase so banned users can't re-mint.
       if (path === "/api/admin/users/ban" && request.method === "POST") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         await ensureUserIdentityColumns();
         const body = await readJson<{ user_id?: unknown; banned?: unknown; reason?: unknown }>(request);
         const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
-        const banned = body?.banned === true;
+        const banned = body?.banned === true || body?.banned === 1 || body?.banned === "true";
         const reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 200) : "";
         if (!key) return badRequest("user_id (id, username, or id_tag) is required.");
         const target = await resolveUser(key);
@@ -2252,8 +2384,7 @@ return j({
       // linked Firebase Google identity; if they have none, the master sets
       // an initial password instead (stored hashed, like team accounts).
       if (path === "/api/admin/users/promote" && request.method === "POST") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         await ensureUserIdentityColumns();
@@ -2290,8 +2421,7 @@ return j({
       }
 
       if (path === "/api/admin/stats" && request.method === "GET") {
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
         if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
         const stats = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM users) as users, (SELECT COUNT(*) FROM rooms WHERE status='live') as live_rooms, (SELECT COALESCE(SUM(coins),0) FROM users) as total_coins, (SELECT COALESCE(SUM(gems),0) FROM users) as total_gems, (SELECT COUNT(*) FROM support_tickets WHERE status='open') as open_tickets, (SELECT COUNT(*) FROM admin_transactions) as recharge_ops`).first();
@@ -2300,7 +2430,6 @@ return j({
       }
 
       if (path === "/api/support/tickets" && request.method === "GET") {
-        const userId = url.searchParams.get("user_id") ?? "";
         const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         const adm = token ? await getAdminFromToken(token) : null;
         if (adm && ((adm.role as string) === "support" || (adm.role as string) === "master_admin")) {
@@ -2308,18 +2437,27 @@ return j({
           const rows = status ? await env.DB.prepare(`SELECT * FROM support_tickets WHERE status = ? ORDER BY updated_at DESC LIMIT 50`).bind(status).all() : await env.DB.prepare(`SELECT * FROM support_tickets ORDER BY updated_at DESC LIMIT 50`).all();
 return j({ ok: true, tickets: rows.results ?? [] });
         }
-        if (!userId) return badRequest("user_id or admin token required.");
-        const rows = await env.DB.prepare(`SELECT * FROM support_tickets WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20`).bind(userId).all();
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const userId = url.searchParams.get("user_id") ?? "";
+        if (userId && userId !== me.id) return j({ ok: false, error: "Not authorized." }, 403);
+        const rows = await env.DB.prepare(`SELECT * FROM support_tickets WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20`).bind(me.id).all();
         return j({ ok: true, tickets: rows.results ?? [] });
       }
 
       if (path === "/api/support/tickets" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
         const body = await readJson<{ user_id?: unknown; subject?: unknown; category?: unknown; message?: unknown }>(request);
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
+        if (typeof body?.user_id === "string" && body.user_id !== userId) {
+          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+        }
         const subject = typeof body?.subject === "string" ? body.subject.trim().slice(0, 80) : "";
         const category = typeof body?.category === "string" ? body.category : "other";
         const message = typeof body?.message === "string" ? body.message.trim().slice(0, 2000) : "";
-        if (!userId || !subject || !message) return badRequest("user_id, subject, message required.");
+        if (!subject || !message) return badRequest("subject, message required.");
         if (!["recharge","account","technical","moderation","other"].includes(category)) return badRequest("Invalid category.");
         const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
         if (!user) return notFound("User not found.");
@@ -2330,8 +2468,7 @@ return j({ ok: true, tickets: rows.results ?? [] });
 
       if (path.match(/^\/api\/support\/tickets\/[^/]+\/reply$/) && request.method === "POST") {
         const ticketId = path.split("/")[3];
-        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
-        const adm = await getAdminFromToken(token);
+        const adm = await getAdminFromToken(readAdminToken(request));
         const body = await readJson<{ message?: unknown; user_id?: unknown }>(request);
         const message = typeof body?.message === "string" ? body.message.trim().slice(0, 2000) : "";
         if (!message) return badRequest("message required.");
@@ -2342,8 +2479,13 @@ return j({ ok: true, tickets: rows.results ?? [] });
           await env.DB.prepare(`UPDATE support_tickets SET status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticketId).run();
 return j({ ok: true });
         }
-        const userId = typeof body?.user_id === "string" ? body.user_id : "";
-        if (!userId || (ticket as Record<string, unknown>).user_id !== userId) return json({ ok: false, error: "Not ticket owner." }, 403);
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (typeof body?.user_id === "string" && body.user_id !== me.id) {
+          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
+        }
+        const userId = me.id;
+        if ((ticket as Record<string, unknown>).user_id !== userId) return json({ ok: false, error: "Not ticket owner." }, 403);
         await env.DB.prepare(`INSERT INTO ticket_replies (id, ticket_id, author_user_id, message) VALUES (?, ?, ?, ?)`).bind(newId("reply"), ticketId, userId, message).run();
         await env.DB.prepare(`UPDATE support_tickets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(ticketId).run();
         return j({ ok: true });
@@ -2353,9 +2495,18 @@ return j({ ok: true });
         const ticketId = path.split("/")[3];
         const ticket = await env.DB.prepare(`SELECT * FROM support_tickets WHERE id = ?`).bind(ticketId).first();
         if (!ticket) return notFound("Ticket not found.");
-        const replies = await env.DB.prepare(`SELECT * FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC`).bind(ticketId).all();
-        // Enrich with quick lookup links
-        const user = await env.DB.prepare(`SELECT id, username, coins, gems, xp FROM users WHERE id = ?`).bind((ticket as Record<string, unknown>).user_id).first();
+        const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        const adm = token ? await getAdminFromToken(token) : null;
+        if (!adm) {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          if ((ticket as Record<string, unknown>).user_id !== me.id) {
+            return j({ ok: false, error: "Not authorized." }, 403);
+          }
+        }
+        const replies = await env.DB.prepare(`SELECT id, ticket_id, author_admin_id, author_user_id, message, created_at FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC`).bind(ticketId).all();
+        // Enrich with quick lookup links (no balances)
+        const user = await env.DB.prepare(`SELECT id, username, display_name, avatar_url FROM users WHERE id = ?`).bind((ticket as Record<string, unknown>).user_id).first();
         return j({ ok: true, ticket, replies: replies.results ?? [], user });
       }
 
@@ -2442,6 +2593,12 @@ return j({ ok: true });
 
         const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ? AND is_private = 1`).bind(roomId).first();
         if (!room) return notFound("Private call room not found.");
+        const me = await sessionUserId();
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const rr = room as Record<string, unknown>;
+        if (rr.host_user_id !== me && rr.call_participant_user_id !== me) {
+          return j({ ok: false, error: "Not part of this call." }, 403);
+        }
 
         const callSession = await env.DB.prepare(`SELECT * FROM private_call_sessions WHERE room_id = ?`).bind(roomId).first();
         const caller = room.host_user_id ? await env.DB.prepare(`SELECT id, display_name, avatar_url FROM users WHERE id = ?`).bind((room as Record<string, unknown>).host_user_id).first() : null;
@@ -2497,7 +2654,13 @@ return j({ ok: true });
       // ---- Calls tab (recents, incoming ringing, missed badge) ---------------------------
       // Shared rule: stale ringing (>75s, nobody picked up) expires to 'missed'
       // so neither side rings forever and recents stay truthful.
+      // Time-gated per isolate (≤1 run/30s): the sweep is now owned by the
+      // scheduled cron; request-path expiry is best-effort backstop only.
+      let lastRingExpiry = 0;
       async function expireStaleRinging(): Promise<void> {
+        const now = Date.now();
+        if (now - lastRingExpiry < 30_000) return;
+        lastRingExpiry = now;
         try {
           const stale = await env.DB.prepare(
             `SELECT room_id FROM private_call_sessions
@@ -2578,9 +2741,6 @@ return j({ ok: true });
         const userId = await sessionUserId();
         if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
         await expireStaleRinging();
-        try {
-          await env.DB.prepare(`ALTER TABLE users ADD COLUMN last_calls_seen TEXT`).run();
-        } catch { /* exists */ }
         const row = await env.DB.prepare(
           `SELECT COUNT(*) AS n FROM private_call_sessions
            WHERE callee_user_id = ? AND status = 'missed'
@@ -2593,9 +2753,6 @@ return j({ ok: true });
       if (path === "/api/calls/seen" && request.method === "POST") {
         const userId = await sessionUserId();
         if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
-        try {
-          await env.DB.prepare(`ALTER TABLE users ADD COLUMN last_calls_seen TEXT`).run();
-        } catch { /* exists */ }
         await env.DB.prepare(`UPDATE users SET last_calls_seen = CURRENT_TIMESTAMP WHERE id = ?`).bind(userId).run();
         return j({ ok: true });
       }
@@ -2735,7 +2892,9 @@ return j({ ok: true });
         const roomId = typeof body?.room_id === "string" ? body.room_id : null;
         const ids = Array.isArray(body?.participant_ids) ? (body.participant_ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
         const unique = [...new Set([userId, ...ids])].slice(0, 20);
-        if (unique.length < 2) return badRequest("At least one other participant is required.");
+        // Room conversations may start solo (creator alone); others join via
+        // GET /api/conversations/room?room_id=. Group DMs still need ≥2.
+        if (type !== "room" && unique.length < 2) return badRequest("At least one other participant is required.");
         const id = newId("conv");
         await env.DB.prepare(`INSERT INTO conversations (id, type, room_id, created_by) VALUES (?, ?, ?, ?)`).bind(id, type, roomId, userId).run();
         for (const pid of unique) {
@@ -2744,6 +2903,28 @@ return j({ ok: true });
         }
         const full = await hydrateConversation(id, userId);
         return j({ ok: true, conversation: full }, 201);
+      }
+
+      // Room live chat: get-or-create the room's conversation and join the caller.
+      // Must sit before the generic /api/conversations/:id match.
+      if (path === "/api/conversations/room" && request.method === "GET") {
+        const userId = await requireChatUser();
+        if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        const roomId = url.searchParams.get("room_id") ?? "";
+        if (!roomId) return badRequest("room_id is required.");
+        const existing = await env.DB.prepare(
+          `SELECT id FROM conversations WHERE type = 'room' AND room_id = ? ORDER BY created_at ASC LIMIT 1`
+        ).bind(roomId).first();
+        let cid = (existing as Record<string, unknown> | null)?.id as string | undefined;
+        if (!cid) {
+          cid = newId("conv");
+          await env.DB.prepare(`INSERT INTO conversations (id, type, room_id, created_by) VALUES (?, 'room', ?, ?)`)
+            .bind(cid, roomId, userId).run();
+        }
+        await env.DB.prepare(`INSERT OR IGNORE INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)`)
+          .bind(cid, userId).run();
+        const full = await hydrateConversation(cid, userId);
+        return j({ ok: true, conversation: full });
       }
 
       const convIdMatch = path.match(/^\/api\/conversations\/([^/]+)$/);
@@ -2823,12 +3004,16 @@ return j({ ok: true });
             `INSERT INTO messages (id, conversation_id, sender_id, content, type, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)`
           ).bind(id, cid, userId, content, type, replyTo).run();
 
-          // Link attachments to message
+          // Link attachments to this message. The r2_key prefix is the uploader's own
+          // namespace, so this also prevents one user from claiming — and thereby
+          // gaining read access to — an attachment somebody else uploaded.
           if (attachmentIds.length > 0) {
+            const ownPrefix = `attachments/${userId}/`;
             for (const attachmentId of attachmentIds) {
               await env.DB.prepare(
-                `UPDATE message_attachments SET message_id = ? WHERE id = ? AND message_id IS NULL`
-              ).bind(id, attachmentId).run();
+                `UPDATE message_attachments SET message_id = ?
+                 WHERE id = ? AND message_id IS NULL AND substr(r2_key, 1, ?) = ?`
+              ).bind(id, attachmentId, ownPrefix.length, ownPrefix).run();
             }
           }
 
@@ -2947,20 +3132,29 @@ return j({ ok: true });
         const maxSize = 50 * 1024 * 1024; // 50MB
         if (file.size > maxSize) return j({ ok: false, error: "File too large (max 50MB)" }, 400);
 
-        // Determine attachment type from file if not provided
+        // Determine attachment type from file if not provided.
+        // Only real vCard/contact MIME types may become "contact" — matching all of
+        // `text/*` would classify text/html (i.e. script) as a contact card.
         let attachmentType: string = "file";
-        const mimeType = file.type || "application/octet-stream";
+        const mimeType = (file.type || "application/octet-stream").split(";")[0].trim().toLowerCase();
         if (mimeType.startsWith("image/")) attachmentType = "image";
         else if (mimeType.startsWith("video/")) attachmentType = "video";
         else if (mimeType.startsWith("audio/")) attachmentType = "audio";
-        else if (mimeType.startsWith("text/") || mimeType === "application/vnd.contact+xml" || mimeType === "text/vcard") attachmentType = "contact";
-        else attachmentType = "file";
+        else if (mimeType === "text/vcard" || mimeType === "text/x-vcard" || mimeType === "application/vnd.contact+xml") attachmentType = "contact";
 
-        // Generate R2 key
-        // Generate R2 key
+        // Honour an explicit form value, but only within the DB's own allowlist.
+        // Serving safety is decided server-side by MIME (see the download route), so
+        // this only controls the label shown in the UI.
+        const requestedType = typeof attachmentTypeFromForm === "string" ? attachmentTypeFromForm.trim().toLowerCase() : "";
+        if (["image", "video", "audio", "file", "contact"].includes(requestedType)) {
+          attachmentType = requestedType;
+        }
+
+        // Generate R2 key. The extension is attacker-controlled and ends up inside the
+        // object key, so keep it to a short alphanumeric token.
         const attachmentId = newId("att");
-        const ext = file.name.split(".").pop() || "";
-const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
+        const ext = (file.name.split(".").pop() || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
+const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}${ext ? `.${ext}` : ""}`;
 
         // Upload to R2 - use arrayBuffer to avoid stream type issues
         if (!env.CHAT_ATTACHMENTS) {
@@ -2976,16 +3170,29 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
           return j({ ok: false, error: "Failed to upload file" }, 500);
         }
 
-        await env.DB.prepare(
-          `INSERT INTO message_attachments (id, message_id, attachment_type, file_name, file_size, mime_type, r2_key, created_at)
-           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`
-        ).bind(attachmentId, "file", file.name, file.size, mimeType, r2Key, new Date().toISOString()).run();
+        // message_id is nullable: an upload creates an *unclaimed* row and
+        // POST /api/conversations/:id/messages links it later. If the client already
+        // supplies the target message, honour it.
+        const resolvedMessageId = messageId && messageId.trim() ? messageId.trim() : null;
+        try {
+          await env.DB.prepare(
+            `INSERT INTO message_attachments (id, message_id, attachment_type, file_name, file_size, mime_type, r2_key, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(attachmentId, resolvedMessageId, attachmentType, file.name, file.size, mimeType, r2Key, new Date().toISOString()).run();
+        } catch (e) {
+          // The R2 write already succeeded — remove the object rather than leak paid
+          // storage that no row can ever reference (the old failure mode).
+          try {
+            await env.CHAT_ATTACHMENTS.delete(r2Key);
+          } catch { /* best effort */ }
+          return j({ ok: false, error: "Failed to record attachment" }, 500);
+        }
 
         const downloadUrl = `${new URL(request.url).origin}/api/attachments/${attachmentId}/download`;
 
         return j({ ok: true, attachment: {
           id: attachmentId,
-          attachment_type: "file",
+          attachment_type: attachmentType,
           file_name: file.name,
           file_size: file.size,
           mime_type: mimeType,
@@ -3027,11 +3234,28 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
         const object = await env.CHAT_ATTACHMENTS.get(r2Key);
         if (!object) return j({ ok: false, error: "File not found in storage" }, 404);
 
+        // A stored MIME type is client-supplied, and this response is served from the
+        // app's own origin. Echoing it verbatim turned any upload into stored XSS:
+        // text/html executes, and image/svg+xml executes because SVG can carry script.
+        // Only inert media may render inline; everything else is forced to download.
+        const INLINE_SAFE = new Set([
+          "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp",
+          "audio/mpeg", "audio/mp4", "audio/aac", "audio/ogg", "audio/wav", "audio/webm",
+          "video/mp4", "video/webm", "video/ogg", "video/quicktime",
+        ]);
+        const isInlineSafe = typeof mimeType === "string" && INLINE_SAFE.has(mimeType);
+        // Quotes/CR/LF in the name would break out of the header, or make Headers throw.
+        const safeName = (typeof fileName === "string" ? fileName : "download")
+          .replace(/[^A-Za-z0-9._ -]+/g, "_")
+          .slice(0, 120) || "download";
+
         return new Response(object.body as ReadableStream<Uint8Array>, {
           headers: {
-            "Content-Type": mimeType,
-            "Content-Disposition": `inline; filename="${fileName}"`,
-            "Cache-Control": "public, max-age=31536000",
+            "Content-Type": isInlineSafe ? mimeType : "application/octet-stream",
+            "Content-Disposition": `${isInlineSafe ? "inline" : "attachment"}; filename="${safeName}"`,
+            "X-Content-Type-Options": "nosniff",
+            // Membership-gated private content — a shared cache must never retain it.
+            "Cache-Control": "private, no-store",
           },
         });
       }
@@ -3115,6 +3339,17 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
         if (!callerId) return j({ ok: false, error: "Sign in to use voice." }, 401);
         const roomId = url.searchParams.get("room_id") ?? "";
         if (!roomId) return badRequest("room_id is required.");
+        // Must hold a seat (or be a private-call participant) to poll.
+        // Otherwise any signed-in user could passively observe room signaling.
+        const member = await env.DB.prepare(
+          `SELECT 1 AS x FROM seats WHERE room_id = ? AND user_id = ? LIMIT 1`
+        ).bind(roomId, callerId).first();
+        if (!member) {
+          const priv = await env.DB.prepare(
+            `SELECT 1 AS x FROM rooms WHERE id = ? AND (host_user_id = ? OR call_participant_user_id = ?) LIMIT 1`
+          ).bind(roomId, callerId, callerId).first();
+          if (!priv) return j({ ok: false, error: "You are not in this room." }, 403);
+        }
 
         // Sweep first so a long-idle room never returns dead signals.
         await env.DB.prepare(`DELETE FROM rtc_signals WHERE created_at < ?`)
@@ -3122,18 +3357,24 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
           .run();
 
         // to_user_id = '*' is a room-wide broadcast (used for 'bye' on leave).
+        // Cap at 100 rows: D1 allows max 100 bound params per statement, so the
+        // consume-delete below must never exceed it (poison-pill outage at ≥99).
         const rows = await env.DB.prepare(
           `SELECT id, from_user_id, kind, payload FROM rtc_signals
            WHERE room_id = ? AND (to_user_id = ? OR to_user_id = '*')
-           ORDER BY created_at ASC LIMIT 200`
+           ORDER BY created_at ASC, id ASC LIMIT 100`
         ).bind(roomId, callerId).all();
 
         const signals = (rows.results ?? []) as Array<Record<string, unknown>>;
         if (signals.length > 0) {
           const ids = signals.map((s) => s.id as string);
-          await env.DB.prepare(
-            `DELETE FROM rtc_signals WHERE id IN (${ids.map(() => "?").join(",")})`
-          ).bind(...ids).run();
+          // Chunk at ≤50 params to stay safely under D1's 100-param limit.
+          for (let i = 0; i < ids.length; i += 50) {
+            const chunk = ids.slice(i, i + 50);
+            await env.DB.prepare(
+              `DELETE FROM rtc_signals WHERE id IN (${chunk.map(() => "?").join(",")})`
+            ).bind(...chunk).run();
+          }
         }
         return j({
           ok: true,
@@ -3152,6 +3393,15 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
         if (!callerId) return j({ ok: false, error: "Sign in to use voice." }, 401);
         const roomId = url.searchParams.get("room_id") ?? "";
         if (!roomId) return badRequest("room_id is required.");
+        const member = await env.DB.prepare(
+          `SELECT 1 AS x FROM seats WHERE room_id = ? AND user_id = ? LIMIT 1`
+        ).bind(roomId, callerId).first();
+        if (!member) {
+          const priv = await env.DB.prepare(
+            `SELECT 1 AS x FROM rooms WHERE id = ? AND (host_user_id = ? OR call_participant_user_id = ?) LIMIT 1`
+          ).bind(roomId, callerId, callerId).first();
+          if (!priv) return j({ ok: false, error: "You are not in this room." }, 403);
+        }
         const rows = await env.DB.prepare(
           `SELECT s.user_id, u.display_name, u.avatar_url, s.is_muted
            FROM seats s JOIN users u ON u.id = s.user_id
@@ -3163,8 +3413,52 @@ const r2Key = `attachments/${userId}/${Date.now()}-${attachmentId}.${ext}`;
 
       return notFound();
     } catch (err) {
-      return j({ ok: false, error: err instanceof Error ? err.message : "Internal error." }, 500);
+      // Structured error log for Cloudflare Workers Analytics / Logpush. The
+      // correlation id is returned to the client so support can tie a user report
+      // to this log line. The message/stack stay server-side: SQLite constraint
+      // text and table names must never reach the client.
+      const correlationId = newId("err").replace(/^err-/, "");
+      console.error(JSON.stringify({
+        level: "error",
+        correlation_id: correlationId,
+        path: url.pathname,
+        method: request.method,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      }));
+      return j({ ok: false, error: "Internal error.", correlation_id: correlationId }, 500);
     }
+  },
+
+  // Cron pruning (configure in wrangler.toml [triggers] crons = ["*/15 * * * *"]).
+  // Moves expiry sweeps off the request path: signal TTL, expired sessions,
+  // stale ringing, and unbounded growth tables (ai_usage, auth_audit, xp_events).
+  async scheduled(_event: unknown, env: Env): Promise<void> {
+    if (!env.DB) return;
+    try {
+      await env.DB.prepare(`DELETE FROM rtc_signals WHERE created_at < ?`).bind(Date.now() - 60_000).run();
+    } catch {}
+    try {
+      await env.DB.prepare(`DELETE FROM sessions WHERE expires_at <= datetime('now')`).run();
+    } catch {}
+    try {
+      await env.DB.prepare(`DELETE FROM admin_sessions WHERE expires_at <= datetime('now')`).run();
+    } catch {}
+    try {
+      await env.DB.prepare(
+        `UPDATE private_call_sessions SET status = 'missed', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE status IN ('initiated', 'ringing') AND created_at < datetime('now', '-75 seconds')`
+      ).run();
+    } catch {}
+    try {
+      await env.DB.prepare(`DELETE FROM ai_usage_events WHERE created_at < datetime('now', '-90 days')`).run();
+    } catch {}
+    try {
+      await env.DB.prepare(`DELETE FROM auth_audit WHERE created_at < datetime('now', '-365 days')`).run();
+    } catch {}
+    try {
+      await env.DB.prepare(`DELETE FROM xp_events WHERE created_at < datetime('now', '-365 days')`).run();
+    } catch {}
   },
 };
 

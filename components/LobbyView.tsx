@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Mic, Plus, RefreshCw, Search, Users } from "lucide-react";
-import { MOCK_ROOMS, formatCount, type LobbyRoom } from "@/lib/rooms";
+import { formatCount, type LobbyRoom } from "@/lib/rooms";
 import { fetchRooms } from "@/lib/api";
 import { EmptyState, Spinner } from "@/components/bits";
 
@@ -77,6 +77,7 @@ export default function LobbyView() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search rooms…"
+          aria-label="Search rooms"
           maxLength={40}
           className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
         />

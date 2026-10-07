@@ -78,16 +78,7 @@ export default function CallsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    // Opening the Calls tab clears the missed badge (standard rule).
-    markSeen();
-    const t = setInterval(() => void load(), 8000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load]);
-
-  const markSeen = async () => {
+  const markSeen = useCallback(async () => {
     clearMissedLocal();
     try {
       const { markCallsSeen } = await import("@/lib/api");
@@ -95,7 +86,15 @@ export default function CallsPage() {
     } catch {
       // Best-effort.
     }
-  };
+  }, [clearMissedLocal]);
+
+  useEffect(() => {
+    void load();
+    // Opening the Calls tab clears the missed badge (standard rule).
+    void markSeen();
+    const t = setInterval(() => void load(), 8000);
+    return () => clearInterval(t);
+  }, [load, markSeen]);
 
   useEffect(() => {
     if (!notice) return;

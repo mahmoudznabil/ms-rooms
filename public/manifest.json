@@ -2,7 +2,7 @@
   "name": "MS-ROOMS — Neon Voice Parties",
   "short_name": "MS-ROOMS",
   "description": "MS-ROOMS — live voice party rooms, gifts, games & PK battles. Neon audio, on Cloudflare.",
-  "start_url": "/",
+  "start_url": "/lobby",
   "display": "standalone",
   "background_color": "#0d0d12",
   "theme_color": "#0d0d12",

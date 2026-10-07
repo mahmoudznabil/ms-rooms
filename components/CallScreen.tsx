@@ -20,6 +20,20 @@ import { useCallSession } from "@/lib/realtime";
 import { useSession } from "@/stores/useSession";
 import { Spinner, UserAvatar } from "@/components/bits";
 
+function CallTimer({ connectedAt, liveSince }: { connectedAt: string | null; liveSince: number | null }) {
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const start = connectedAt ? new Date(connectedAt).getTime() : (liveSince ?? now);
+  const elapsed = Math.max(0, Math.floor((now - start) / 1000));
+  const m = Math.floor(elapsed / 60);
+  const s = elapsed % 60;
+  return <>{`${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`}</>;
+}
+
 type Screen =
   | { kind: "loading" }
   | { kind: "signin" }
@@ -179,10 +193,38 @@ export default function CallScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [ringSecs, setRingSecs] = useState(0);
   const [connectedAt, setConnectedAt] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(0);
 
   const mediaSession = useCallSession(roomId ?? "", role === "caller", user?.id ?? null);
   const joinedRef = useRef(false);
+
+  const routeStatus = useCallback(
+    (
+      status: CallStatus | null,
+      who: "caller" | "callee",
+      at: string | null,
+      p: { id: string; name: string; username: string; avatar: string | null },
+      mediaType?: CallMedia
+    ) => {
+      if (status === "connected") {
+        setConnectedAt(at);
+        setScreen({ kind: "incall" });
+      } else if (status === "ringing" || status === "initiated") {
+        setScreen(who === "caller"
+          ? { kind: "outgoing", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username, media: mediaType ?? "audio" }
+          : { kind: "incoming", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username, media: mediaType ?? "audio" });
+      } else if (status === "rejected") {
+        setScreen({ kind: "ended", title: who === "caller" ? "Declined" : "You declined the call", hint: who === "caller" ? `${p.name} declined your call.` : "The caller has been notified.", peerId: p.id || null });
+      } else if (status === "cancelled") {
+        setScreen({ kind: "ended", title: "Cancelled", hint: who === "caller" ? "You cancelled the call." : "The caller cancelled before you answered.", peerId: p.id || null });
+      } else if (status === "missed") {
+        setScreen({ kind: "ended", title: who === "caller" ? "No answer" : "Missed call", hint: who === "caller" ? `${p.name} didn't answer.` : `You missed a call from ${p.name}.`, peerId: p.id || null });
+      } else {
+        setScreen({ kind: "ended", title: "Call ended", hint: "This call is over.", peerId: p.id || null });
+      }
+    },
+    []
+  );
 
   // ---- boot: resolve slug → room → role -------------------------------------
   useEffect(() => {
@@ -233,36 +275,7 @@ export default function CallScreen() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, user]);
-
-  const routeStatus = useCallback(
-    (
-      status: CallStatus | null,
-      who: "caller" | "callee",
-      at: string | null,
-      p: { id: string; name: string; username: string; avatar: string | null } = peer,
-      mediaType?: CallMedia
-    ) => {
-      if (status === "connected") {
-        setConnectedAt(at);
-        setScreen({ kind: "incall" });
-      } else if (status === "ringing" || status === "initiated") {
-        setScreen(who === "caller"
-          ? { kind: "outgoing", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username, media: mediaType ?? "audio" }
-          : { kind: "incoming", peerName: p.name, peerAvatar: p.avatar, peerUsername: p.username, media: mediaType ?? "audio" });
-      } else if (status === "rejected") {
-        setScreen({ kind: "ended", title: who === "caller" ? "Declined" : "You declined the call", hint: who === "caller" ? `${p.name} declined your call.` : "The caller has been notified.", peerId: p.id || null });
-      } else if (status === "cancelled") {
-        setScreen({ kind: "ended", title: "Cancelled", hint: who === "caller" ? "You cancelled the call." : "The caller cancelled before you answered.", peerId: p.id || null });
-      } else if (status === "missed") {
-        setScreen({ kind: "ended", title: who === "caller" ? "No answer" : "Missed call", hint: who === "caller" ? `${p.name} didn't answer.` : `You missed a call from ${p.name}.`, peerId: p.id || null });
-      } else {
-        setScreen({ kind: "ended", title: "Call ended", hint: "This call is over.", peerId: p.id || null });
-      }
-    },
-    [peer]
-  );
+  }, [slug, user, routeStatus]);
 
   // ---- poll while ringing ----------------------------------------------------
   useEffect(() => {
@@ -291,17 +304,20 @@ export default function CallScreen() {
   }, [ringSecs, screen.kind, roomId]);
 
   // ---- join media once connected ------------------------------------------------
+  // joinedRef resets when leaving incall so the error-screen Rejoin button works.
   useEffect(() => {
     if (screen.kind === "incall" && !joinedRef.current) {
       joinedRef.current = true;
       void mediaSession.join(media === "video");
     }
+    if (screen.kind !== "incall") joinedRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen.kind]);
 
   // ---- clock for timers ----------------------------------------------------------
   useEffect(() => {
     if (screen.kind !== "incall" && screen.kind !== "outgoing") return;
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [screen.kind]);
@@ -530,6 +546,7 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const [showGames, setShowGames] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
   const [floats, setFloats] = useState<Array<{ id: number; emoji: string }>>([]);
+  const floatIdRef = useRef(0);
 
   useEffect(() => {
     if (remoteAudioRef.current && session.remoteStream) remoteAudioRef.current.srcObject = session.remoteStream;
@@ -620,13 +637,7 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
             <span className="text-sm font-semibold text-white">{peer.name}</span>
             <span className="text-xs text-white/50">·</span>
             <span className="text-xs font-mono text-white/70 tabular-nums" id="call-timer">
-              {(() => {
-                const start = connectedAt ? new Date(connectedAt).getTime() : (session.liveSince ?? Date.now());
-                const elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
-                const m = Math.floor(elapsed / 60);
-                const s = elapsed % 60;
-                return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-              })()}
+              <CallTimer connectedAt={connectedAt} liveSince={session.liveSince} />
             </span>
           </div>
 
@@ -754,13 +765,7 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
             <span className="text-sm font-semibold text-white">{peer.name}</span>
             <span className="text-xs text-white/50">·</span>
             <span className="text-xs font-mono text-white/70 tabular-nums" id="call-timer-audio">
-              {(() => {
-                const start = connectedAt ? new Date(connectedAt).getTime() : (session.liveSince ?? Date.now());
-                const elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000));
-                const m = Math.floor(elapsed / 60);
-                const s = elapsed % 60;
-                return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-              })()}
+              <CallTimer connectedAt={connectedAt} liveSince={session.liveSince} />
             </span>
           </div>
 
@@ -836,7 +841,9 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
           {showReactions && (
             <Reactions
               onPick={(e) => {
-                setFloats((f) => [...f, { id: Date.now() + Math.random(), emoji: e }]);
+                floatIdRef.current += 1;
+                const id = floatIdRef.current;
+                setFloats((f) => [...f, { id, emoji: e }]);
                 setShowReactions(false);
                 setTimeout(() => setFloats((f) => f.slice(-4)), 2400);
               }}

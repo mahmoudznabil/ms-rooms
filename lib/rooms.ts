@@ -27,57 +27,6 @@ export interface GiftItem {
   cost: number;
 }
 
-export const MOCK_ROOMS: LobbyRoom[] = [
-  {
-    id: "room-late-check-in",
-    slug: "late-check-in",
-    title: "Late Check-In",
-    description: "A soft place to land after a long day.",
-    hostName: "Maya Rose",
-    category: "Chill",
-    listenerCount: 1842,
-    speakerCount: 5,
-    coverColor: "#5e6579",
-  },
-  {
-    id: "room-behind-the-beat",
-    slug: "behind-the-beat",
-    title: "Behind the Beat",
-    description: "Unreleased loops, honest opinions, zero skips.",
-    hostName: "Omar Sound",
-    category: "Music",
-    listenerCount: 936,
-    speakerCount: 4,
-    coverColor: "#7c5948",
-  },
-  {
-    id: "room-tiny-joys",
-    slug: "tiny-joys",
-    title: "Tiny Joys Club",
-    description: "Share the small things keeping you going.",
-    hostName: "Jules After Dark",
-    category: "Community",
-    listenerCount: 428,
-    speakerCount: 3,
-    coverColor: "#526d64",
-  },
-];
-
-export const MOCK_LISTENERS: string[] = [
-  "Nova",
-  "Kiki",
-  "Rami",
-  "Sofia",
-  "Dev",
-  "Lena",
-  "Marco",
-  "Priya",
-  "Theo",
-  "Aisha",
-  "Jon",
-  "Elif",
-];
-
 export const GIFT_CATALOG: GiftItem[] = [
   { id: "rose", name: "Rose", emoji: "🌹", cost: 10 },
   { id: "coffee", name: "Coffee", emoji: "☕", cost: 25 },

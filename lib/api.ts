@@ -18,30 +18,53 @@ export class ApiError extends Error {
 }
 
 let csrfToken: string | null = null;
-async function getCsrfToken(): Promise<string | null> {
-  if (csrfToken) return csrfToken;
-  try {
-    const r = await fetch(`${API_BASE}/api/csrf`, { credentials: "include" });
-    const d = (await r.json()) as { csrf_token?: string };
-    if (d?.csrf_token) csrfToken = d.csrf_token;
-  } catch {}
-  return csrfToken;
+let csrfInflight: Promise<string | null> | null = null;
+async function getCsrfToken(force = false): Promise<string | null> {
+  if (!force && csrfToken) return csrfToken;
+  if (!force && csrfInflight) return csrfInflight;
+  const p = (async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/csrf`, { credentials: "include" });
+      const d = (await r.json()) as { csrf_token?: string };
+      if (d?.csrf_token) csrfToken = d.csrf_token;
+    } catch {}
+    csrfInflight = null;
+    return csrfToken;
+  })();
+  csrfInflight = p;
+  return p;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const needsCsrf = ["POST", "PATCH", "DELETE", "PUT"].includes(method);
-  let csrfHeader: Record<string, string> = {};
-  if (needsCsrf) {
-    const t = await getCsrfToken();
-    if (t) csrfHeader["X-CSRF-Token"] = t;
+  const doFetch = async (retryCsrf: boolean): Promise<Response> => {
+    const csrfHeader: Record<string, string> = {};
+    if (needsCsrf) {
+      const t = await getCsrfToken(!retryCsrf ? false : true);
+      if (t) csrfHeader["X-CSRF-Token"] = t;
+    }
+    return fetch(`${API_BASE}${path}`, {
+      ...init,
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...csrfHeader, ...(init?.headers ?? {}) },
+    });
+  };
+  let res = await doFetch(false);
+  // Double-submit rotation: retry once with a fresh token on 403.
+  if (needsCsrf && res.status === 403) {
+    csrfToken = null;
+    res = await doFetch(true);
   }
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...csrfHeader, ...(init?.headers ?? {}) },
-  });
   const data = (await res.json().catch(() => null)) as (T & { ok?: boolean; error?: string }) | null;
+  if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/api/auth/")) {
+    // Global 401: session expired mid-session. Clear and bounce to login once.
+    try {
+      const { useSession } = await import("@/stores/useSession");
+      useSession.setState({ user: null, ready: true });
+    } catch {}
+    if (!window.location.pathname.startsWith("/login")) window.location.assign("/login");
+  }
   if (!res.ok || !data || (data as { ok?: boolean }).ok === false) {
     throw new ApiError((data as { error?: string } | null)?.error ?? `Request failed (${res.status})`, res.status);
   }
@@ -217,10 +240,6 @@ export async function muteSeat(slug: string, index: number, is_muted: boolean): 
   });
 }
 
-export async function login(username: string): Promise<{ user: ApiUser }> {
-  return req(`/api/auth/login`, { method: "POST", body: JSON.stringify({ username }) });
-}
-
 export async function me(): Promise<{ user: ApiUser }> {
   return req(`/api/auth/me`, { cache: "no-store" });
 }
@@ -315,10 +334,6 @@ export async function rechargePackages(): Promise<{ packages: RechargePack[]; no
   return req(`/api/recharge/packages`);
 }
 
-export async function rechargeBuy(user_id: string, package_id: string): Promise<{ credited: number; coins: number }> {
-  return req(`/api/recharge/buy`, { method: "POST", body: JSON.stringify({ user_id, package_id }) });
-}
-
 export async function spin(user_id: string): Promise<{ cost: number; prize: number; net: number; coins: number }> {
   return req(`/api/spin`, { method: "POST", body: JSON.stringify({ user_id }) });
 }
@@ -376,6 +391,14 @@ export async function reportUser(input: {
 export interface AdminUser { id: string; username: string; display_name: string; role: "master_admin" | "finance" | "support"; }
 export async function adminLogin(username: string, password: string): Promise<{ admin: AdminUser; token: string }> {
   return req(`/api/admin/login`, { method: "POST", body: JSON.stringify({ username, password }) });
+}
+export async function adminLogout(): Promise<void> {
+  try {
+    await req(`/api/admin/logout`, { method: "POST" });
+  } catch {}
+  try {
+    if (typeof window !== "undefined") localStorage.removeItem("admin_token");
+  } catch {}
 }
 export async function adminMe(): Promise<{ admin: AdminUser }> {
   return req(`/api/admin/me`, { cache: "no-store" });
@@ -499,6 +522,10 @@ export async function listConversations(): Promise<{ conversations: Array<Conver
 
 export async function getOrCreateDirectConversation(otherUserId: string): Promise<{ conversation: ConversationWithParticipants }> {
   return req(`/api/conversations/direct`, { method: "POST", body: JSON.stringify({ other_user_id: otherUserId }) });
+}
+
+export async function getRoomConversation(roomId: string): Promise<{ conversation: ConversationWithParticipants }> {
+  return req(`/api/conversations/room?room_id=${encodeURIComponent(roomId)}`, { cache: "no-store" });
 }
 
 export async function createConversation(input: { type: 'group' | 'room'; room_id?: string; participant_ids: string[]; title?: string }): Promise<{ conversation: Conversation }> {

@@ -48,12 +48,14 @@ self.addEventListener("fetch", (event) => {
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();
-          void caches.open("msrooms-shell-v1").then((c) => c.put(SHELL, copy));
+          // Cache under the request URL, not a fixed key: caching every page
+          // under /index.html meant an offline /lobby could serve /wallet.
+          void caches.open("msrooms-shell-v1").then((c) => c.put(req, copy));
         }
         return res;
       })
       .catch(async () => {
-        const cached = await caches.match(SHELL);
+        const cached = await caches.match(req, { ignoreSearch: true });
         return cached || Response.error();
       })
   );

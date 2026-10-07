@@ -1,16 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarCheck, Coins, Diamond, Dices, History, Zap } from "lucide-react";
-import {
-  checkin,
-  fetchPricing,
-  fetchTransactions,
-  rechargeBuy,
-  rechargePackages,
-  type RechargePack,
-  type Txn,
-} from "@/lib/api";
+import { CalendarCheck, Coins, Dices, History, Zap } from "lucide-react";
+import { checkin, fetchTransactions, type Txn } from "@/lib/api";
 import { levelProgress } from "@/lib/levels";
 import { useSession } from "@/stores/useSession";
 import { EmptyState, Spinner } from "@/components/bits";
@@ -19,11 +11,8 @@ import SpinModal from "@/components/SpinModal";
 export default function WalletPage() {
   const user = useSession((s) => s.user);
   const refresh = useSession((s) => s.refresh);
-  const [packs, setPacks] = useState<RechargePack[]>([]);
-  const [tiers, setTiers] = useState<Array<Record<string, unknown>>>([]);
   const [txns, setTxns] = useState<Txn[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyPack, setBusyPack] = useState<string | null>(null);
   const [spinOpen, setSpinOpen] = useState(false);
   const [checkinBusy, setCheckinBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -31,10 +20,8 @@ export default function WalletPage() {
   const load = useCallback(async () => {
     if (!user) return;
     try {
-      const [p, t, pricing] = await Promise.all([rechargePackages(), fetchTransactions(user.id), fetchPricing().catch(() => ({ tiers: [] }))]);
-      setPacks(p.packages);
+      const t = await fetchTransactions(user.id);
       setTxns(t.transactions);
-      setTiers((pricing as { tiers?: Array<Record<string, unknown>> }).tiers ?? []);
     } catch {
     } finally {
       setLoading(false);
@@ -65,20 +52,6 @@ export default function WalletPage() {
       setNotice(e instanceof Error ? e.message : "Check-in failed.");
     } finally {
       setCheckinBusy(false);
-    }
-  };
-
-  const buy = async (id: string) => {
-    setBusyPack(id);
-    try {
-      const r = await rechargeBuy(user.id, id);
-      await refresh();
-      await load();
-      setNotice(`Topped up +${r.credited} coins. Enjoy the party!`);
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : "Top-up failed.");
-    } finally {
-      setBusyPack(null);
     }
   };
 
@@ -129,44 +102,9 @@ export default function WalletPage() {
         </div>
       </div>
 
-      {/* 10% Cheaper Pricing */}
-      <h2 className="mt-6 text-sm font-bold uppercase tracking-widest text-white/50">10% cheaper — get more for same price</h2>
-      <p className="text-xs text-white/35">Market: 25k/$5, 50k/$10, 100k/$20, 500k/$100. We give 27.5k / 55k / 110k / 550k for same fiat — or pay 10% less.</p>
-      <div className="mt-2 overflow-hidden rounded-2xl border border-white/10">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-white/5 text-white/50">
-            <tr><th className="px-3 py-2">Tier</th><th className="px-3 py-2">Market</th><th className="px-3 py-2">Our App (10% more)</th><th className="px-3 py-2"></th></tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {[
-              { id: "starter", std: "25,000", app: "27,500", price: "$5.00" },
-              { id: "growth", std: "50,000", app: "55,000", price: "$10.00" },
-              { id: "pro", std: "100,000", app: "110,000", price: "$20.00" },
-              { id: "enterprise", std: "500,000", app: "550,000", price: "$100.00" },
-            ].map((r) => (
-              <tr key={r.id} className="hover:bg-white/[0.02]">
-                <td className="px-3 py-2 font-bold capitalize">{r.id}</td>
-                <td className="px-3 py-2 text-white/60">{r.std} @ {r.price}</td>
-                <td className="px-3 py-2 font-black text-amber-200">{r.app} @ {r.price} <span className="ml-1 rounded bg-emerald-500/20 px-1.5 py-0.5 text-emerald-200">+10%</span></td>
-                <td className="px-3 py-2"><button onClick={() => void buy(r.id)} disabled={busyPack !== null} className="rounded-full bg-white px-3 py-1 text-xs font-bold text-black hover:bg-white/85 disabled:opacity-40">{busyPack === r.id ? "…" : "Buy"}</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {tiers.length > 0 && <p className="mt-1 text-xs text-white/30">Source: D1 pricing_tiers — bonus_percent 10.0</p>}
-
-      <h2 className="mt-6 text-sm font-bold uppercase tracking-widest text-white/50">Top up coins (sandbox)</h2>
-      <p className="text-xs text-white/35">Small packs for testing — instant credit, no real payment. Hosts earn <Diamond size={10} className="inline text-violet-300" /> Gems at 70% of gift cost.</p>
-      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {packs.filter((p) => p.id.startsWith("p")).map((p) => (
-          <button key={p.id} onClick={() => void buy(p.id)} disabled={busyPack !== null}
-            className="rounded-2xl border border-white/10 bg-[#15151d] p-3 text-left transition hover:border-amber-300/40 active:scale-[0.98] disabled:opacity-50">
-            <p className="flex items-center gap-1 text-base font-black text-amber-200"><Coins size={15} />{p.coins.toLocaleString()}</p>
-            <p className="mt-0.5 text-xs text-white/50">{busyPack === p.id ? "Processing…" : p.price}</p>
-          </button>
-        ))}
-      </div>
+      {/* Coin purchases removed (Phase 1.5): the sandbox top-up granted coins for
+          free with no payment. Coins are earned-only until the gated IAP workstream
+          (docs/PRODUCTION-PLAN.md Phase 6) adds a server-verified purchase path. */}
 
       <h2 className="mt-6 flex items-center gap-1.5 text-sm font-bold uppercase tracking-widest text-white/50">
         <History size={14} /> Recent activity

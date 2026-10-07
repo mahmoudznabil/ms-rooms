@@ -7,14 +7,14 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "wrangler d1 migrations apply audioroom-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply audioroom-db --local",
+    "db:export": "node scripts/export-schema.mjs",
+    "db:backup": "node scripts/backup-d1.mjs"
   },
   "dependencies": {
-    "@genkit-ai/googleai": "^1.28.0",
-    "@livekit/components-react": "2.9.24",
     "firebase": "12.16.0",
-    "genkit": "^1.42.0",
-    "livekit-client": "2.22.2",
     "lucide-react": "1.41.0",
     "next": "16.3.4",
     "react": "19.2.8",
@@ -30,7 +30,8 @@
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "4.3.3",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wrangler": "^4.147.0"
   },
   "overrides": {
     "@firebase/component": "0.7.5",

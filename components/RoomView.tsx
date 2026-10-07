@@ -40,7 +40,6 @@ import {
   takeSeat,
   unfollow,
   fetchSocial,
-  awardXp,
   type ApiRoomRow,
   type ApiSeat,
   type GiftCatalogItem,
@@ -103,8 +102,11 @@ function RoomViewInner() {
   const [incomingCall, setIncomingCall] = useState<{ roomId: string; callerName: string; callerAvatar?: string; pricePerMinute: number } | null>(null);
   const [callState, setCallState] = useState<"idle" | "ringing" | "connecting" | "connected" | "ended">("idle");
   const [showChat, setShowChat] = useState(false);
+  const [roomConvId, setRoomConvId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const fxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fxIdRef = useRef(0);
 
   const voice = useRoomVoice(room?.id ?? "", user?.id ?? null);
   const isHost = !!user && !!room && room.host_user_id === user.id;
@@ -225,11 +227,7 @@ function RoomViewInner() {
         clearInterval(t);
         const score = rush.score;
         setRush(null);
-        const bonus = Math.min(50, Math.floor(score / 10));
-        pushMsg({ user: "System", text: `Gift Rush over — you scored ${score}! ${bonus > 0 ? `+${bonus} XP earned.` : "Send gifts next time to earn XP."}`, kind: "system" });
-        if (user && bonus > 0) {
-          awardXp(user.id, bonus, "Gift Rush").then(() => void refreshSession()).catch(() => undefined);
-        }
+        pushMsg({ user: "System", text: `Gift Rush over — you scored ${score}! XP was credited server-side for gifts sent.`, kind: "system" });
       }
     }, 500);
     return () => clearInterval(t);
@@ -241,6 +239,45 @@ function RoomViewInner() {
       if (fxTimer.current) clearTimeout(fxTimer.current);
     };
   }, []);
+
+  // Room live chat: join the room conversation once, poll for new messages.
+  // Must sit before the early returns below (hooks cannot run conditionally).
+  useEffect(() => {
+    if (!room?.id || !user) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    (async () => {
+      try {
+        const { getRoomConversation, listMessages } = await import("@/lib/api");
+        const { conversation } = await getRoomConversation(room.id);
+        if (cancelled) return;
+        setRoomConvId(conversation.id);
+        const load = async () => {
+          try {
+            const { messages: rows } = await listMessages(conversation.id, 50);
+            if (cancelled) return;
+            setMessages((prev) => {
+              const sys = prev.filter((m) => m.kind !== "chat");
+              const chat: ChatMsg[] = rows.map((m) => ({
+                id: m.id,
+                userId: m.sender_id,
+                user: m.sender?.display_name ?? "Guest",
+                text: m.content,
+                kind: "chat" as const,
+              }));
+              return [...sys.slice(-20), ...chat.slice(-60)];
+            });
+          } catch {}
+        };
+        await load();
+        timer = setInterval(() => void load(), typeof document !== "undefined" && document.hidden ? 8000 : 4000);
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [room?.id, user]);
 
   // Poll for incoming call status changes
   useEffect(() => {
@@ -306,10 +343,10 @@ function RoomViewInner() {
         setCallState('connected');
         router.push(`/call?room=${room.slug}`);
       } else {
-        alert(data.error || "Failed to accept call");
+        setNotice(data.error || "Failed to accept call");
       }
-    } catch (e) {
-      alert("Failed to accept call");
+    } catch {
+      setNotice("Failed to accept call");
     }
   };
 
@@ -328,10 +365,10 @@ function RoomViewInner() {
         setCallState('ended');
         setNotice("Call rejected");
       } else {
-        alert(data.error || "Failed to reject call");
+        setNotice(data.error || "Failed to reject call");
       }
-    } catch (e) {
-      alert("Failed to reject call");
+    } catch {
+      setNotice("Failed to reject call");
     }
   };
 
@@ -349,10 +386,10 @@ function RoomViewInner() {
         setCallState('ended');
         router.push("/calls");
       } else {
-        alert(data.error || "Failed to end call");
+        setNotice(data.error || "Failed to end call");
       }
-    } catch (e) {
-      alert("Failed to end call");
+    } catch {
+      setNotice("Failed to end call");
     }
   };
 
@@ -425,7 +462,8 @@ function RoomViewInner() {
 
   const showFx = (emoji: string, name: string, from: string, effect: string) => {
     if (fxTimer.current) clearTimeout(fxTimer.current);
-    const id = Date.now();
+    fxIdRef.current += 1;
+    const id = fxIdRef.current;
     if (effect === "pop") {
       pushMsg({ user: from, text: `sent ${emoji} ${name}`, kind: "gift" });
       return;
@@ -440,7 +478,6 @@ function RoomViewInner() {
       await takeSeat(slug, index, user.id);
       await reloadSeats();
       pushMsg({ user: "System", text: `You took seat ${index + 1}. Say hi!`, kind: "system" });
-      awardXp(user.id, 5, "Took the mic").then(() => void refreshSession()).catch(() => undefined);
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Could not take that seat.");
     }
@@ -465,11 +502,30 @@ function RoomViewInner() {
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const text = draft.trim();
-    if (!text) return;
-    pushMsg({ userId: user.id, user: user.display_name, text, kind: "chat" });
+    if (!text || !user) return;
+    if (!roomConvId) {
+      pushMsg({ userId: user.id, user: user.display_name, text, kind: "chat" });
+      setDraft("");
+      setNotice("Chat is connecting — your message will send shortly.");
+      return;
+    }
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setMessages((prev) => [...prev.slice(-79), { id: tempId, userId: user.id, user: user.display_name, text, kind: "chat" as const }]);
     setDraft("");
+    setSending(true);
+    try {
+      const { sendMessage } = await import("@/lib/api");
+      const { message } = await sendMessage({ conversation_id: roomConvId, content: text.slice(0, 500) });
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? { id: message.id, userId: message.sender_id, user: message.sender?.display_name ?? user.display_name, text: message.content, kind: "chat" as const } : m)));
+    } catch {
+      // Optimistic rollback: failed sends must not stay as delivered.
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setNotice("Message failed to send. Try again.");
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleGift = async (giftId: string) => {
@@ -483,7 +539,7 @@ function RoomViewInner() {
       const r = await sendGift({ from_user_id: user.id, room_id: room.id, gift_id: gift.id, cost: gift.cost });
       await refreshSession();
       if (rush) setRush({ ...rush, score: rush.score + gift.cost });
-      if (pk) setPk({ ...pk, scoreA: pk.scoreA + gift.cost, scoreB: pk.scoreB + Math.floor(Math.random() * 20) });
+      if (pk) setPk({ ...pk, scoreA: pk.scoreA + gift.cost });
       showFx(gift.emoji, gift.name, user.display_name, gift.effect);
       setGiftOpen(false);
       if (r.coins < 20) setNotice("Running low on coins — daily check-in refills you.");
@@ -599,10 +655,9 @@ function RoomViewInner() {
             roomB={{ name: pk.opponent, score: pk.scoreB }}
             endsAt={pk.endsAt}
             onEnd={(winner) => {
-              const msg = winner === "A" ? `🏆 ${room.title} won the PK! +50 XP` : winner === "B" ? `🏆 ${pk.opponent} won — good fight!` : "🤝 Draw! Both rooms fought well.";
+              const msg = winner === "A" ? `🏆 ${room.title} won the PK!` : winner === "B" ? `🏆 ${pk.opponent} won — good fight!` : "🤝 Draw! Both rooms fought well.";
               pushMsg({ user: "System", text: msg, kind: "system" });
               setPkWinner(winner);
-              if (winner === "A") awardXp(user.id, 50, "PK Victory", room.id).then(() => void refreshSession()).catch(() => undefined);
               setTimeout(() => setPk(null), 8000);
             }}
           />
@@ -704,9 +759,7 @@ function RoomViewInner() {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                      caller_user_id: user.id,
                       callee_user_id: room.host_user_id,
-                      call_price_per_minute: room.call_price_per_minute || 10,
                     }),
                     credentials: "include",
                   });
@@ -714,10 +767,10 @@ function RoomViewInner() {
                   if (data.ok && data.room) {
                     router.push(`/call?room=${data.room.slug}`);
                   } else {
-                    alert(data.error || "Failed to start call");
+                    setNotice(data.error || "Failed to start call");
                   }
-                } catch (e) {
-                  alert("Failed to start call");
+                } catch {
+                  setNotice("Failed to start call");
                 }
               }}
               disabled={!user}
@@ -801,6 +854,7 @@ function RoomViewInner() {
           <input value={draft} onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
             placeholder="Say something kind…" maxLength={240}
+            aria-label="Room chat message"
             className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.06] px-3.5 py-3 text-sm text-white placeholder:text-white/30 focus:border-white/25 focus:outline-none" />
           <button onClick={handleSend} aria-label="Send chat message" className="rounded-2xl bg-white p-3 text-black transition hover:bg-white/85 active:scale-95">
             <Send size={17} />

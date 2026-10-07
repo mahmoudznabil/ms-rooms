@@ -24,7 +24,9 @@ export default function IncomingCallGate() {
   const [ringing, setRinging] = useState<IncomingCall | null>(null);
   const [busy, setBusy] = useState(false);
   const ringingRef = useRef<IncomingCall | null>(null);
-  ringingRef.current = ringing;
+  useEffect(() => {
+    ringingRef.current = ringing;
+  }, [ringing]);
 
   const onCallScreenFor = useCallback(
     (roomSlug: string) => pathname === "/call" && searchParams.get("room") === roomSlug,
@@ -77,7 +79,11 @@ export default function IncomingCallGate() {
     };
   }, [user, onCallScreenFor, refreshMissed]);
 
-  useEffect(() => stopRingtone, []);
+  useEffect(() => {
+    return () => {
+      stopRingtone();
+    };
+  }, []);
 
   if (!user || !ringing) return null;
 

@@ -79,6 +79,7 @@ export default function SearchPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search rooms or people… or unique ID (e.g. MAYA#1842)"
+          aria-label="Search rooms or people"
           maxLength={40}
           autoFocus
           className="w-full rounded-2xl border border-white/10 bg-white/5 py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"

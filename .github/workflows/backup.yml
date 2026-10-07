@@ -1,0 +1,32 @@
+name: Nightly D1 backup
+
+on:
+  schedule:
+    # 03:15 UTC every day.
+    - cron: "15 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Export and upload D1 backup
+        run: node scripts/backup-d1.mjs
+        env:
+          D1_DATABASE: audioroom-db
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Upload as a build artifact (belt and suspenders)
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-backup
+          path: backups/
+          retention-days: 14

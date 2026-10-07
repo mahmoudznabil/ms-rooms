@@ -78,7 +78,8 @@ export default function Home() {
     if (ready && user) router.replace("/lobby");
   }, [ready, user, router]);
 
-  if (!ready) return <div className="flex justify-center py-24 text-sm text-paper-faint">Loading…</div>;
+  // Render marketing unconditionally so crawlers and first paint see content.
+  // Signed-in visitors are bounced to /lobby by the effect above.
 
   return (
     <div className="min-h-dvh">

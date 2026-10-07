@@ -20,8 +20,34 @@ pages_build_output_dir = "./out"
 binding = "DB"
 database_name = "audioroom-db"
 database_id = "82d9964f-ac73-4d0a-8c62-8f4940a05b0d"
+# Authoritative migration chain consumed by `npm run db:migrate`.
+migrations_dir = "migrations"
 
 # Chat attachments.
 [[r2_buckets]]
 binding = "CHAT_ATTACHMENTS"
 bucket_name = "ms-rooms"
+
+# ---------------------------------------------------------------------------
+# Preview environment.
+#
+# Preview deployments bind to this environment, NOT to production. Without it,
+# every preview build shares the production D1 (82d9964f-…) and the production
+# R2 bucket — so an exploratory `wrangler d1 execute` or a buggy preview writes
+# to live data.
+#
+# One-time setup (then paste the returned ids below):
+#   npx wrangler d1 create audioroom-db-preview
+#   npx wrangler r2 bucket create ms-rooms-preview
+# ---------------------------------------------------------------------------
+[env.preview]
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "audioroom-db-preview"
+database_id = "REPLACE_WITH_PREVIEW_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.preview.r2_buckets]]
+binding = "CHAT_ATTACHMENTS"
+bucket_name = "ms-rooms-preview"

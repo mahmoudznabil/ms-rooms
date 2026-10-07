@@ -212,11 +212,12 @@ button {
   background: rgba(255, 45, 120, 0.35);
 }
 
-/* Professional physics rules */
+/* Interactive elements: scoped transitions only (no global will-change). */
 a,
 button {
-  transition: all var(--duration-normal) var(--ease-out);
-  will-change: transform;
+  transition: background-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
 }
 
 a:hover,
@@ -226,16 +227,16 @@ button:hover {
 
 a:active,
 button:active {
-  transform: scale(0.98);
-  transition-duration: var(--duration-fast);
+  opacity: 0.92;
+  transition-duration: var(--dur-fast);
 }
 
 input,
 textarea,
 select {
-  transition: border-color var(--duration-normal) var(--ease-out),
-    box-shadow var(--duration-normal) var(--ease-out),
-    background-color var(--duration-normal) var(--ease-out);
+  transition: border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out);
 }
 
 input:focus,
@@ -249,32 +250,30 @@ select:focus {
 .card,
 .panel,
 .modal {
-  transition: transform var(--duration-normal) var(--ease-out),
-    box-shadow var(--duration-normal) var(--ease-out),
-    opacity var(--duration-normal) var(--ease-out);
+  transition: box-shadow var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
 }
 
 .card:hover,
 .panel:hover {
-  transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
 .badge,
 .tag,
 .chip {
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .badge:hover,
 .tag:hover,
 .chip:hover {
-  transform: scale(1.05);
+  opacity: 0.92;
 }
 
 /* Smooth page transitions */
 .page-enter {
-  animation: page-enter var(--duration-slow) var(--ease-out);
+  animation: page-enter var(--dur-slow) var(--ease-out);
 }
 
 @keyframes page-enter {
@@ -290,7 +289,22 @@ select:focus {
 
 /* Staggered list animations */
 .stagger-item {
-  animation: stagger-in var(--duration-normal) var(--ease-out) both;
+  animation: stagger-in var(--dur-base) var(--ease-out) both;
+}
+
+/* Slide-up used by the cookie banner and modals. */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-slide-up {
+  animation: slide-up var(--dur-base) var(--ease-out) both;
 }
 
 .stagger-item:nth-child(1) { animation-delay: 0ms; }

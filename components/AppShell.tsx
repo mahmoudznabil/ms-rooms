@@ -4,14 +4,13 @@ import { Suspense, useEffect, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Radio, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Shield, Headset, MessageCircle, Settings, Users, BarChart3, Bell, ShieldCheck, LayoutDashboard, LogOut, Crown, Gamepad2, Music, Users2, Layers, Activity, Settings2 } from "lucide-react";
+import { Coins, Home, Radio, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Headset, MessageCircle, LayoutDashboard } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
 import ServerCheckinModal from "@/components/ServerCheckinModal";
 import OnboardingTour from "@/components/OnboardingTour";
 import IncomingCallGate from "@/components/IncomingCallGate";
-import RightRail from "@/components/RightRail";
 import { UserAvatar } from "@/components/bits";
 
 // LoginView pulls in FirebaseAuthPanel, and with it firebase/auth and the
@@ -70,44 +69,23 @@ const SIDEBAR_CONFIGS = {
     { href: "/support", label: "Support", icon: Headset },
     { href: "/profile", label: "Profile", icon: User },
   ],
+  // Single-page admin dashboard: all tabs live in app/admin/page.tsx.
+  // Separate /admin/* routes are 404 by design (see Phase 5 hygiene).
   admin: [
     { href: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
-    { href: "/admin/users", label: "Users", icon: Users2 },
-    { href: "/admin/rooms", label: "Rooms", icon: Layers },
-    { href: "/admin/calls", label: "Calls", icon: Phone },
-    { href: "/admin/messages", label: "Messages", icon: MessageCircle },
-    { href: "/admin/reports", label: "Reports", icon: Activity },
-    { href: "/admin/settings", label: "Settings", icon: Settings2 },
-    { href: "/admin/analytics", label: "Analytics", icon: BarChart3 },
-    { href: "/admin/moderation", label: "Moderation", icon: ShieldCheck },
-    { href: "/admin/gifts", label: "Gifts", icon: Sparkles },
-    { href: "/admin/games", label: "Games", icon: Gamepad2 },
   ],
   creator: [
     { href: "/create", label: "Create Room", icon: Plus },
-    { href: "/my-rooms", label: "My Rooms", icon: Layers },
-    { href: "/wallet", label: "Earnings", icon: Wallet },
-    { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  ],
-  settings: [
-    { href: "/settings", label: "Settings", icon: Settings2 },
-    { href: "/settings/profile", label: "Profile", icon: User },
-    { href: "/settings/notifications", label: "Notifications", icon: Bell },
-    { href: "/settings/privacy", label: "Privacy", icon: Shield },
-    { href: "/settings/account", label: "Account", icon: User },
   ],
 } as const;
 
 type SidebarConfigKey = keyof typeof SIDEBAR_CONFIGS;
 
-function getSidebarConfig(pathname: string, isAdmin: boolean, user: any): { config: readonly NavItem[]; context: string } {
+function getSidebarConfig(pathname: string, isAdmin: boolean, user: { id: string } | null): { config: readonly NavItem[]; context: string } {
   if (pathname.startsWith("/admin")) {
     return { config: SIDEBAR_CONFIGS.admin, context: "admin" };
   }
-  if (pathname.startsWith("/settings")) {
-    return { config: SIDEBAR_CONFIGS.settings, context: "settings" };
-  }
-  if (pathname.startsWith("/my-rooms") || pathname.startsWith("/create") || pathname.startsWith("/analytics")) {
+  if (pathname.startsWith("/create")) {
     return { config: SIDEBAR_CONFIGS.creator, context: "creator" };
   }
   return { config: SIDEBAR_CONFIGS.main, context: "main" };
@@ -121,21 +99,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [showTour, setShowTour] = useState(false);
-  const ADMIN_ALLOW = ["mahmoudnabil03@gmail.com", "marc@ms-rooms.app", "marc@gmail.com", "marc@msrooms.app"];
 
   useEffect(() => {
     const check = async () => {
-      const email = (user as unknown as { email?: string | null })?.email ?? null;
-      if (email && ADMIN_ALLOW.includes(email.toLowerCase())) { setIsAdmin(true); return; }
-      const tok = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
-      if (!tok) { setIsAdmin(false); return; }
+      // Server-verified role only. No client-side email allowlist: staff emails
+      // in a public bundle leak targets and render admin UI without authority.
       try {
         const { adminMe } = await import("@/lib/api");
         const r = await adminMe();
         setIsAdmin(r.admin.role === "master_admin");
       } catch { setIsAdmin(false); }
     };
-    void check();
+    if (user) void check();
+    else setIsAdmin(false);
   }, [user]);
 
   useEffect(() => {
@@ -171,8 +147,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const getContextTitle = () => {
     if (pathname.startsWith("/admin")) return "Admin Panel";
-    if (pathname.startsWith("/settings")) return "Settings";
-    if (pathname.startsWith("/my-rooms") || pathname.startsWith("/create")) return "Creator Tools";
+    if (pathname.startsWith("/create")) return "Creator Tools";
     return "MS-ROOMS";
   };
 
@@ -196,7 +171,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }
 
   const { config: navItems, context } = getSidebarConfig(pathname, isAdmin, user);
-  const visibleNav = navItems.filter((n) => n.href !== "/admin" || isAdmin);
+  const visibleNav = navItems.filter((n) => {
+    // Non-admins never see admin links. Admins see them only on /admin/* where
+    // the single dashboard handles all tabs (other /admin/* routes are 404).
+    if (n.href === "/admin") return isAdmin && pathname === "/admin";
+    if (n.href.startsWith("/admin/")) return false;
+    return true;
+  });
 
   return (
     <div className="app-shell">

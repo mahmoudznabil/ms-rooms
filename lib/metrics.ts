@@ -4,9 +4,21 @@ import { getFirebaseAnalytics, getFirebasePerformance } from "@/lib/firebase";
 
 type AnalyticsParams = Record<string, string | number | boolean | null | undefined>;
 
-// --- Event metrics (Firebase Analytics, safe no-op on server/unsupported) ---
+// --- Event metrics (Firebase Analytics, consent-gated) ---
+export function hasAnalyticsConsent(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = localStorage.getItem("msrooms_cookie_consent");
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { consent?: string };
+    return parsed.consent === "granted";
+  } catch {
+    return false;
+  }
+}
 export async function logAppEvent(eventName: string, params?: AnalyticsParams): Promise<void> {
   if (typeof window === "undefined") return;
+  if (!hasAnalyticsConsent()) return;
   try {
     const analytics = await getFirebaseAnalytics();
     if (!analytics) return;

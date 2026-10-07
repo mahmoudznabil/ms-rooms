@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { API_BASE, fetchUser, login as apiLogin, me as apiMe, ApiError, type ApiUser } from "@/lib/api";
+import { API_BASE, fetchUser, me as apiMe, ApiError, type ApiUser } from "@/lib/api";
 import { clearFirebaseSessionHint, hasFirebaseSessionHint } from "@/lib/firebase-hint";
 
 interface SessionState {
@@ -10,8 +10,7 @@ interface SessionState {
   ready: boolean;
   authError: string | null;
   boot: () => Promise<void>;
-  login: (username: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -74,23 +73,35 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ user: null, ready: true });
   },
 
-  login: async (username: string) => {
-    set({ authError: null });
+  logout: async () => {
+    // Clear server sessions first, then Firebase, then local stores.
+    // Awaited so a shared device never keeps the next user signed in as admin.
     try {
-      const { user } = await apiLogin(username);
-      set({ user, authError: null });
-    } catch (e) {
-      set({ authError: e instanceof Error ? e.message : "Login failed. Try again." });
-      throw e;
-    }
-  },
-
-  logout: () => {
-    // Call backend logout to clear server session and cookie
-    fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).catch(() => undefined);
-    // Also sign out Firebase so the next device needs fresh credentials
+      const csrfHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      try {
+        const r = await fetch(`${API_BASE}/api/csrf`, { credentials: "include" });
+        const d = (await r.json()) as { csrf_token?: string };
+        if (d?.csrf_token) csrfHeaders["X-CSRF-Token"] = d.csrf_token;
+      } catch {}
+      await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include", headers: csrfHeaders });
+    } catch {}
     try {
-      import("@/lib/firebase").then(({ auth, signOut }) => signOut(auth).catch(() => undefined));
+      await fetch(`${API_BASE}/api/admin/logout`, { method: "POST", credentials: "include" }).catch(() => undefined);
+    } catch {}
+    try {
+      if (typeof window !== "undefined") localStorage.removeItem("admin_token");
+    } catch {}
+    try {
+      const { clearFirebaseSessionHint } = await import("@/lib/firebase-hint");
+      clearFirebaseSessionHint();
+    } catch {}
+    try {
+      const { useCalls } = await import("@/stores/useCalls");
+      useCalls.setState({ missed: 0 });
+    } catch {}
+    try {
+      const { auth, signOut } = await import("@/lib/firebase");
+      await signOut(auth);
     } catch {}
     set({ user: null, authError: null });
   },

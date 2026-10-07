@@ -151,8 +151,8 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
     setError(null);
     try {
       const mod = await aiModerateContent(content, "dm");
-      if (!mod.allowed && mod.severity === "high") {
-        setError(`Blocked: ${mod.reason || "inappropriate content"}`);
+      if (!mod.allowed) {
+        setError(mod.reason || "Blocked: inappropriate content");
         return;
       }
       const tempId = `temp-${Date.now()}`;
@@ -171,8 +171,14 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
       };
       setMessages((prev) => [...prev, optimistic]);
       setDraft("");
-      const { message } = await sendMessage({ conversation_id: activeId, content });
-      setMessages((prev) => prev.map((m) => (m.id === tempId ? message : m)));
+      try {
+        const { message } = await sendMessage({ conversation_id: activeId, content });
+        setMessages((prev) => prev.map((m) => (m.id === tempId ? message : m)));
+      } catch (e) {
+        // Roll back the optimistic message: failed sends must not look delivered.
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        throw e;
+      }
       void markConversationRead(activeId).catch(() => undefined);
       logChatEvent("send");
       // Refresh suggestions in background
@@ -408,6 +414,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
             }
           }}
           placeholder="Message…"
+          aria-label="Direct message"
           maxLength={2000}
           className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/50 focus:outline-none"
         />

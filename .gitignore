@@ -8,10 +8,14 @@
 
 # local environment
 .env*
+!.env.example
 
 # generated files
 *.tsbuildinfo
 npm-debug.log*
+
+# local backups (timestamped D1 exports)
+/backups/
 
 # local wrangler state (dev D1 data, build cache)
 .wrangler/

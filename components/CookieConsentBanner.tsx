@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Cookie, X, Settings, AlertCircle } from "lucide-react";
 
 const CONSENT_KEY = "msrooms_cookie_consent";
@@ -30,16 +30,10 @@ export default function CookieConsentBanner() {
     }
   }, []);
 
-  useEffect(() => {
-    if (state === "granted") {
-      checkThirdPartyCookies();
-    }
-  }, [state]);
-
-  const checkThirdPartyCookies = async () => {
+  const checkThirdPartyCookies = useCallback(async () => {
     try {
       const testUrl = "https://bestaudioroom.firebaseapp.com/__/auth/handler";
-      const res = await fetch(testUrl, {
+      await fetch(testUrl, {
         method: "HEAD",
         mode: "no-cors",
         credentials: "include",
@@ -48,7 +42,13 @@ export default function CookieConsentBanner() {
     } catch {
       setThirdPartyBlocked(true);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (state === "granted") {
+      void checkThirdPartyCookies();
+    }
+  }, [state, checkThirdPartyCookies]);
 
   const accept = () => {
     localStorage.setItem(CONSENT_KEY, JSON.stringify({ version: CONSENT_VERSION, consent: "granted" }));
@@ -69,7 +69,7 @@ export default function CookieConsentBanner() {
     }
   };
 
-  if (!showBanner || state === "granted") return null;
+  if (!showBanner || state === "granted" || state === "denied") return null;
 
   return (
     <div
