@@ -26,5 +26,12 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "best-audio-room"]
+  "exclude": [
+    "node_modules",
+    "best-audio-room",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "tests",
+    "scripts/probe401.mjs"
+  ]
 }
