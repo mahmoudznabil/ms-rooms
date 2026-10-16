@@ -1224,6 +1224,178 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         });
       }
 
+      // ---- Paid mini-games (Phase A3) -----------------------------------------------
+      // Games used to be client-only, so any "fee" was deducted in the browser and
+      // trivially farmable. The server now owns the money: start debits the entry
+      // fee atomically and mints a session; finish credits a FIXED xp amount from a
+      // server-side table (never proportional to a client score) and is idempotent.
+      // `xp/award` above stays reserved for admin/system use — a direct call from an
+      // unfunded client cannot mint game XP.
+      //
+      // Per-game economics (fees are tuned in Phase D). `winScore` is the threshold
+      // above which the server calls it a win; it is a fixed table, so the worst a
+      // lying client can do is claim a win 10×/game/day (see daily cap below).
+      const GAME_ECON: Record<string, { fee: number; maxScore: number; winScore: number }> = {
+        ludo:    { fee: 5,  maxScore: 5000,  winScore: 50 },
+        trivia:  { fee: 5,  maxScore: 10,    winScore: 6 },
+        reaction:{ fee: 2,  maxScore: 500,   winScore: 80 },
+        memory:  { fee: 2,  maxScore: 10000, winScore: 10000 }, // moves counter, not a score → play XP only
+        rush:    { fee: 10, maxScore: 10000, winScore: 500 },
+        pk:      { fee: 10, maxScore: 10000, winScore: 500 },
+      };
+      const GAME_DAILY_CAP = 10; // paid sessions per game per user per day
+      const GAME_XP_WIN = 10;
+      const GAME_XP_PLAY = 2;
+
+      if (path === "/api/games/start" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
+        const body = await readJson<{ game_type?: unknown; room_id?: unknown }>(request);
+        const gameType = typeof body?.game_type === "string" ? body.game_type : "";
+        const econ = GAME_ECON[gameType];
+        if (!econ) return badRequest("Unknown game_type.");
+        const roomId = typeof body?.room_id === "string" ? body.room_id : null;
+        if (roomId) {
+          const room = await env.DB.prepare(`SELECT id FROM rooms WHERE id = ?`).bind(roomId).first();
+          if (!room) return notFound("Room not found.");
+        }
+
+        // Anti-farm: cap paid sessions per game per day.
+        const todayCount = await env.DB.prepare(
+          `SELECT COUNT(*) AS n FROM game_sessions
+           WHERE current_turn_user_id = ? AND game_type = ? AND created_at >= date('now','start of day')`
+        ).bind(userId, gameType).first();
+        if ((todayCount?.n ?? 0) >= GAME_DAILY_CAP) {
+          return conflict(`Daily limit reached for ${gameType}. Try again tomorrow.`);
+        }
+
+        // Atomic debit: exactly one row changes only when the balance covers the fee.
+        const debit = await env.DB.prepare(
+          `UPDATE users SET coins = coins - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND coins >= ?`
+        ).bind(econ.fee, userId, econ.fee).run();
+        const changed = (debit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
+        if (changed !== 1) return conflict("Not enough coins to play.");
+
+        const sessionId = newId("gs");
+        await env.DB.prepare(
+          `INSERT INTO game_sessions (id, room_id, game_type, state_json, current_turn_user_id, status, created_at, updated_at)
+           VALUES (?, ?, ?, '{}', ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        ).bind(sessionId, roomId, gameType, userId).run();
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_sent', ?, ?)`
+        ).bind(newId("tx"), userId, roomId, -econ.fee, `Game entry: ${gameType}`).run();
+
+        const updated = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
+        return j({ ok: true, session_id: sessionId, game_type: gameType, fee: econ.fee, coins: (updated as Record<string, unknown> | null)?.coins ?? null }, 201);
+      }
+
+      if (path === "/api/games/finish" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
+        const body = await readJson<{ session_id?: unknown; score?: unknown }>(request);
+        const sessionId = typeof body?.session_id === "string" ? body.session_id : "";
+        const score = typeof body?.score === "number" && Number.isFinite(body.score) ? Math.floor(body.score) : NaN;
+        if (!sessionId) return badRequest("session_id is required.");
+        if (!Number.isFinite(score) || score < 0) return badRequest("score must be a non-negative number.");
+
+        const session = await env.DB.prepare(
+          `SELECT id, game_type, status, state_json, current_turn_user_id FROM game_sessions WHERE id = ?`
+        ).bind(sessionId).first();
+        if (!session) return notFound("Game session not found.");
+        if (session.current_turn_user_id !== userId) return j({ ok: false, error: "Not your game session." }, 403);
+
+        const gameType = String(session.game_type ?? "");
+        const econ = GAME_ECON[gameType];
+        if (!econ) return badRequest("Unknown game_type.");
+        if (score > econ.maxScore) return badRequest(`score must be between 0 and ${econ.maxScore}.`);
+
+        // Idempotent finish: only the first call flips the status and awards XP.
+        const prev = (() => {
+          try { return JSON.parse(String(session.state_json ?? "{}")) as Record<string, unknown>; } catch { return {}; }
+        })();
+        if (session.status === "finished") {
+          // Double-finish returns the cached result, never a second award.
+          return j({ ok: true, session_id: sessionId, already_finished: true, xp_awarded: Number(prev.xp_awarded ?? 0), win: Boolean(prev.win) });
+        }
+
+        const win = score >= econ.winScore;
+        const xpAwarded = win ? GAME_XP_WIN : GAME_XP_PLAY;
+        const flipped = await env.DB.prepare(
+          `UPDATE game_sessions SET status = 'finished', state_json = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status != 'finished'`
+        ).bind(JSON.stringify({ ...prev, score, win, xp_awarded: xpAwarded }), sessionId).run();
+        if (((flipped as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0) !== 1) {
+          // Lost the race to another finish call — return the cached result.
+          const again = await env.DB.prepare(`SELECT state_json FROM game_sessions WHERE id = ?`).bind(sessionId).first();
+          let cached: Record<string, unknown> = {};
+          try { cached = JSON.parse(String(again?.state_json ?? "{}")); } catch {}
+          return j({ ok: true, session_id: sessionId, already_finished: true, xp_awarded: Number(cached.xp_awarded ?? 0), win: Boolean(cached.win) });
+        }
+
+        await env.DB.prepare(`UPDATE users SET xp = xp + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(xpAwarded, userId).run();
+        await env.DB.prepare(
+          `INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, ?, ?, NULL)`
+        ).bind(newId("xp"), userId, xpAwarded, `Played ${gameType}${win ? " (win)" : ""}`).run();
+
+        const updated = await env.DB.prepare(`SELECT coins, xp FROM users WHERE id = ?`).bind(userId).first();
+        return j({ ok: true, session_id: sessionId, win, xp_awarded: xpAwarded, score, coins: (updated as Record<string, unknown> | null)?.coins ?? null, xp: (updated as Record<string, unknown> | null)?.xp ?? null });
+      }
+
+      // ---- Voice heartbeat metering (Phase A4) ----------------------------------------
+      // Talking in a room costs 1 coin/min. The client posts this every 60s while the
+      // mic is on; presence is already proven by the 5s seat poll, so a dropped tab
+      // stops billing within a minute. The host is exempt in their own room; muted
+      // seats are not billed.
+      const VOICE_PER_MIN = 1;
+      const VOICE_DAILY_CAP = 60; // coins/day per user
+      const voiceHbMatch = path.match(/^\/api\/rooms\/([^/]+)\/voice-heartbeat$/);
+      if (voiceHbMatch && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
+        const slug = decodeURIComponent(voiceHbMatch[1]);
+        const room = await env.DB.prepare(`SELECT id, host_user_id FROM rooms WHERE id = ? OR slug = ?`).bind(slug, slug).first();
+        if (!room) return notFound("Room not found.");
+
+        const seat = await env.DB.prepare(
+          `SELECT seat_index, is_muted FROM seats WHERE room_id = ? AND user_id = ?`
+        ).bind(room.id, userId).first();
+        if (!seat) return j({ ok: false, error: "Take a seat before talking." }, 403);
+
+        // Host is exempt; muted seats are not billed.
+        if (room.host_user_id === userId) return j({ ok: true, billed: 0, reason: "host_exempt" });
+        if (Number(seat.is_muted ?? 0) === 1) return j({ ok: true, billed: 0, reason: "muted" });
+
+        // Daily cap: stop billing (but keep the caller talking) once reached.
+        const spent = await env.DB.prepare(
+          `SELECT COALESCE(SUM(ABS(amount)), 0) AS total FROM transactions
+           WHERE user_id = ? AND type = 'gift_sent' AND description = 'Voice' AND created_at >= date('now','start of day')`
+        ).bind(userId).first();
+        if ((spent?.total ?? 0) >= VOICE_DAILY_CAP) return j({ ok: true, billed: 0, reason: "daily_cap" });
+
+        const debit = await env.DB.prepare(
+          `UPDATE users SET coins = coins - ?, xp = xp + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND coins >= ?`
+        ).bind(VOICE_PER_MIN, userId, VOICE_PER_MIN).run();
+        if (((debit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0) !== 1) {
+          // Out of coins: the client auto-mutes on this 402.
+          return j({ ok: false, error: "Out of coins — check in or top up to keep talking.", code: "out_of_coins" }, 402);
+        }
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_sent', ?, 'Voice')`
+        ).bind(newId("tx"), userId, room.id, -VOICE_PER_MIN).run();
+        await env.DB.prepare(
+          `INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, 1, 'Voice in room', ?)`
+        ).bind(newId("xp"), userId, room.id).run();
+
+        const updated = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
+        return j({ ok: true, billed: VOICE_PER_MIN, coins: (updated as Record<string, unknown> | null)?.coins ?? null });
+      }
+
       const xpHistoryMatch = path.match(/^\/api\/users\/([^/]+)\/xp$/);
       if (xpHistoryMatch && request.method === "GET") {
         const me = await requireUser(request, env);

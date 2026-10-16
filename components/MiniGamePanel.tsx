@@ -1,46 +1,43 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Dices, Zap, Trophy, Target, Sparkles } from "lucide-react";
+import {
+  canMove,
+  GRID,
+  LUDO_HOME,
+  LUDO_PLAYERS,
+  ludoMove,
+  TRACK,
+  YARDS,
+} from "@/lib/games/ludo";
+import { buildTriviaDeck, TRIVIA_POOL, TRIVIA_ROUND, type TriviaQuestion } from "@/lib/games/trivia-pack";
+import { finishGame, startGame } from "@/lib/api";
 
 type GameType = "ludo" | "reaction" | "trivia" | "memory";
 
-/**
- * Board geometry: a 7x7 grid whose perimeter is the shared track, with the four
- * corners as private yards and the middle 3x3 as home/finish.
- *
- * The track is a clockwise ring of 20 tiles, listed in walking order so a token
- * position is just an index into this array. Four colours share it, spaced five
- * tiles apart so they cannot start on top of each other.
- */
-const GRID = 7;
-const TRACK: number[] = [
-  // top edge, left→right (corners are yards, skipped)
-  1, 2, 3, 4, 5,
-  // right edge, top→bottom
-  13, 20, 27, 34, 41,
-  // bottom edge, right→left
-  47, 46, 45, 44, 43,
-  // left edge, bottom→top
-  35, 28, 21, 14, 7,
-];
-const YARDS = [0, 6, 42, 48];               // top-left, top-right, bottom-right, bottom-left
-const START = [0, 5, 10, 15];               // each colour's entry tile on TRACK
-const LUDO_HOME = TRACK.length;             // token has walked the whole track
+/** Server-side entry fee per game (mirrors GAME_ECON in workers/backend.ts). */
+const GAME_FEE: Record<GameType, number> = { ludo: 5, reaction: 2, trivia: 5, memory: 2 };
 
-interface LudoPlayer {
-  name: string;
-  /** Token colour class, also used for its yard. */
-  bg: string;
-  /** -1 = in the yard, 0..19 = index into TRACK, LUDO_HOME = home. */
-  token: number;
-}
-const LUDO_PLAYERS: LudoPlayer[] = [
-  { name: "You", bg: "bg-rose-400", token: -1 },
-  { name: "Blue", bg: "bg-sky-400", token: -1 },
-  { name: "Green", bg: "bg-emerald-400", token: -1 },
-  { name: "Gold", bg: "bg-amber-400", token: -1 },
-];
+/**
+ * Mini games panel.
+ *
+ * The Ludo rules and the trivia pool both used to live inline here. They are
+ * now pure modules (`lib/games/ludo.ts`, `lib/games/trivia-pack.ts`) so they
+ * can be unit-tested with scripted rolls, and this component only owns UI
+ * state, the dice animation and the local bot turns.
+ *
+ * Phase A1 fixes baked in:
+ * - A dead roll (yard without a 6, overshoot before home) now SAYS WHY in the
+ *   status line instead of silently passing the turn, which made the die look
+ *   broken.
+ * - The next player is computed OUTSIDE the state updater (`ludoMove` is pure)
+ *   so no side effect fires inside an updater — that used to double-fire under
+ *   StrictMode off a stale turn closure.
+ * - The three non-human seats are bots that auto-roll on a short timer, with a
+ *   visible turn order (You → Blue → Green → Gold), capture-back-to-yard, and
+ *   an exact-roll-to-finish rule.
+ */
 
 interface MiniGamePanelProps {
   roomId?: string;
@@ -53,119 +50,177 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
   const [score, setScore] = useState(0);
   const [reactionStart, setReactionStart] = useState<number | null>(null);
   const [reactionMsg, setReactionMsg] = useState("Tap Start, then tap as fast as you can when it turns green!");
-  // A deck is shuffled and dealt from, so questions are never repeated until
-  // the whole pool is exhausted. Cycling an index over a fixed list re-asked the
-  // same four questions forever.
+
+  // --- Paid-session state (Phase A3) --------------------------------------
+  // `sessionRef` holds the open server session id for the game currently being
+  // played, so the finish handler can close it exactly once. `feeNotice`
+  // surfaces the server's own message (insufficient coins, daily cap) in the
+  // status line instead of a silent no-op.
+  const sessionRef = useRef<string | null>(null);
+  const [feeNotice, setFeeNotice] = useState<string | null>(null);
+
+  // --- Ludo UI state --------------------------------------------------------
+  const [ludo, setLudo] = useState(LUDO_PLAYERS);
+  const [activeLudo, setNextLudo] = useState(0);
+  const [ludoMsg, setLudoMsg] = useState("Roll a 6 to bring a token out of the yard.");
+  const ludoRef = useRef(ludo);
+  const activeLudoRef = useRef(activeLudo);
+  useEffect(() => { ludoRef.current = ludo; }, [ludo]);
+  useEffect(() => { activeLudoRef.current = activeLudo; }, [activeLudo]);
+
+  const gameOver = ludo.some((p) => p.token >= LUDO_HOME);
+  const gameOverRef = useRef(gameOver);
+  useEffect(() => { gameOverRef.current = gameOver; }, [gameOver]);
+
+  // Settle the paid Ludo round the moment a token reaches home. The winner's
+  // name decides win/lose; the tally is the human's `score` so the server can
+  // clamp it (ludo maxScore 5000) and ignore anything inflated. `settleRef`
+  // keeps this effect from needing the handler in its dep list (the handler is
+  // declared below, after the trivia/memory state it doesn't touch).
+  const settleRef = useRef<(s: number) => void>(() => {});
+  useEffect(() => {
+    if (!gameOver) return;
+    const winner = ludo.find((p) => p.token >= LUDO_HOME);
+    settleRef.current(winner?.name === "You" ? score : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameOver]);
+
+  // --- Trivia state (deck dealt from the 60-question pool, no repeats) ------
   const [triviaAnswer, setTriviaAnswer] = useState<number | null>(null);
-  const [triviaDeck, setTriviaDeck] = useState<number[]>([]);
+  const [triviaDeck, setTriviaDeck] = useState<TriviaQuestion[]>([]);
   const [triviaPos, setTriviaPos] = useState(0);
   const [triviaScore, setTriviaScore] = useState(0);
-  const [triviaSeen, setTriviaSeen] = useState(0);
+  const [triviaSeen, setTriviaSeen] = useState<string[]>([]);
+
   const [memoryCards, setMemoryCards] = useState<number[]>([]);
   const [memoryFlipped, setMemoryFlipped] = useState<number[]>([]);
   const [memoryMatched, setMemoryMatched] = useState<number[]>([]);
   const [memoryMoves, setMemoryMoves] = useState(0);
 
-  const TRIVIA_QUESTIONS = [
-    { q: "What is the capital of France?", options: ["London", "Paris", "Berlin", "Madrid"], correct: 1 },
-    { q: "Which planet is known as the Red Planet?", options: ["Venus", "Jupiter", "Mars", "Saturn"], correct: 2 },
-    { q: "What is the largest ocean on Earth?", options: ["Atlantic", "Indian", "Arctic", "Pacific"], correct: 3 },
-    { q: "How many continents are there?", options: ["5", "6", "7", "8"], correct: 2 },
-    { q: "What is the smallest prime number?", options: ["0", "1", "2", "3"], correct: 2 },
-    { q: "Which gas do plants absorb from the air?", options: ["Oxygen", "Nitrogen", "Carbon dioxide", "Hydrogen"], correct: 2 },
-    { q: "Who painted the Mona Lisa?", options: ["Van Gogh", "Da Vinci", "Picasso", "Monet"], correct: 1 },
-    { q: "What is the hardest natural substance on Earth?", options: ["Quartz", "Diamond", "Titanium", "Granite"], correct: 1 },
-    { q: "How many bones are in the adult human body?", options: ["186", "206", "226", "246"], correct: 1 },
-    { q: "What is the longest river in the world?", options: ["Amazon", "Nile", "Yangtze", "Mississippi"], correct: 1 },
-    { q: "Which element has the chemical symbol Au?", options: ["Silver", "Gold", "Aluminium", "Argon"], correct: 1 },
-    { q: "What is the largest mammal on Earth?", options: ["African elephant", "Blue whale", "Giraffe", "Sperm whale"], correct: 1 },
-    { q: "In which country would you find Machu Picchu?", options: ["Chile", "Bolivia", "Peru", "Colombia"], correct: 2 },
-    { q: "What does 'HTTP' stand for?", options: ["HyperText Transfer Protocol", "High Transfer Text Process", "Hyperlink Text Transport Path", "Home Tool Transfer Program"], correct: 0 },
-    { q: "How many sides does a hexagon have?", options: ["5", "6", "7", "8"], correct: 1 },
-    { q: "Which is the smallest prime number greater than 10?", options: ["11", "12", "13", "14"], correct: 0 },
-  ];
-
-  // Deal a shuffled copy of the question indices, reshuffling when exhausted.
-  const nextTriviaDeck = useCallback((seen: number): number[] => {
-    const idx = TRIVIA_QUESTIONS.map((_, i) => i);
-    for (let i = idx.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [idx[i], idx[j]] = [idx[j], idx[i]];
-    }
-    return seen >= idx.length ? idx : idx.slice(0, idx.length - seen);
-  }, []);
-
   const ensureTriviaDeck = useCallback(() => {
-    setTriviaDeck((d) => (d.length ? d : nextTriviaDeck(0)));
+    setTriviaDeck((d) => (d.length ? d : buildTriviaDeck(TRIVIA_ROUND, [])));
     setTriviaPos(0);
-    setTriviaSeen(0);
     setTriviaScore(0);
     setTriviaAnswer(null);
-  }, [nextTriviaDeck]);
+  }, []);
 
-  const question = triviaDeck[triviaPos]
-    ? TRIVIA_QUESTIONS[triviaDeck[triviaPos]]
-    : TRIVIA_QUESTIONS[0];
+  const question = triviaDeck[triviaPos] ?? TRIVIA_POOL[0];
 
-  const roll = () => {
-    if (rolling || gameOver) return;
+  const initMemory = useCallback(() => {
+    const cards = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8];
+    for (let i = cards.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cards[i], cards[j]] = [cards[j], cards[i]];
+    }
+    setMemoryCards(cards);
+    setMemoryFlipped([]);
+    setMemoryMatched([]);
+    setMemoryMoves(0);
+  }, []);
+
+  // --- Paid-session wiring (Phase A3) --------------------------------------
+  // Enter a game: the server debits the entry fee and returns a session id.
+  // A 409 (not enough coins / daily cap) leaves the session closed and shows
+  // the server's message — the game does not start unpaid.
+  const enterGame = useCallback(
+    async (next: GameType) => {
+      setFeeNotice(null);
+      // Close any session left open by the previous game before starting a new
+      // one, so a half-finished round is still settled (and billed) exactly once.
+      if (sessionRef.current) {
+        const stale = sessionRef.current;
+        sessionRef.current = null;
+        finishGame(stale, 0).catch(() => undefined);
+      }
+      try {
+        const started = await startGame(next, roomId);
+        sessionRef.current = started.session_id;
+        setGame(next);
+        if (next === "trivia") ensureTriviaDeck();
+        if (next === "memory") initMemory();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Could not start the game.";
+        setFeeNotice(`${message} (${GAME_FEE[next]} coins)`);
+      }
+    },
+    [roomId, ensureTriviaDeck, initMemory]
+  );
+
+  // Settle the open session exactly once when a round ends. `finalScore` is the
+  // client's own tally; the server clamps it and decides win/XP from the fixed
+  // table, so a tampered score cannot mint XP. Wired into `settleRef` so the
+  // Ludo game-over effect above can call it without a dep-cycle.
+  const settleSession = useCallback((finalScore: number) => {
+    const id = sessionRef.current;
+    if (!id) return;
+    sessionRef.current = null;
+    finishGame(id, Math.max(0, Math.floor(finalScore))).catch(() => undefined);
+  }, []);
+  useEffect(() => { settleRef.current = settleSession; }, [settleSession]);
+
+  /**
+   * Apply one die roll to the current player. Pure logic lives in
+   * `ludoMove`; here we only persist its result. The next player is decided by
+   * the pure function, never by a side effect inside a setState updater.
+   */
+  const applyRoll = useCallback((value: number) => {
+    const active = activeLudoRef.current;
+    const result = ludoMove(ludoRef.current, active, value);
+    setLudo(result.players);
+    setLudoMsg(result.message);
+    // Only the human's own rolls add to the shared score.
+    if (active === 0) setScore((s) => s + value);
+
+    const winner = result.players.find((p) => p.token >= LUDO_HOME);
+    if (winner) {
+      setLudoMsg(`${winner.name} wins the round! 🏁`);
+      if (winner.name === "You") setScore((s) => s + 50);
+    } else {
+      // A 6 or a capture keeps the turn; otherwise pass it on.
+      setNextLudo(result.extraTurn ? active : result.nextPlayer);
+    }
+  }, []);
+
+  const rollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => { if (rollInterval.current) clearInterval(rollInterval.current); }, []);
+
+  const roll = useCallback(() => {
+    if (rolling || gameOverRef.current) return;
     setRolling(true);
     let n = 0;
-    const t = setInterval(() => {
+    rollInterval.current = setInterval(() => {
       setDice(1 + Math.floor(Math.random() * 6));
       n++;
       if (n > 10) {
-        clearInterval(t);
+        if (rollInterval.current) clearInterval(rollInterval.current);
+        rollInterval.current = null;
         const final = 1 + Math.floor(Math.random() * 6);
         setDice(final);
         setRolling(false);
-        setScore((s) => s + final);
-        moveTokens(final);
+        applyRoll(final);
       }
     }, 60);
-  };
+  }, [rolling, applyRoll]);
 
-  // --- Ludo rules ---------------------------------------------------------
-  // A token starts in the yard at -1. A 6 releases one. Moving from the yard
-  // (or from the last tile) onto a 6 sends that token back to the yard, which
-  // is the standard Ludo rule that makes a 6 worth chasing rather than free.
-  const moveTokens = (value: number) => {
-    setLudo((prev) => {
-      const next = prev.map((p) => ({ ...p }));
-      const mover = next[activeLudo];
+  // Local bots (Blue/Green/Gold) auto-roll a beat after their turn begins.
+  useEffect(() => {
+    if (game !== "ludo" || gameOver || rolling || activeLudo === 0) return;
+    const timer = setTimeout(() => roll(), 900);
+    return () => clearTimeout(timer);
+  }, [game, gameOver, rolling, activeLudo, roll]);
 
-      if (mover.token < 0) {
-        // Leaving the yard needs an exact 6.
-        if (value !== 6) return prev;
-        mover.token = START[activeLudo];
-        // Roll again for the extra turn a 6 grants.
-        setNextLudo(activeLudo);
-        return next;
-      }
-
-      const nextTile = mover.token + value;
-      if (value === 6 || nextTile >= LUDO_HOME) {
-        if (nextTile >= LUDO_HOME) mover.token = LUDO_HOME;
-        else mover.token = -1;
-        setNextLudo(activeLudo);
-        return next;
-      }
-
-      mover.token = nextTile;
-      setNextLudo((activeLudo + 1) % next.length);
-      return next;
-    });
-  };
-
-  const [activeLudo, setNextLudo] = useState(0);
-  const [ludo, setLudo] = useState(LUDO_PLAYERS);
-    const gameOver = ludo.some((p) => p.token >= LUDO_HOME);
   const resetLudo = () => {
     setLudo(LUDO_PLAYERS);
     setNextLudo(0);
     setDice(1);
     setScore(0);
+    setLudoMsg("Roll a 6 to bring a token out of the yard.");
   };
+
+  // Can the shown die value legally move the active token? Used to highlight
+  // the token so a yard token that needs a 6 is obviously waiting on a 6.
+  const humanCanMove = activeLudo === 0 && canMove(ludo, 0, dice);
+  const winnerName = gameOver ? (ludo.find((p) => p.token >= LUDO_HOME)?.name ?? "") : "";
 
   const startReaction = () => {
     setReactionMsg("Wait for green…");
@@ -186,49 +241,49 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
     const ms = Date.now() - reactionStart;
     setReactionMsg(`⚡ ${ms}ms — ${ms < 200 ? "Lightning!" : ms < 350 ? "Nice!" : "Keep practicing!"}`);
     setReactionStart(null);
-    setScore((s) => s + Math.max(1, 10 - Math.floor(ms / 100)));
+    const gained = Math.max(1, 10 - Math.floor(ms / 100));
+    setScore((s) => s + gained);
+    // Each tap is its own scored round — settle it immediately. The server
+    // clamps reaction to maxScore 500 and decides win/XP from ms-free points.
+    settleSession(gained);
   };
 
   const answerTrivia = (idx: number) => {
     if (triviaAnswer !== null) return;              // one answer per question
     setTriviaAnswer(idx);
-    const correct = question.correct;
-    if (idx === correct) setTriviaScore((s) => s + 1);
-    const seen = triviaSeen + 1;
+    if (idx === question.correct) setTriviaScore((s) => s + 1);
+    // Remember what was asked so the next round never repeats it while the
+    // pool still has unseen questions.
+    const seen = triviaSeen.includes(question.q) ? triviaSeen : [...triviaSeen, question.q];
     setTriviaSeen(seen);
-    // Advance after showing the correct/wrong state. If the pool runs out,
-    // reshuffle a fresh deck instead of replaying the same questions in order.
+    // Advance after showing the correct/wrong state.
     setTimeout(() => {
       setTriviaAnswer(null);
-      setTriviaDeck((d) => {
-        if (triviaPos + 1 >= d.length) return nextTriviaDeck(seen);
-        return d;
-      });
-      setTriviaPos((p) => (triviaSeen >= TRIVIA_QUESTIONS.length ? 0 : p + 1));
+      if (triviaPos + 1 >= triviaDeck.length) {
+        // Deck exhausted — that's the sprint's end. Settle with the correct-count
+        // as the score (server clamps trivia to maxScore 10, win at 6).
+        settleSession(triviaScore);
+        setTriviaDeck(buildTriviaDeck(TRIVIA_ROUND, seen));
+        setTriviaPos(0);
+      } else {
+        setTriviaPos((p) => p + 1);
+      }
     }, 1500);
   };
-
-  const initMemory = useCallback(() => {
-    const cards = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8];
-    for (let i = cards.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cards[i], cards[j]] = [cards[j], cards[i]];
-    }
-    setMemoryCards(cards);
-    setMemoryFlipped([]);
-    setMemoryMatched([]);
-    setMemoryMoves(0);
-  }, []);
 
   const flipMemoryCard = (idx: number) => {
     if (memoryFlipped.length === 2 || memoryFlipped.includes(idx) || memoryMatched.includes(memoryCards[idx])) return;
     const newFlipped = [...memoryFlipped, idx];
     setMemoryFlipped(newFlipped);
     if (newFlipped.length === 2) {
-      setMemoryMoves((m) => m + 1);
+      const moves = memoryMoves + 1;
+      setMemoryMoves(moves);
       if (memoryCards[newFlipped[0]] === memoryCards[newFlipped[1]]) {
-        setMemoryMatched((m) => [...m, memoryCards[newFlipped[0]]]);
+        const nextMatched = [...memoryMatched, memoryCards[newFlipped[0]]];
+        setMemoryMatched(nextMatched);
         setMemoryFlipped([]);
+        // All 8 pairs found — settle. Fewer moves scores higher (max 10000).
+        if (nextMatched.length === 8) settleSession(Math.max(0, 10000 - moves * 250));
       } else {
         setTimeout(() => setMemoryFlipped([]), 1000);
       }
@@ -239,28 +294,25 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
     <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#121218]">
       <div className="flex items-center gap-2 overflow-x-auto border-b border-white/5 px-3 py-2.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
-          onClick={() => setGame("ludo")}
+          onClick={() => enterGame("ludo")}
           className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "ludo" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
         >
           <Dices size={13} /> Ludo
         </button>
         <button
-          onClick={() => setGame("reaction")}
+          onClick={() => enterGame("reaction")}
           className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "reaction" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
         >
           <Zap size={13} /> Reaction
         </button>
         <button
-onClick={() => {
-            setGame("trivia");
-            ensureTriviaDeck();
-          }}
+          onClick={() => enterGame("trivia")}
           className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "trivia" ? "bg-white text-black" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
         >
           <Target size={13} /> Trivia
         </button>
         <button
-          onClick={() => { setGame("memory"); initMemory(); }}
+          onClick={() => enterGame("memory")}
           className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "memory" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
         >
           <Sparkles size={13} /> Memory
@@ -268,7 +320,13 @@ onClick={() => {
         <span className="ml-auto shrink-0 text-xs font-bold text-amber-200">{score} pts</span>
       </div>
       <div className="p-4">
-{game === "ludo" && (
+        {feeNotice && (
+          <p className="mb-3 rounded-lg bg-amber-500/10 px-2 py-1 text-center text-xs text-amber-300" role="alert">
+            {feeNotice}
+          </p>
+        )}
+        {game === "ludo" && (
+        {game === "ludo" && (
           <div>
             <div className="mx-auto w-fit rounded-2xl bg-white/[0.04] p-2">
               <div
@@ -310,10 +368,12 @@ onClick={() => {
                     >
                       {(occupants.length > 0 || yardOccupants.length > 0) && (
                         <div className="flex -space-x-1">
-                          {(occupants.length ? occupants : yardOccupants).map(({ p }) => (
+                          {(occupants.length ? occupants : yardOccupants).map(({ p, pi }) => (
                             <span
                               key={p.name}
-                              className={`h-2.5 w-2.5 rounded-full ring-1 ring-black/40 ${p.bg}`}
+                              className={`h-2.5 w-2.5 rounded-full ring-1 ring-black/40 ${p.bg}${
+                                pi === activeLudo && humanCanMove && !gameOver ? " ring-2 ring-white" : ""
+                              }`}
                               title={p.name}
                             />
                           ))}
@@ -326,7 +386,7 @@ onClick={() => {
               <div className="mt-2 flex items-center justify-center gap-1.5">
                 {LUDO_PLAYERS.map((p, i) => (
                   <span key={p.name} className={`rounded px-1.5 py-0.5 text-[10px] font-bold text-black ${p.bg}`}>
-                    {i === activeLudo ? "▶ " : ""}
+                    {i === activeLudo && !gameOver ? "▶ " : ""}
                     {p.name}
                   </span>
                 ))}
@@ -347,23 +407,29 @@ onClick={() => {
               })}
             </div>
 
-            <div className="mt-3 flex items-center gap-3">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white text-3xl font-bold text-black shadow-inner">
-                {dice}
+            {gameOver ? (
+              <div className="mt-3 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-center">
+                <Trophy size={16} className="mx-auto mb-1 text-emerald-300" />
+                <p className="text-sm font-bold text-emerald-200">{winnerName} wins the round!</p>
+                <p className="text-[11px] text-white/55">Final score {score} pts — reset to play again.</p>
               </div>
-              <button
-                onClick={roll}
-                disabled={rolling || gameOver}
-                className="flex-1 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:opacity-50"
-              >
-                {rolling ? "Rolling…" : gameOver ? "Game over" : "Roll Dice"}
-              </button>
-            </div>
+            ) : (
+              <div className="mt-3 flex items-center gap-3">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white text-3xl font-bold text-black shadow-inner">
+                  {dice}
+                </div>
+                <button
+                  onClick={roll}
+                  disabled={rolling || activeLudo !== 0}
+                  className="flex-1 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:opacity-50"
+                >
+                  {rolling ? "Rolling…" : activeLudo !== 0 ? `${LUDO_PLAYERS[activeLudo].name} is rolling…` : "Roll Dice"}
+                </button>
+              </div>
+            )}
 
-            <p className="mt-2 text-center text-xs text-white/60">
-              {gameOver
-                ? `${ludo.find((p) => p.token >= LUDO_HOME)?.name ?? "Nobody"} wins! Reset to play again.`
-                : `${LUDO_PLAYERS[activeLudo].name}'s turn. Roll a 6 to bring a token out of the yard.`}
+            <p className="mt-2 text-center text-xs text-white/60" role="status" aria-live="polite">
+              {gameOver ? `${winnerName} wins the round! Reset to play again.` : ludoMsg}
             </p>
             <button
               onClick={resetLudo}
@@ -390,7 +456,7 @@ onClick={() => {
             <p className="mt-2 text-xs text-white/40">Test your reflexes!</p>
           </div>
         )}
-{game === "trivia" && (
+        {game === "trivia" && (
           <div className="text-center">
             <p className="text-sm font-bold text-white/80">{question.q}</p>
             <div className="mt-3 grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
@@ -404,7 +470,9 @@ onClick={() => {
                       ? idx === question.correct
                         ? "bg-emerald-500 text-black"
                         : "bg-red-500 text-white"
-                      : "bg-white/5 text-white/80 hover:bg-white/10"
+                      : triviaAnswer !== null && idx === question.correct
+                        ? "bg-emerald-500/40 text-white"
+                        : "bg-white/5 text-white/80 hover:bg-white/10"
                   }`}
                 >
                   {opt}
@@ -412,7 +480,7 @@ onClick={() => {
               ))}
             </div>
             <p className="mt-2 text-xs text-white/55">
-              Score: {triviaScore} &middot; Question {Math.min(triviaSeen + 1, TRIVIA_QUESTIONS.length)} of {TRIVIA_QUESTIONS.length}
+              Score: {triviaScore} &middot; Question {Math.min(triviaPos + 1, triviaDeck.length)} of {triviaDeck.length}
             </p>
           </div>
         )}

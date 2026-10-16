@@ -220,6 +220,60 @@ export async function awardXp(
   return req(`/api/xp/award`, { method: "POST", body: JSON.stringify({ user_id, amount, reason, room_id }) });
 }
 
+// ---- Paid mini-games (Phase A3) -------------------------------------------------
+// The server owns the money: start debits the entry fee atomically, finish
+// credits a fixed XP amount and is idempotent. The client never subtracts coins
+// itself for a game — a browser-side deduction is trivially replayed.
+
+export interface GameStartResult {
+  ok: boolean;
+  session_id: string;
+  game_type: string;
+  fee: number;
+  coins: number | null;
+}
+
+export interface GameFinishResult {
+  ok: boolean;
+  session_id: string;
+  win: boolean;
+  xp_awarded: number;
+  score: number;
+  /** Present when this call lost the race or the session was already closed. */
+  already_finished?: boolean;
+  coins?: number | null;
+  xp?: number | null;
+}
+
+export async function startGame(game_type: string, room_id?: string): Promise<GameStartResult> {
+  return req(`/api/games/start`, { method: "POST", body: JSON.stringify({ game_type, room_id }) });
+}
+
+export async function finishGame(session_id: string, score: number): Promise<GameFinishResult> {
+  return req(`/api/games/finish`, { method: "POST", body: JSON.stringify({ session_id, score }) });
+}
+
+// ---- Voice heartbeat metering (Phase A4) ----------------------------------------
+// Posted by useRoomVoice every 60s while the mic is on. The host is exempt in
+// their own room and muted seats are not billed (the server decides both). A 402
+// means the balance hit zero mid-talk — the caller auto-mutes and shows a nudge.
+
+export interface VoiceHeartbeatResult {
+  ok: boolean;
+  billed: number;
+  coins?: number | null;
+  reason?: string;
+  error?: string;
+  code?: string;
+}
+
+export async function voiceHeartbeat(slug: string): Promise<VoiceHeartbeatResult> {
+  return req(`/api/rooms/${encodeURIComponent(slug)}/voice-heartbeat`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function endRoom(slug: string, host_user_id: string): Promise<void> {
   await req(`/api/rooms/${encodeURIComponent(slug)}?host_user_id=${encodeURIComponent(host_user_id)}`, {
     method: "DELETE",

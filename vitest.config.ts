@@ -29,5 +29,20 @@ export default defineConfig({
     // Playwright owns tests/e2e — Vitest must not try to run those specs.
     exclude: ["node_modules/**", ".next/**", "out/**", "tests/e2e/**"],
     restoreMocks: true,
+    // jsdom boot is the expensive part here (a full DOM + layout engine per
+    // file), and the suites that render React components (minigame-panel)
+    // blow past the 500ms default on slower CI/dev boxes. Raising these keeps
+    // a genuinely slow environment from being misread as a hung worker.
+    environmentTimeout: 300_000,
+    testTimeout: 120_000,
+    hookTimeout: 120_000,
+    // Worker isolation routes every RPC (including "set up this file's jsdom
+    // environment") through a birpc channel whose timeout is hardcoded to 5s.
+    // This box takes ~70s to boot jsdom, so the channel times out and Vitest
+    // reports "Timeout calling fetch" before a single test runs — no CLI flag
+    // or config option raises it. Running unisolated drops the worker channel
+    // and does the setup in-process. The suites here are self-contained (each
+    // builds its own DOM and mocks), so there is no cross-file state to leak.
+    isolate: false,
   },
 });
