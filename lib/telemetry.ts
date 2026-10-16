@@ -1,23 +1,23 @@
 // Dependency-free browser error reporting.
 //
-// When NEXT_PUBLIC_TELEMETRY_URL is set (build-time, static export), global
-// `error` and `unhandledrejection` events are batched and POSTed there as JSON
-// `{ events: [...] }`. Point it at:
-//   - a Sentry HTTP ingest endpoint, or
-//   - a tiny collector (Cloudflare Worker / any logging backend), or
-//   - your own endpoint that forwards to your observability stack.
-//
-// When the URL is unset this is a no-op, so it costs nothing in production
-// until an endpoint is configured. See docs/OPS.md §Observability.
+// Batches global `error` / `unhandledrejection` events and POSTs them as JSON
+// `{ events: [...] }`. The endpoint defaults to the same-origin collector
+// (`POST /api/client-errors`, stored in D1, read in the admin Errors tab), so
+// reporting works on every deploy with zero configuration. Point
+// NEXT_PUBLIC_TELEMETRY_URL at a Sentry HTTP ingest endpoint instead to
+// forward there.
 
 let installed = false;
+let totalReported = 0;
+const SESSION_CAP = 100;
 
 export function initTelemetry(): void {
   if (typeof window === "undefined" || installed) return;
   installed = true;
 
-  const endpoint = (process.env.NEXT_PUBLIC_TELEMETRY_URL ?? "").trim();
-  if (!endpoint) return;
+  // Same-origin default: the app and the API share an origin, so a relative
+  // path needs no CORS and no extra secret.
+  const endpoint = (process.env.NEXT_PUBLIC_TELEMETRY_URL ?? "").trim() || "/api/client-errors";
 
   const queue: unknown[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -51,6 +51,9 @@ export function initTelemetry(): void {
   };
 
   const report = (kind: string, e: unknown) => {
+    // A throwing error handler reporting its own failures would loop forever.
+    if (totalReported >= SESSION_CAP) return;
+    totalReported++;
     enqueue({
       kind,
       message: e instanceof Error ? e.message : String(e),

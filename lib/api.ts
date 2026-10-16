@@ -386,6 +386,10 @@ export async function adminPromoteUser(token: string, input: { user_id: string; 
 export async function adminStats(token: string): Promise<{ stats: Record<string, unknown>; pricing: Array<Record<string, unknown>> }> {
   return req(`/api/admin/stats`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
 }
+export interface ClientError { id: string; user_id: string | null; route: string; kind: string; message: string; stack: string; created_at: string; }
+export async function adminClientErrors(token: string, limit = 50): Promise<{ errors: ClientError[]; last24h: Array<{ kind: string; n: number }> }> {
+  return req(`/api/admin/client-errors?limit=${limit}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+}
 export async function fetchPricing(): Promise<{ tiers: Array<{ tier: string; standard_coins: number; standard_price_cents: number; app_coins: number; app_price_cents: number; bonus_percent: number }> }> {
   return req(`/api/pricing`, { cache: "no-store" });
 }

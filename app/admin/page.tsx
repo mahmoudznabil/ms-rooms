@@ -2,23 +2,23 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  Shield, Search, History, Ticket, Flag, DoorClosed,
+  Shield, Search, History, Ticket, Flag, DoorClosed, TriangleAlert,
   Users as UsersIcon, BarChart3, LogOut, Check,
 } from "lucide-react";
 import {
   adminLogin, adminMe, adminRecharge, adminTransactions, adminLookupUsers,
   adminBanUser, adminPromoteUser,
-  adminStats, listTickets, adminFirebaseLogin, adminTeamList, adminTeamCreate,
+  adminStats, adminClientErrors, listTickets, adminFirebaseLogin, adminTeamList, adminTeamCreate,
   adminTeamRemove, listReports, resolveReport, adminEndRoom, updateTicketStatus,
   ticketDetail, replyTicket, fetchRooms,
-  type AdminUser, type ApiUser,
+  type AdminUser, type ApiUser, type ClientError,
 } from "@/lib/api";
 import { auth, googleProvider, signInWithPopup } from "@/lib/firebase";
 import { Field, inputCls } from "@/components/bits";
 
 const ADMIN_TOKEN_KEY = "admin_token";
 
-type Tab = "overview" | "users" | "rooms" | "reports" | "tickets" | "audit" | "team";
+type Tab = "overview" | "users" | "rooms" | "reports" | "tickets" | "audit" | "errors" | "team";
 
 export default function AdminPage() {
   const [admin, setAdmin] = useState<AdminUser | null>(null);
@@ -150,6 +150,7 @@ export default function AdminPage() {
     { id: "reports", label: "Reports", show: canMod },
     { id: "tickets", label: "Tickets", show: canMod },
     { id: "audit", label: "Audit", show: canMoney },
+    { id: "errors", label: "Errors", show: isMaster },
     { id: "team", label: "Team", show: isMaster },
   ];
 
@@ -184,6 +185,7 @@ export default function AdminPage() {
       {tab === "reports" && <ReportsTab token={token} />}
       {tab === "tickets" && <TicketsTab token={token} />}
       {tab === "audit" && <AuditTab token={token} />}
+      {tab === "errors" && isMaster && <ErrorsTab token={token} />}
       {tab === "team" && isMaster && <TeamTab token={token} />}
     </div>
   );
@@ -509,6 +511,52 @@ function ReportsTab({ token }: { token: string }) {
                 </button>
               ))}
             </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function ErrorsTab({ token }: { token: string }) {
+  const [errors, setErrors] = useState<ClientError[]>([]);
+  const [counts, setCounts] = useState<Array<{ kind: string; n: number }>>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await adminClientErrors(token, 50);
+      setErrors(r.errors);
+      setCounts(r.last24h);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const t = setTimeout(() => void load(), 0);
+    return () => clearTimeout(t);
+  }, [load]);
+
+  return (
+    <Card>
+      <h2 className="flex items-center gap-1.5 text-sm font-bold"><TriangleAlert size={14} /> Browser errors</h2>
+      <p className="mt-1 text-xs text-white/45">
+        Last 24h: {counts.length === 0 ? "none" : counts.map((c) => `${c.kind} ×${c.n}`).join(" · ")}.
+        Auto-reported by the client beacon (30-day retention).
+      </p>
+      <Err msg={err} />
+      <ul className="mt-3 space-y-2">
+        {errors.length === 0 && <p className="text-xs text-white/40">No errors recorded. Quiet clients!</p>}
+        {errors.map((e) => (
+          <li key={e.id} className="rounded-2xl bg-white/[0.04] p-3">
+            <p className="text-sm">
+              <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-bold text-white/60">{e.kind}</span>
+              <span className="ml-2 font-semibold">{e.message}</span>
+            </p>
+            <p className="mt-1 break-all text-[11px] text-white/35">{e.route}</p>
+            {e.stack && <p className="mt-1 break-all font-mono text-[11px] text-white/30">{e.stack}</p>}
+            <p className="text-[11px] text-white/30">{e.created_at}{e.user_id ? ` · ${e.user_id}` : ""}</p>
           </li>
         ))}
       </ul>

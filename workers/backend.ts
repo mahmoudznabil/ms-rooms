@@ -130,6 +130,7 @@ function isRateLimited(key: string, path: string, method: string): boolean {
   else if (path.startsWith("/api/admin/")) limit = 30;
   else if (path.startsWith("/api/signal/")) limit = 120;
   else if (path === "/api/spin") limit = 10;
+  else if (path === "/api/client-errors") limit = 30;
   else if (path === "/api/attachments/upload") limit = 20;
   else if (method !== "GET") limit = 100;
   else return false;
@@ -384,6 +385,11 @@ if (request.method === "OPTIONS") {
     if (path.startsWith("/api/auth/firebase")) return true;
     if (path.startsWith("/api/admin/")) return true;
     if (path.startsWith("/api/recaptcha/")) return true;
+    // The error beacon must accept sendBeacon/fetch-without-preflight posts:
+    // neither can carry the custom header, and there is nothing to forge —
+    // the endpoint takes no privileged action (append-only log, capped fields,
+    // session attached read-only for attribution).
+    if (path === "/api/client-errors") return true;
     // All other state-changing requests are cookie-authenticated: require
     // double-submit (header == cookie, constant-time compare). No Origin
     // bypass: an allowlisted Origin still needs the token.
@@ -1585,7 +1591,32 @@ return j({ ok: true, ended: true });
            WHERE created_by = ?
              AND id NOT IN (SELECT conversation_id FROM conversation_participants)`
         ).bind(userId).run();
+        // Collect the user's attachment keys BEFORE their messages are deleted:
+        // the cleanup subselect below reads messages.sender_id, so running it
+        // after the message delete would match nothing and leak R2 objects.
+        let attachmentKeys: string[] = [];
+        try {
+          const rows = await env.DB.prepare(
+            `SELECT r2_key, thumbnail_r2_key FROM message_attachments
+             WHERE message_id IN (SELECT id FROM messages WHERE sender_id = ?)`
+          ).bind(userId).all();
+          for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
+            if (typeof r.r2_key === "string" && r.r2_key) attachmentKeys.push(r.r2_key);
+            if (typeof r.thumbnail_r2_key === "string" && r.thumbnail_r2_key) attachmentKeys.push(r.thumbnail_r2_key);
+          }
+        } catch {}
         await env.DB.prepare(`DELETE FROM messages WHERE sender_id = ?`).bind(userId).run();
+        try {
+          await env.DB.prepare(`DELETE FROM message_attachments WHERE message_id NOT IN (SELECT id FROM messages)`).run();
+        } catch {}
+        if (attachmentKeys.length > 0) {
+          for (const key of attachmentKeys.slice(0, 100)) {
+            try {
+              await (env.CHAT_ATTACHMENTS as unknown as { delete: (k: string) => Promise<void> } | undefined)?.delete(key);
+            } catch {}
+          }
+        }
+        await env.DB.prepare(`UPDATE client_errors SET user_id = NULL WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM moment_likes WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM moments WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM follows WHERE follower_id = ? OR followee_id = ?`).bind(userId, userId).run();
@@ -1595,10 +1626,6 @@ return j({ ok: true, ended: true });
         await env.DB.prepare(`DELETE FROM support_tickets WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE host_user_id = ? AND status = 'live'`).bind(userId).run();
         await env.DB.prepare(`UPDATE private_call_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP WHERE (caller_user_id = ? OR callee_user_id = ?) AND status IN ('initiated','ringing','connected')`).bind(userId, userId).run();
-        try {
-          await env.DB.prepare(`DELETE FROM message_attachments WHERE message_id IN (SELECT id FROM messages WHERE sender_id = ?)`)
-            .bind(userId).run();
-        } catch {}
         await env.DB.prepare(
           `UPDATE users SET username = ?, display_name = 'Deleted User', avatar_url = NULL, bio = '',
             email = NULL, phone = NULL, firebase_uid = NULL, provider = NULL,
@@ -2375,6 +2402,55 @@ return j({
         return j({ ok: true, admin_id: adminId, admin_username: adminUsername, role, firebase_login: !!firebaseUid }, 201);
       }
 
+      // ---- Browser error telemetry (Phase 0 observability) -------------------------------
+      // The client beacon (lib/telemetry.ts) POSTs { events: [...] } batches here.
+      // No auth: errors happen before login too. Abuse is bounded by the 30/min
+      // rate limit above, per-event caps below, and 30-day retention pruning.
+      if (path === "/api/client-errors" && request.method === "POST") {
+        const body = await readJson<{ events?: unknown }>(request);
+        const events = Array.isArray(body?.events) ? body.events.slice(0, 10) : [];
+        if (events.length === 0) return j({ ok: true, stored: 0 });
+        let uid: string | null = null;
+        try {
+          uid = await sessionUserId();
+        } catch {}
+        const ua = (request.headers.get("User-Agent") ?? "").slice(0, 200);
+        let stored = 0;
+        for (const e of events) {
+          const ev = (e ?? {}) as Record<string, unknown>;
+          const kind = typeof ev.kind === "string" ? ev.kind.slice(0, 24) : "error";
+          const message = (typeof ev.message === "string" ? ev.message : String(ev.message ?? "")).slice(0, 500);
+          const stack = (typeof ev.stack === "string" ? ev.stack : "").slice(0, 2000);
+          const route = (typeof ev.url === "string" ? ev.url : "").slice(0, 300);
+          if (!message) continue;
+          await env.DB.prepare(
+            `INSERT INTO client_errors (id, user_id, route, kind, message, stack, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(newId("cerr"), uid, route, kind, message, stack, ua).run();
+          stored++;
+        }
+        try {
+          await env.DB.prepare(`DELETE FROM client_errors WHERE created_at < datetime('now', '-30 days')`).run();
+        } catch {}
+        return j({ ok: true, stored });
+      }
+
+      if (path === "/api/admin/client-errors" && request.method === "GET") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 50) || 50));
+        const rows = await env.DB.prepare(
+          `SELECT id, user_id, route, kind, message, substr(stack, 1, 500) AS stack, created_at
+           FROM client_errors ORDER BY created_at DESC LIMIT ?`
+        ).bind(limit).all();
+        const counts = await env.DB.prepare(
+          `SELECT kind, COUNT(*) AS n FROM client_errors
+           WHERE created_at > datetime('now', '-24 hours') GROUP BY kind`
+        ).all();
+        return j({ ok: true, errors: rows.results ?? [], last24h: counts.results ?? [] });
+      }
+
       if (path === "/api/admin/stats" && request.method === "GET") {
         const adm = await getAdminFromToken(readAdminToken(request));
         if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
@@ -2448,16 +2524,20 @@ return j({ ok: true });
 
       if (path.match(/^\/api\/support\/tickets\/[^/]+$/) && request.method === "GET") {
         const ticketId = path.split("/")[3];
-        const ticket = await env.DB.prepare(`SELECT * FROM support_tickets WHERE id = ?`).bind(ticketId).first();
-        if (!ticket) return notFound("Ticket not found.");
+        // Authenticate before touching the database: looking the ticket up
+        // first would let anonymous callers distinguish real ticket ids (401)
+        // from fake ones (404) — an existence oracle.
         const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
         const adm = token ? await getAdminFromToken(token) : null;
+        let me: { id: string } | null = null;
         if (!adm) {
-          const me = await requireUser(request, env);
+          me = await requireUser(request, env);
           if (!me) return j({ ok: false, error: "Sign in required." }, 401);
-          if ((ticket as Record<string, unknown>).user_id !== me.id) {
-            return j({ ok: false, error: "Not authorized." }, 403);
-          }
+        }
+        const ticket = await env.DB.prepare(`SELECT * FROM support_tickets WHERE id = ?`).bind(ticketId).first();
+        if (!ticket) return notFound("Ticket not found.");
+        if (!adm && (ticket as Record<string, unknown>).user_id !== me!.id) {
+          return j({ ok: false, error: "Not authorized." }, 403);
         }
         const replies = await env.DB.prepare(`SELECT id, ticket_id, author_admin_id, author_user_id, message, created_at FROM ticket_replies WHERE ticket_id = ? ORDER BY created_at ASC`).bind(ticketId).all();
         // Enrich with quick lookup links (no balances)
@@ -2626,6 +2706,13 @@ return j({ ok: true });
             await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'live'`).bind(r.room_id).run();
           }
         } catch { /* expiry is best-effort */ }
+        // Session retention: expired rows never become valid again, so prune
+        // them here (at most once per 30s per isolate). Audit tables
+        // (transactions, xp_events, auth_audit, ai_usage_events) are retained
+        // by design — see the deletion handler's tombstone comment.
+        try {
+          await env.DB.prepare(`DELETE FROM sessions WHERE expires_at <= datetime('now')`).run();
+        } catch { /* pruning is best-effort */ }
       }
 
       // Recents: every call I'm part of, newest first, with both peers.
@@ -2779,22 +2866,18 @@ return j({ ok: true });
       if (path === "/api/conversations/unread-count" && request.method === "GET") {
         const userId = await requireChatUser();
         if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
+        // Single grouped count (was one COUNT per conversation).
         const rows = await env.DB.prepare(
-          `SELECT cp.conversation_id, cp.last_read_at FROM conversation_participants cp WHERE cp.user_id = ?`
-        ).bind(userId).all();
+          `SELECT cp.last_read_at, COUNT(*) AS n FROM messages m
+           JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = ?
+           WHERE m.sender_id != ? AND m.deleted_at IS NULL
+             AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)
+           GROUP BY cp.conversation_id`
+        ).bind(userId, userId).all();
         let unread_count = 0;
         for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
-          if (r.last_read_at) {
-            const c = await env.DB.prepare(
-              `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND deleted_at IS NULL AND created_at > ?`
-            ).bind(r.conversation_id, userId, r.last_read_at as string).first();
-            unread_count += Number((c as Record<string, unknown> | null)?.n ?? 0);
-          } else {
-            const c = await env.DB.prepare(
-              `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id != ? AND deleted_at IS NULL`
-            ).bind(r.conversation_id, userId).first();
-            unread_count += Math.min(100, Number((c as Record<string, unknown> | null)?.n ?? 0));
-          }
+          const n = Number(r.n ?? 0);
+          unread_count += r.last_read_at ? n : Math.min(100, n);
         }
         return j({ ok: true, unread_count });
       }
@@ -2832,10 +2915,72 @@ return j({ ok: true });
           `SELECT c.* FROM conversations c JOIN conversation_participants cp ON cp.conversation_id = c.id
            WHERE cp.user_id = ? ORDER BY c.updated_at DESC LIMIT 50`
         ).bind(userId).all();
-        const out = [];
-        for (const r of ((rows.results ?? []) as Array<Record<string, unknown>>)) {
-          out.push(await hydrateConversation(r.id as string, userId));
+        const convs = ((rows.results ?? []) as Array<Record<string, unknown>>);
+        if (convs.length === 0) return j({ ok: true, conversations: [] });
+        // Grouped hydration: hydrateConversation() costs 4 statements per
+        // conversation (~200 at the 50 cap — past the free-tier subrequest
+        // limit). These 3 statements cover all of them.
+        const ids = convs.map((c) => c.id as string);
+        const placeholders = ids.map(() => "?").join(",");
+        const parts = await env.DB.prepare(
+          `SELECT cp.conversation_id, cp.user_id, cp.joined_at, cp.last_read_at, cp.muted,
+                  u.username, u.display_name, u.avatar_url
+           FROM conversation_participants cp JOIN users u ON u.id = cp.user_id
+           WHERE cp.conversation_id IN (${placeholders}) ORDER BY cp.joined_at ASC`
+        ).bind(...ids).all();
+        const lasts = await env.DB.prepare(
+          `SELECT m.*, u.username, u.display_name, u.avatar_url FROM messages m
+           JOIN users u ON u.id = m.sender_id
+           WHERE m.conversation_id IN (${placeholders}) AND m.deleted_at IS NULL
+             AND m.created_at = (SELECT MAX(m2.created_at) FROM messages m2
+                                 WHERE m2.conversation_id = m.conversation_id AND m2.deleted_at IS NULL)
+           ORDER BY m.created_at DESC, m.id DESC`
+        ).bind(...ids).all();
+        const unreads = await env.DB.prepare(
+          `SELECT m.conversation_id, cp.last_read_at, COUNT(*) AS n FROM messages m
+           JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = ?
+           WHERE m.conversation_id IN (${placeholders}) AND m.sender_id != ? AND m.deleted_at IS NULL
+             AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)
+           GROUP BY m.conversation_id`
+        ).bind(userId, ...ids, userId).all();
+        const partsByConv = new Map<string, Array<Record<string, unknown>>>();
+        for (const p of ((parts.results ?? []) as Array<Record<string, unknown>>)) {
+          const cid = p.conversation_id as string;
+          if (!partsByConv.has(cid)) partsByConv.set(cid, []);
+          partsByConv.get(cid)!.push(p);
         }
+        const lastByConv = new Map<string, Record<string, unknown>>();
+        for (const l of ((lasts.results ?? []) as Array<Record<string, unknown>>)) {
+          const cid = l.conversation_id as string;
+          if (!lastByConv.has(cid)) lastByConv.set(cid, l);
+        }
+        const unreadByConv = new Map<string, number>();
+        for (const u of ((unreads.results ?? []) as Array<Record<string, unknown>>)) {
+          const n = Number(u.n ?? 0);
+          unreadByConv.set(u.conversation_id as string, u.last_read_at ? n : Math.min(100, n));
+        }
+        const out = convs.map((c) => {
+          const cid = c.id as string;
+          const participants = (partsByConv.get(cid) ?? []).map((p) => ({
+            user_id: p.user_id,
+            joined_at: p.joined_at,
+            last_read_at: p.last_read_at,
+            muted: p.muted,
+            user: { id: p.user_id, username: p.username, display_name: p.display_name, avatar_url: p.avatar_url },
+          }));
+          const l = lastByConv.get(cid);
+          return {
+            ...c,
+            participants,
+            last_message: l ? {
+              id: l.id, conversation_id: l.conversation_id, sender_id: l.sender_id,
+              content: l.content, type: l.type, reply_to_id: l.reply_to_id, metadata: l.metadata,
+              created_at: l.created_at, updated_at: l.updated_at, deleted_at: l.deleted_at,
+              sender: { id: l.sender_id, username: l.username, display_name: l.display_name, avatar_url: l.avatar_url },
+            } : null,
+            unread_count: unreadByConv.get(cid) ?? 0,
+          };
+        });
         return j({ ok: true, conversations: out });
       }
 

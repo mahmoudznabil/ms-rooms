@@ -13,11 +13,9 @@
         }
       },
       "cloudflare": {
-        "type": "local",
-        "command": ["npx", "-y", "@cloudflare/mcp-server-cloudflare@latest"],
-        "timeout": {
-          "startup": 120000
-        }
+        "type": "remote",
+        "url": "https://mcp.cloudflare.com/mcp",
+        "oauth": {}
       },
       "chromedevtools": {
         "type": "local",
