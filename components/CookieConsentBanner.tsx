@@ -50,30 +50,47 @@ export default function CookieConsentBanner() {
     }
   }, [state, checkThirdPartyCookies]);
 
+  const persistConsent = (consent: "granted" | "denied") => {
+    // Private-mode storage throws on write — keep the choice in memory so the
+    // banner still dismisses instead of crashing the click handler.
+    try {
+      localStorage.setItem(CONSENT_KEY, JSON.stringify({ version: CONSENT_VERSION, consent }));
+    } catch {}
+  };
+
   const accept = () => {
-    localStorage.setItem(CONSENT_KEY, JSON.stringify({ version: CONSENT_VERSION, consent: "granted" }));
+    persistConsent("granted");
     setState("granted");
     checkThirdPartyCookies();
   };
 
   const decline = () => {
-    localStorage.setItem(CONSENT_KEY, JSON.stringify({ version: CONSENT_VERSION, consent: "denied" }));
+    persistConsent("denied");
     setState("denied");
   };
 
   const openCookieSettings = () => {
-    if (navigator.cookieEnabled) {
-      window.open("chrome://settings/cookies", "_blank");
-    } else {
-      window.open("https://support.google.com/chrome/answer/95647", "_blank");
+    // chrome:// URLs only work in Chrome. Everyone else gets their vendor's
+    // cookie help page; Brave users additionally need Shields down for Google.
+    const ua = navigator.userAgent;
+    let help = "https://support.google.com/chrome/answer/95647";
+    if (/safari/i.test(ua) && !/chrome|chromium|edg/i.test(ua)) {
+      help = "https://support.apple.com/guide/safari/manage-cookies-sfri11471/mac";
+    } else if (/firefox|fxios/i.test(ua)) {
+      help = "https://support.mozilla.org/kb/cookies-information-websites-store-on-your-computer";
+    } else if (/edg/i.test(ua)) {
+      help = "https://support.microsoft.com/microsoft-edge/delete-cookies-in-microsoft-edge-63947406-40ac-c3b8-57b9-2a946a29ae09";
     }
+    try {
+      window.open(help, "_blank", "noopener");
+    } catch {}
   };
 
   if (!showBanner || state === "granted" || state === "denied") return null;
 
   return (
     <div
-      className="fixed bottom-4 left-4 right-4 md:bottom-6 md:left-auto md:right-6 md:w-96 z-50 animate-slide-up"
+      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-6 md:left-auto md:right-6 md:w-96 z-50 animate-slide-up"
       role="dialog"
       aria-label="Cookie consent"
     >
@@ -102,20 +119,20 @@ export default function CookieConsentBanner() {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={accept}
-                className="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black transition hover:bg-white/85"
+                className="rounded-lg bg-white px-4 py-1.5 min-h-[44px] text-xs font-semibold text-black transition hover:bg-white/85"
               >
                 Accept All
               </button>
               <button
                 onClick={decline}
-                className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10"
+                className="rounded-lg border border-white/15 bg-white/5 px-4 py-1.5 min-h-[44px] text-xs font-semibold text-white transition hover:bg-white/10"
               >
                 Decline
               </button>
               {thirdPartyBlocked && (
                 <button
                   onClick={openCookieSettings}
-                  className="flex items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
+                  className="flex items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/10 px-4 py-1.5 min-h-[44px] text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
                 >
                   <Settings size={12} />
                   Open Cookie Settings

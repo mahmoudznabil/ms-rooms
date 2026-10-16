@@ -58,13 +58,13 @@ export default function LobbyView() {
               void load();
             }}
             aria-label="Refresh rooms"
-            className="rounded-full bg-white/5 p-2.5 text-white/60 transition hover:bg-white/10 hover:text-white"
+            className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
           </button>
           <Link prefetch={false}
             href="/create"
-            className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85"
+            className="flex min-h-[44px] items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85"
           >
             <Plus size={15} /> Go live
           </Link>
@@ -79,7 +79,7 @@ export default function LobbyView() {
           placeholder="Search rooms…"
           aria-label="Search rooms"
           maxLength={40}
-          className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
+          className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-base text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
         />
       </div>
 
@@ -90,7 +90,7 @@ export default function LobbyView() {
             role="tab"
             aria-selected={category === c}
             onClick={() => setCategory(c)}
-            className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
+            className={`min-h-[44px] shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
               category === c ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
             }`}
           >

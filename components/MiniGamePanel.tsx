@@ -237,16 +237,16 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
 
   return (
     <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#121218]">
-      <div className="flex items-center gap-2 border-b border-white/5 px-3 py-2.5">
+      <div className="flex items-center gap-2 overflow-x-auto border-b border-white/5 px-3 py-2.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           onClick={() => setGame("ludo")}
-          className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "ludo" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+          className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "ludo" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
         >
           <Dices size={13} /> Ludo
         </button>
         <button
           onClick={() => setGame("reaction")}
-          className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "reaction" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+          className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "reaction" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
         >
           <Zap size={13} /> Reaction
         </button>
@@ -255,17 +255,17 @@ onClick={() => {
             setGame("trivia");
             ensureTriviaDeck();
           }}
-          className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "trivia" ? "bg-white text-black" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
+          className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "trivia" ? "bg-white text-black" : "bg-white/5 text-white/70 hover:bg-white/10"}`}
         >
           <Target size={13} /> Trivia
         </button>
         <button
           onClick={() => { setGame("memory"); initMemory(); }}
-          className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "memory" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+          className={`flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${game === "memory" ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
         >
           <Sparkles size={13} /> Memory
         </button>
-        <span className="ml-auto text-xs font-bold text-amber-200">{score} pts</span>
+        <span className="ml-auto shrink-0 text-xs font-bold text-amber-200">{score} pts</span>
       </div>
       <div className="p-4">
 {game === "ludo" && (
@@ -333,7 +333,7 @@ onClick={() => {
               </div>
             </div>
 
-            <div className="mt-3 grid grid-cols-4 gap-2 text-center text-[11px] font-bold">
+            <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs font-bold min-[420px]:grid-cols-4 min-[420px]:text-[11px]">
               {ludo.map((p) => {
                 const home = p.token >= LUDO_HOME;
                 const where = home ? "HOME" : p.token < 0 ? "Yard" : `Tile ${p.token + 1}`;
@@ -393,7 +393,7 @@ onClick={() => {
 {game === "trivia" && (
           <div className="text-center">
             <p className="text-sm font-bold text-white/80">{question.q}</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
               {question.options.map((opt, idx) => (
                 <button
                   key={idx}

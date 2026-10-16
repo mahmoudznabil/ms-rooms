@@ -17,6 +17,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * AbortSignal.timeout with a fallback for older browsers (Safari <16,
+ * Firefox <112): without it the call itself throws TypeError before any
+ * network happens.
+ */
+export function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const c = new AbortController();
+  setTimeout(() => c.abort(new DOMException("Timeout", "TimeoutError")), ms);
+  return c.signal;
+}
+
 let csrfToken: string | null = null;
 let csrfInflight: Promise<string | null> | null = null;
 async function getCsrfToken(force = false): Promise<string | null> {

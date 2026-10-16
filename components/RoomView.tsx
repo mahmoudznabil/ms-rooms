@@ -609,18 +609,18 @@ function RoomViewInner() {
     <div>
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Link prefetch={false} href="/" aria-label="Back to lobby" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+        <Link prefetch={false} href="/" aria-label="Back to lobby" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
           <ArrowLeft size={17} />
         </Link>
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ backgroundColor: room.cover_color }}>
           <Volume2 size={20} className="text-white/90" />
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-base font-extrabold">{room.title}</h1>
-          <p className="truncate text-xs text-white/50">{room.host_name} · {formatCount(room.listener_count)} listening</p>
+          <h1 className="truncate text-base font-extrabold" title={room.title}>{room.title}</h1>
+          <p className="truncate text-xs text-white/50" title={`${room.host_name} · ${formatCount(room.listener_count)} listening`}>{room.host_name} · {formatCount(room.listener_count)} listening</p>
         </div>
         {isHost && (
-          <button onClick={() => setManageOpen(true)} aria-label="Manage room" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+          <button onClick={() => setManageOpen(true)} aria-label="Manage room" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
             <Settings2 size={16} />
           </button>
         )}
@@ -739,16 +739,16 @@ function RoomViewInner() {
                 </div>
                 <p className="mt-1.5 w-full truncate text-center text-xs font-semibold">{mine ? "You" : (seat.display_name ?? "Guest")}</p>
                 {mine ? (
-                  <div className="mt-1.5 flex gap-1">
-                    <button onClick={() => void handleMuteToggle(i, muted)} className="rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/15">
+                  <div className="mt-1.5 flex w-full flex-col gap-1">
+                    <button onClick={() => void handleMuteToggle(i, muted)} className="min-h-[44px] w-full rounded-lg bg-white/10 px-2 py-1 text-xs font-semibold text-white/70 hover:bg-white/15">
                       {muted ? "Unmute" : "Mute"}
                     </button>
-                    <button onClick={() => void handleLeave()} className="rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/15">
+                    <button onClick={() => void handleLeave()} className="min-h-[44px] w-full rounded-lg bg-white/10 px-2 py-1 text-xs font-semibold text-white/70 hover:bg-white/15">
                       Leave
                     </button>
                   </div>
                 ) : isHost ? (
-                  <button onClick={() => void handleMuteToggle(i, muted)} className="mt-1.5 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/15">
+                  <button onClick={() => void handleMuteToggle(i, muted)} className="mt-1.5 min-h-[44px] w-full rounded-lg bg-white/10 px-2 py-1 text-xs font-semibold text-white/70 hover:bg-white/15">
                     {muted ? "Unmute" : "Mute"}
                   </button>
                 ) : (
@@ -824,7 +824,7 @@ function RoomViewInner() {
                   {m.userId && m.userId !== user.id && (
                     <button onClick={() => setReportTarget({ id: m.userId as string, name: m.user })}
                       aria-label={`Report ${m.user}`}
-                      className="ml-2 align-middle text-white/25 transition hover:text-red-300">
+                      className="ml-1 inline-grid h-11 w-11 place-items-center rounded-full align-middle text-white/25 transition hover:text-red-300">
                       <Flag size={11} />
                     </button>
                   )}
@@ -838,10 +838,10 @@ function RoomViewInner() {
       </section>
 
       {/* Controls */}
-      <div className="sticky bottom-16 z-10 mt-3 rounded-3xl border border-white/10 bg-[#0d0d12]/95 p-2.5 backdrop-blur md:bottom-0">
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 mt-3 rounded-3xl border border-white/10 bg-[#0d0d12]/95 p-2.5 backdrop-blur md:bottom-0">
         {notice && <p className="mx-1 mb-2 rounded-xl bg-white/10 px-3 py-2 text-center text-xs font-semibold text-amber-200">{notice}</p>}
         {giftOpen && (
-          <div className="mx-1 mb-2 grid grid-cols-4 gap-2 rounded-2xl border border-white/10 bg-[#17171f] p-2.5">
+          <div className="mx-1 mb-2 grid max-h-[40dvh] grid-cols-4 gap-2 overflow-y-auto rounded-2xl border border-white/10 bg-[#17171f] p-2.5">
             {catalog.map((g) => (
               <button key={g.id} onClick={() => void handleGift(g.id)}
                 disabled={user.coins < g.cost}
@@ -855,7 +855,7 @@ function RoomViewInner() {
         )}
 <div className="flex items-center gap-2">
           <button onClick={() => void voice.toggleMic()} aria-label={voice.micOn ? "Mute microphone" : "Unmute microphone"}
-            className={`rounded-2xl p-3 transition active:scale-95 ${voice.micOn ? "bg-emerald-400 text-black" : "bg-white/10 text-white/70 hover:bg-white/15"}`}>
+            className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl transition active:scale-95 ${voice.micOn ? "bg-emerald-400 text-black" : "bg-white/10 text-white/70 hover:bg-white/15"}`}>
             {voice.micOn ? <Mic size={17} /> : <MicOff size={17} />}
           </button>
           <button
@@ -864,22 +864,22 @@ function RoomViewInner() {
             aria-label={voice.monitoring ? "Stop hearing yourself" : "Hear yourself"}
             aria-pressed={voice.monitoring}
             title={voice.monitoring ? "Stop monitoring your mic" : "Play your mic back through your speakers (use headphones)"}
-            className={`rounded-2xl p-3 transition active:scale-95 disabled:opacity-35 ${
+            className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl transition active:scale-95 disabled:opacity-35 ${
               voice.monitoring ? "bg-sky-400 text-black" : "bg-white/10 text-white/70 hover:bg-white/15"
             }`}
           >
             <Headphones size={17} />
           </button>
           <button onClick={() => setGiftOpen((v) => !v)} aria-label="Send a gift"
-            className={`rounded-2xl p-3 transition active:scale-95 ${giftOpen ? "bg-amber-400 text-black" : "bg-white/10 text-amber-200 hover:bg-white/15"}`}>
+            className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl transition active:scale-95 ${giftOpen ? "bg-amber-400 text-black" : "bg-white/10 text-amber-200 hover:bg-white/15"}`}>
             <Gift size={17} />
           </button>
           <input value={draft} onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
             placeholder="Say something kind…" maxLength={240}
             aria-label="Room chat message"
-            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.06] px-3.5 py-3 text-sm text-white placeholder:text-white/30 focus:border-white/25 focus:outline-none" />
-          <button onClick={handleSend} aria-label="Send chat message" className="rounded-2xl bg-white p-3 text-black transition hover:bg-white/85 active:scale-95">
+            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.06] px-3.5 py-3 text-base text-white placeholder:text-white/30 focus:border-white/25 focus:outline-none" />
+          <button onClick={handleSend} aria-label="Send chat message" className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-black transition hover:bg-white/85 active:scale-95">
             <Send size={17} />
           </button>
         </div>

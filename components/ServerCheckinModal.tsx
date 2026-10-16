@@ -96,7 +96,7 @@ export default function ServerCheckinModal() {
           <button
             aria-label="Close check-in"
             onClick={dismiss}
-            className="rounded-full p-1 text-white/50 transition hover:bg-white/10 hover:text-white"
+            className="grid h-11 w-11 place-items-center rounded-full text-white/50 transition hover:bg-white/10 hover:text-white"
           >
             <X size={16} />
           </button>

@@ -13,7 +13,7 @@ import {
   ticketDetail, replyTicket, fetchRooms,
   type AdminUser, type ApiUser, type ClientError,
 } from "@/lib/api";
-import { auth, googleProvider, signInWithPopup } from "@/lib/firebase";
+import { auth, googleProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "@/lib/firebase";
 import { Field, inputCls } from "@/components/bits";
 
 const ADMIN_TOKEN_KEY = "admin_token";
@@ -32,13 +32,20 @@ export default function AdminPage() {
   useEffect(() => {
     // Deferred to a task (not the effect body) so no setState runs synchronously in the effect.
     const t = setTimeout(() => {
-      const saved = localStorage.getItem(ADMIN_TOKEN_KEY);
+      let saved: string | null = null;
+      try {
+        saved = localStorage.getItem(ADMIN_TOKEN_KEY);
+      } catch {
+        saved = null;
+      }
       if (!saved) return;
       setToken(saved);
       adminMe()
         .then((r) => setAdmin(r.admin))
         .catch(() => {
-          localStorage.removeItem(ADMIN_TOKEN_KEY);
+          try {
+            localStorage.removeItem(ADMIN_TOKEN_KEY);
+          } catch {}
           setToken(null);
         });
     }, 0);
@@ -46,12 +53,18 @@ export default function AdminPage() {
   }, []);
 
   const saveSession = (a: AdminUser, tok: string) => {
-    localStorage.setItem(ADMIN_TOKEN_KEY, tok);
+    try {
+      localStorage.setItem(ADMIN_TOKEN_KEY, tok);
+    } catch {
+      // Private-mode storage throws: keep the session in memory for this tab.
+    }
     setToken(tok);
     setAdmin(a);
   };
   const logout = () => {
-    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    try {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+    } catch {}
     setToken(null);
     setAdmin(null);
   };
@@ -78,11 +91,60 @@ export default function AdminPage() {
       const r = await adminFirebaseLogin(idToken);
       saveSession(r.admin, r.token);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      // Popup blockers (Brave Shields, Edge strict mode, Safari ITP, Firefox
+      // ETP) kill the popup before it opens. Fall back to a full-page
+      // redirect, which no blocker can intercept; the effect below completes
+      // it when Google returns.
+      const code = (e as { code?: string })?.code ?? "";
+      if (code === "auth/popup-blocked" || code === "auth/popup-closed-by-user" || code === "auth/network-request-failed") {
+        try {
+          sessionStorage.setItem("msrooms_admin_google_redirect", "1");
+        } catch {}
+        setErr(null);
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch {
+          try {
+            sessionStorage.removeItem("msrooms_admin_google_redirect");
+          } catch {}
+          setErr("Google sign-in did not complete. Try again.");
+        }
+      } else {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  // Completes a signInWithRedirect fallback (see googleLogin). Runs once on
+  // mount: without it a redirect return would land back on the login form
+  // with no credential and no error.
+  useEffect(() => {
+    let redirectReturn = false;
+    try {
+      redirectReturn = sessionStorage.getItem("msrooms_admin_google_redirect") === "1";
+    } catch {}
+    if (!redirectReturn) return;
+    try {
+      sessionStorage.removeItem("msrooms_admin_google_redirect");
+    } catch {}
+    setBusy(true);
+    getRedirectResult(auth)
+      .then(async (res) => {
+        if (!res?.user) {
+          setErr("Google returned without a credential. Allow popups or third-party cookies for this site, then try again.");
+          return;
+        }
+        const idToken = await res.user.getIdToken();
+        const r = await adminFirebaseLogin(idToken);
+        saveSession(r.admin, r.token);
+      })
+      .catch(() => setErr("Google sign-in did not complete. Try again."))
+      .finally(() => setBusy(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!admin || !token) {
     return (
@@ -319,8 +381,8 @@ function UsersTab({ token }: { token: string }) {
       <h2 className="flex items-center gap-1.5 text-sm font-bold"><Search size={14} /> Find user</h2>
       <div className="mt-2 flex gap-2">
         <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
-          placeholder="User ID, @username, or ID tag" className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none" />
-        <button onClick={() => void search()} className="shrink-0 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-black">Search</button>
+          placeholder="User ID, @username, or ID tag" className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white placeholder:text-white/30 focus:outline-none" />
+        <button onClick={() => void search()} className="min-h-[44px] shrink-0 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-black">Search</button>
       </div>
       {found.length > 0 && (
         <ul className="mt-3 space-y-1.5">
@@ -339,24 +401,24 @@ function UsersTab({ token }: { token: string }) {
                     </span>
                     {isBanned && u.ban_reason && <span className="block truncate text-xs text-red-300/70">Reason: {u.ban_reason}</span>}
                   </span>
-                  <button onClick={() => setTarget(u.id)} className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-bold text-black">Select</button>
+                  <button onClick={() => setTarget(u.id)} className="min-h-[44px] shrink-0 rounded-full bg-white px-4 py-1 text-xs font-bold text-black">Select</button>
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <button
                     onClick={() => void banUser(u, !isBanned)}
                     disabled={modBusy !== null}
-                    className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold disabled:opacity-40 ${isBanned ? "bg-emerald-500/20 text-emerald-200" : "bg-red-500/20 text-red-200"}`}>
+                    className={`min-h-[44px] shrink-0 rounded-full px-4 py-1 text-xs font-bold disabled:opacity-40 ${isBanned ? "bg-emerald-500/20 text-emerald-200" : "bg-red-500/20 text-red-200"}`}>
                     {modBusy === u.id + (isBanned ? ":unban" : ":ban") ? "…" : isBanned ? "Unban" : "Ban"}
                   </button>
                   <select value={promoteRole} onChange={(e) => setPromoteRole(e.target.value as "support" | "finance")}
-                    className="shrink-0 rounded-full border border-white/10 bg-[#15151d] px-2 py-1 text-xs text-white/70 focus:outline-none">
+                    className="shrink-0 rounded-full border border-white/10 bg-[#15151d] px-2 py-1 min-h-[44px] text-xs text-white/70 focus:outline-none">
                     <option value="support">support</option>
                     <option value="finance">finance</option>
                   </select>
                   <button
                     onClick={() => void promoteUser(u)}
                     disabled={modBusy !== null}
-                    className="shrink-0 rounded-full bg-violet-500/20 px-3 py-1 text-xs font-bold text-violet-200 disabled:opacity-40">
+                    className="min-h-[44px] shrink-0 rounded-full bg-violet-500/20 px-4 py-1 text-xs font-bold text-violet-200 disabled:opacity-40">
                     {modBusy === u.id + ":promote" ? "…" : "Make admin"}
                   </button>
                 </div>
@@ -368,11 +430,11 @@ function UsersTab({ token }: { token: string }) {
       <div className="mt-4 grid grid-cols-2 gap-3">
         <label className="col-span-2 block">
           <span className="text-xs font-bold text-white/50">Target user ID</span>
-          <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="user-..." className="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none" />
+          <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="user-..." className="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white placeholder:text-white/30 focus:outline-none" />
         </label>
         <label className="block">
           <span className="text-xs font-bold text-white/50">Action</span>
-          <select value={action} onChange={(e) => setAction(e.target.value)} className="mt-1 w-full rounded-2xl border border-white/10 bg-[#15151d] px-3.5 py-2.5 text-sm text-white focus:outline-none">
+          <select value={action} onChange={(e) => setAction(e.target.value)} className="mt-1 w-full rounded-2xl border border-white/10 bg-[#15151d] px-3.5 py-2.5 text-base text-white focus:outline-none">
             {["ADD_COINS", "DEDUCT_COINS", "ADD_GEMS", "DEDUCT_GEMS", "ADD_XP", "DEDUCT_XP"].map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
@@ -380,11 +442,11 @@ function UsersTab({ token }: { token: string }) {
         </label>
         <label className="block">
           <span className="text-xs font-bold text-white/50">Amount</span>
-          <input type="number" min={1} value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white focus:outline-none" />
+          <input type="number" inputMode="numeric" min={1} value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white focus:outline-none" />
         </label>
         <label className="col-span-2 block">
           <span className="text-xs font-bold text-white/50">Internal note (receipt ref)</span>
-          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Why this adjustment?" className="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none" />
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Why this adjustment?" className="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white placeholder:text-white/30 focus:outline-none" />
         </label>
       </div>
       <button onClick={() => void execute()} disabled={busy || !target} className="mt-3 w-full rounded-2xl bg-white py-3 text-sm font-bold text-black hover:bg-white/85 disabled:opacity-40">
@@ -483,10 +545,10 @@ function ReportsTab({ token }: { token: string }) {
   return (
     <Card>
       <h2 className="flex items-center gap-1.5 text-sm font-bold"><Flag size={14} /> Safety reports</h2>
-      <div className="mt-2 flex gap-2">
+      <div className="-mx-1 mt-2 flex gap-2 overflow-x-auto px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {["", "open", "reviewing", "resolved", "dismissed"].map((s) => (
           <button key={s || "all"} onClick={() => setFilter(s)}
-            className={`rounded-full px-3 py-1.5 text-xs font-bold ${filter === s ? "bg-white text-black" : "bg-white/5 text-white/60"}`}>
+            className={`min-h-[44px] shrink-0 rounded-full px-4 py-1.5 text-xs font-bold ${filter === s ? "bg-white text-black" : "bg-white/5 text-white/60"}`}>
             {s || "All"}
           </button>
         ))}
@@ -503,10 +565,10 @@ function ReportsTab({ token }: { token: string }) {
             </p>
             <p className="mt-1 text-xs text-white/60">{String(r.reason)}</p>
             <p className="text-[11px] text-white/30">{String(r.created_at)}</p>
-            <div className="mt-2 flex gap-1.5">
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {(["reviewing", "resolved", "dismissed"] as const).map((s) => (
                 <button key={s} onClick={() => void setStatus(String(r.id), s)}
-                  className="rounded-full bg-white/5 px-3 py-1 text-xs font-bold text-white/70 hover:bg-white/15">
+                  className="min-h-[44px] rounded-full bg-white/5 px-4 py-1 text-xs font-bold text-white/70 hover:bg-white/15">
                   {s}
                 </button>
               ))}
@@ -684,7 +746,7 @@ function AuditTab({ token }: { token: string }) {
             <span className="font-bold text-violet-200">{String(a.admin_username ?? a.admin_id)}</span> →{" "}
             <span className="font-bold">{String(a.target_username ?? a.target_user_id)}</span> : {String(a.action_type)}{" "}
             {String(a.amount)} <span className="text-white/40">{String(a.notes ?? "")}</span>
-            <span className="float-right text-white/30">{String(a.created_at).slice(0, 19)}</span>
+            <span className="mt-0.5 block text-white/30 sm:float-right sm:mt-0">{String(a.created_at).slice(0, 19)}</span>
           </li>
         ))}
       </ul>

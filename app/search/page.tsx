@@ -81,8 +81,9 @@ export default function SearchPage() {
           placeholder="Search rooms or people… or unique ID (e.g. MAYA#1842)"
           aria-label="Search rooms or people"
           maxLength={40}
-          autoFocus
-          className="w-full rounded-2xl border border-white/10 bg-white/5 py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
+          // No autoFocus: on phones it pops the keyboard over the results and
+          // iOS zooms the page on focus.
+          className="w-full rounded-2xl border border-white/10 bg-white/5 py-3 pl-10 pr-4 text-base text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none"
         />
       </div>
       {notice && <p className="mt-2 rounded-xl bg-white/10 px-3 py-2 text-center text-xs font-semibold text-amber-200">{notice}</p>}
@@ -136,7 +137,7 @@ export default function SearchPage() {
                       </span>
                       <button
                         onClick={() => void toggleFollow(u.id)}
-                        className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition ${
+                        className={`flex min-h-[44px] items-center gap-1 rounded-full px-4 py-1.5 text-xs font-bold transition ${
                           following[u.id] ? "bg-white/10 text-white/70" : "bg-white text-black"
                         }`}
                       >
@@ -147,13 +148,13 @@ export default function SearchPage() {
                     <div className="mt-2 flex gap-2">
                       <Link prefetch={false}
                         href={`/profile?u=${encodeURIComponent(u.username)}`}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
+                        className="flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
                       >
                         <Eye size={13} /> View profile
                       </Link>
                       <Link prefetch={false}
                         href={`/messages?userId=${encodeURIComponent(u.id)}`}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
+                        className="flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-xl bg-white/5 py-2 text-xs font-bold text-white/75 transition hover:bg-white/10 hover:text-white"
                       >
                         <MessageCircle size={13} /> Message
                       </Link>
@@ -162,7 +163,7 @@ export default function SearchPage() {
                         disabled={callingId === `${u.id}:audio`}
                         aria-label={`Voice call ${u.display_name}`}
                         title="Voice call"
-                        className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-violet-500/20 py-2 text-xs font-bold text-violet-200 transition hover:bg-violet-500/30 disabled:opacity-40"
+                        className="flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-xl bg-violet-500/20 py-2 text-xs font-bold text-violet-200 transition hover:bg-violet-500/30 disabled:opacity-40"
                       >
                         <Phone size={13} /> {callingId === `${u.id}:audio` ? "Calling…" : "Call"}
                       </button>
@@ -171,7 +172,7 @@ export default function SearchPage() {
                         disabled={callingId === `${u.id}:video`}
                         aria-label={`Video call ${u.display_name}`}
                         title="Video call"
-                        className="flex items-center justify-center rounded-xl bg-violet-500/20 px-3 py-2 text-violet-200 transition hover:bg-violet-500/30 disabled:opacity-40"
+                        className="flex min-h-[44px] items-center justify-center rounded-xl bg-violet-500/20 px-3 py-2 text-violet-200 transition hover:bg-violet-500/30 disabled:opacity-40"
                       >
                         <Video size={13} />
                       </button>

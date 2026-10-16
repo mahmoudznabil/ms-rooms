@@ -51,7 +51,7 @@ export default function OnboardingTour({ user, onDone }: { user: ApiUser; onDone
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Welcome tour">
       <div className="modal-pop w-full max-w-sm rounded-3xl border border-white/10 bg-[#17171f] p-6 text-center shadow-2xl">
         <div className="flex justify-end">
-          <button onClick={onDone} aria-label="Skip tour" className="rounded-full p-1 text-white/50 transition hover:bg-white/10 hover:text-white">
+          <button onClick={onDone} aria-label="Skip tour" className="grid h-11 w-11 place-items-center rounded-full text-white/50 transition hover:bg-white/10 hover:text-white">
             <X size={16} />
           </button>
         </div>

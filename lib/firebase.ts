@@ -136,9 +136,22 @@ function initAuth(): Auth {
     // not on every visitor's first paint.
     initAppCheck();
     const a = _getAuth(app);
-    // Persist session across tabs/restarts (fixes refresh/new-tab session loss)
+    // Persist session across tabs/restarts (fixes refresh/new-tab session loss).
+    // Brave Shields / Firefox ETP / Safari private can reject IndexedDB-backed
+    // persistence: step down the ladder instead of failing silently into a
+    // session that evaporates on reload. initAuth is sync, so chain promises.
     try {
-      setPersistence(a, browserLocalPersistence).catch(() => undefined);
+      setPersistence(a, browserLocalPersistence).catch(() => {
+        void import("firebase/auth").then(async ({ browserSessionPersistence, inMemoryPersistence }) => {
+          try {
+            await setPersistence(a, browserSessionPersistence);
+          } catch {
+            try {
+              await setPersistence(a, inMemoryPersistence);
+            } catch {}
+          }
+        }).catch(() => undefined);
+      });
     } catch {}
     return a;
   } catch (e) {

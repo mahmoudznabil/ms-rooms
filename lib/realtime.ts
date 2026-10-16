@@ -87,8 +87,55 @@ export async function probeTurn(): Promise<TurnStatus> {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Cross-browser media helpers.
+// Safari (especially iOS) is the long tail: webkit-prefixed AudioContext on
+// old versions, stricter autoplay, no getDisplayMedia on iPhone, and unknown
+// RTCPeerConnection options throwing instead of being ignored.
+// ---------------------------------------------------------------------------
+
+/** AudioContext constructor with the legacy webkit fallback. Null when neither exists. */
+function audioContextCtor(): typeof AudioContext | null {
+  try {
+    if (typeof window !== "undefined" && window.AudioContext) return window.AudioContext;
+    const legacy = (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    return legacy ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Create an AudioContext on any supported browser. Returns null when impossible. */
+export function createAudioContext(): AudioContext | null {
+  try {
+    const Ctor = audioContextCtor();
+    if (!Ctor) return null;
+    return new Ctor();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create a peer connection, tolerating browsers that throw on unknown options.
+ * `bundlePolicy: "max-bundle"` is ideal but optional — connectivity matters
+ * more than the bundle mode.
+ */
+export function createPeerConnection(ice: RTCIceServer[]): RTCPeerConnection {
+  const servers = resolveIceServers(ice);
+  try {
+    return new RTCPeerConnection({ iceServers: servers, bundlePolicy: "max-bundle" });
+  } catch {
+    return new RTCPeerConnection({ iceServers: servers });
+  }
+}
+
 function isAbort(err: unknown): boolean {
   return err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
+function isOverconstrained(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "OverconstrainedError";
 }
 
 function friendlyMediaError(err: unknown, wantVideo: boolean): string {
@@ -104,6 +151,9 @@ function friendlyMediaError(err: unknown, wantVideo: boolean): string {
   }
   if (code === "NotReadableError") {
     return "Your microphone is in use by another app. Close it and try again.";
+  }
+  if (isOverconstrained(err)) {
+    return "Your device could not use the high-quality mic settings. Try again — we will fall back to basic mic mode.";
   }
   return msg || "Could not start the microphone.";
 }
@@ -129,19 +179,30 @@ function rmsLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): numb
  */
 function createLocalCapture(wantVideo: boolean) {
   let disposed = false;
-  const streamPromise = navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-      // `ideal`, not exact: a hard 48k requirement would reject devices whose
-      // hardware runs at 44.1k instead of resampling.
-      sampleRate: { ideal: 48000 },
-    },
-    video: wantVideo
+  const detailedAudio = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    // `ideal`, not exact: a hard 48k requirement would reject devices whose
+    // hardware runs at 44.1k instead of resampling.
+    sampleRate: { ideal: 48000 },
+  };
+  const acquire = async (): Promise<MediaStream> => {
+    const video = wantVideo
       ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
-      : false,
-  });
+      : false;
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: detailedAudio, video });
+    } catch (e) {
+      // Older Safari / odd hardware rejects the detailed constraints outright.
+      // A basic mic is infinitely better than no mic.
+      if (isOverconstrained(e)) {
+        return await navigator.mediaDevices.getUserMedia({ audio: true, video: wantVideo ? true : false });
+      }
+      throw e;
+    }
+  };
+  const streamPromise = acquire();
 
   let ctx: AudioContext | null = null;
   let analyser: AnalyserNode | null = null;
@@ -150,7 +211,8 @@ function createLocalCapture(wantVideo: boolean) {
   let raf = 0;
 
   const ensureCtx = async (stream: MediaStream): Promise<AudioContext> => {
-    if (!ctx) ctx = new AudioContext();
+    if (!ctx) ctx = createAudioContext();
+    if (!ctx) throw new Error("Audio is not supported in this browser.");
     if (ctx.state === "suspended") await ctx.resume().catch(() => undefined);
     return ctx;
   };
@@ -331,7 +393,7 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
       }
       if (closedRef.current) return;
 
-      const pc = new RTCPeerConnection({ iceServers: resolveIceServers(ice), bundlePolicy: "max-bundle" });
+      const pc = createPeerConnection(ice);
       pcRef.current = pc;
 
       // Attach the local microphone (and camera) as sendrecv transceivers.
@@ -554,6 +616,12 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
       setScreenShareOn(false);
       return;
     }
+    // iPhone Safari has no getDisplayMedia at all — fail with guidance,
+    // not a TypeError from deep inside the try block.
+    if (typeof navigator.mediaDevices?.getDisplayMedia !== "function") {
+      setError("Screen sharing is not supported in this browser (for example iPhone Safari). Try Chrome or Edge on desktop.");
+      return;
+    }
     try {
       const display = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 15, max: 30 } },
@@ -724,6 +792,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
       try {
         el.pause();
         el.srcObject = null;
+        el.remove();
       } catch {}
       audioElsRef.current.delete(peerId);
     }
@@ -763,6 +832,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
       try {
         el.pause();
         el.srcObject = null;
+        el.remove();
       } catch {
         // ignore
       }
@@ -782,7 +852,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     (peerId: string, ice: RTCIceServer[], roomId: string) => {
       let pc = pcsRef.current.get(peerId);
       if (pc) return pc;
-      pc = new RTCPeerConnection({ iceServers: resolveIceServers(ice), bundlePolicy: "max-bundle" });
+      pc = createPeerConnection(ice);
       pcsRef.current.set(peerId, pc);
       const remote = new MediaStream();
       streamsRef.current.set(peerId, remote);
@@ -814,8 +884,9 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
         // Per-peer speaking meter, throttled to ~10Hz (was 60fps setState per peer).
         if (audioTrack && !analyserMapRef.current.has(peerId)) {
           try {
-            if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+            if (!audioCtxRef.current) audioCtxRef.current = createAudioContext();
             const ctx = audioCtxRef.current;
+            if (!ctx) return;
             const src = ctx.createMediaStreamSource(remote);
             const an = ctx.createAnalyser();
             an.fftSize = 256;
@@ -852,6 +923,12 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
             el.autoplay = true;
             // Safari will not play a MediaStream without this.
             el.setAttribute("playsinline", "");
+            el.setAttribute("webkit-playsinline", "");
+            // iOS Safari refuses to play detached media elements. Keep it in
+            // the DOM but invisible; teardown removes it (see stopAll/dropPeer).
+            el.style.display = "none";
+            el.setAttribute("aria-hidden", "true");
+            document.body.appendChild(el);
             audioElsRef.current.set(peerId, el);
           }
           if (el.srcObject !== remote) el.srcObject = remote;

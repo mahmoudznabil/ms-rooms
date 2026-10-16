@@ -82,8 +82,8 @@ export default function Home() {
   // Signed-in visitors are bounced to /lobby by the effect above.
 
   return (
-    <div className="min-h-dvh">
-      <header className="sticky top-0 z-30 border-b border-line bg-ink/85 backdrop-blur">
+    <div className="min-h-screen min-h-dvh">
+      <header className="sticky top-0 z-30 border-b border-line bg-ink/85 backdrop-blur pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3">
           <span className="flex shrink-0 items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}

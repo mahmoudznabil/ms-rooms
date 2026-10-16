@@ -89,17 +89,17 @@ function InCallGames({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => { setGame("coin"); reset(); }}
-            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${game === "coin" ? "bg-white text-black" : "bg-white/10 text-white/70"}`}
+            className={`min-h-[44px] rounded-full px-4 py-1 text-[11px] font-bold ${game === "coin" ? "bg-white text-black" : "bg-white/10 text-white/70"}`}
           >
             Coin flip
           </button>
           <button
             onClick={() => { setGame("rps"); reset(); }}
-            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${game === "rps" ? "bg-white text-black" : "bg-white/10 text-white/70"}`}
+            className={`min-h-[44px] rounded-full px-4 py-1 text-[11px] font-bold ${game === "rps" ? "bg-white text-black" : "bg-white/10 text-white/70"}`}
           >
             RPS
           </button>
-          <button onClick={onClose} aria-label="Close games" className="ml-1 rounded-full p-1 text-white/50 hover:bg-white/10 hover:text-white">
+          <button onClick={onClose} aria-label="Close games" className="ml-1 grid h-11 w-11 place-items-center rounded-full text-white/50 hover:bg-white/10 hover:text-white">
             <X size={15} />
           </button>
         </div>
@@ -157,7 +157,7 @@ function Reactions({ onPick }: { onPick: (r: string) => void }) {
         <button
           key={r}
           onClick={() => onPick(r)}
-          className="h-10 w-10 rounded-full text-xl transition hover:scale-125 hover:bg-white/10 active:scale-95"
+          className="grid h-11 w-11 place-items-center rounded-full text-xl transition hover:scale-125 hover:bg-white/10 active:scale-95"
         >
           {r}
         </button>
@@ -548,15 +548,38 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const [floats, setFloats] = useState<Array<{ id: number; emoji: string }>>([]);
   const floatIdRef = useRef(0);
 
+  const [mediaBlocked, setMediaBlocked] = useState(false);
+
+  // Attach remote media with autoplay recovery. Safari/iOS can refuse play()
+  // even with autoPlay+playsInline; without the catch the call stays silent
+  // (audio) or black (video) with no way for the user to recover.
   useEffect(() => {
-    if (remoteAudioRef.current && session.remoteStream) remoteAudioRef.current.srcObject = session.remoteStream;
+    if (remoteAudioRef.current && session.remoteStream) {
+      remoteAudioRef.current.srcObject = session.remoteStream;
+      void remoteAudioRef.current.play().catch(() => setMediaBlocked(true));
+    }
   }, [session.remoteStream]);
   useEffect(() => {
-    if (remoteVideoRef.current && session.remoteStream) remoteVideoRef.current.srcObject = session.remoteStream;
+    if (remoteVideoRef.current && session.remoteStream) {
+      remoteVideoRef.current.srcObject = session.remoteStream;
+      void remoteVideoRef.current.play().catch(() => setMediaBlocked(true));
+    }
   }, [session.remoteStream]);
   useEffect(() => {
     if (localVideoRef.current && session.localStream) localVideoRef.current.srcObject = session.localStream;
   }, [session.localStream]);
+
+  const unblockMedia = () => {
+    setMediaBlocked(false);
+    try {
+      void remoteAudioRef.current?.play()?.catch(() => setMediaBlocked(true));
+    } catch {
+      setMediaBlocked(true);
+    }
+    try {
+      void remoteVideoRef.current?.play()?.catch(() => undefined);
+    } catch {}
+  };
 
   const elapsed = connectedAt
     ? fmtElapsed(now - new Date(connectedAt).getTime())
@@ -607,6 +630,16 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
       {/* Hidden remote audio — ALWAYS rendered so voice works even on video calls */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
+      {/* Autoplay recovery: Safari/iOS can refuse play() until the user taps. */}
+      {mediaBlocked && (
+        <button
+          onClick={unblockMedia}
+          className="absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-full bg-white px-5 py-3 text-sm font-bold text-black shadow-xl transition hover:bg-white/85 active:scale-95"
+        >
+          Tap to enable audio
+        </button>
+      )}
+
       {session.videoMode ? (
         // VIDEO MODE - Full screen like WhatsApp
         <div className={`fixed inset-0 bg-black ${fullScreen ? "z-50" : "relative h-full"}`}>
@@ -615,6 +648,8 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
             ref={remoteVideoRef}
             autoPlay
             playsInline
+            webkit-playsinline=""
+            disablePictureInPicture
             className="absolute inset-0 w-full h-full object-cover"
           />
           {!session.remoteStream && (
@@ -625,15 +660,15 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
           )}
 
           {/* Connection quality indicator - top left */}
-          <div className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 backdrop-blur">
+          <div className="absolute left-4 top-[calc(1rem+env(safe-area-inset-top))] z-20 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 backdrop-blur">
             <span className="flex items-center gap-1">
               <ConnectionQualityIcon quality={quality} />
-              <span className="text-xs font-medium text-white capitalize">{quality}</span>
+              <span className="hidden text-xs font-medium text-white capitalize min-[400px]:inline">{quality}</span>
             </span>
           </div>
 
           {/* Call info - top center */}
-          <div className="absolute left-1/2 top-4 -translate-x-1/2 z-20 flex items-center gap-2 rounded-full bg-black/60 px-4 py-1.5 backdrop-blur">
+          <div className="absolute left-1/2 top-[calc(1rem+env(safe-area-inset-top))] -translate-x-1/2 z-20 flex items-center gap-2 rounded-full bg-black/60 px-4 py-1.5 backdrop-blur">
             <span className="text-sm font-semibold text-white">{peer.name}</span>
             <span className="text-xs text-white/50">·</span>
             <span className="text-xs font-mono text-white/70 tabular-nums" id="call-timer">
@@ -654,8 +689,8 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
             </div>
           )}
 
-          {/* Controls - bottom center */}
-          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3">
+          {/* Controls - bottom center. Wraps to two rows on narrow phones. */}
+          <div className="absolute bottom-[calc(1.25rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-20 flex max-w-[94vw] flex-wrap items-center justify-center gap-2 sm:gap-3">
             {/* Mute */}
             <button
               onClick={session.toggleMic}
@@ -753,15 +788,15 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
           </div>
 
           {/* Connection quality indicator */}
-          <div className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 backdrop-blur">
+          <div className="absolute left-4 top-[calc(1rem+env(safe-area-inset-top))] z-20 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 backdrop-blur">
             <span className="flex items-center gap-1">
               <ConnectionQualityIcon quality={quality} />
-              <span className="text-xs font-medium text-white capitalize">{quality}</span>
+              <span className="hidden text-xs font-medium text-white capitalize min-[400px]:inline">{quality}</span>
             </span>
           </div>
 
           {/* Call timer - top center */}
-          <div className="absolute left-1/2 top-4 -translate-x-1/2 z-20 flex items-center gap-2 rounded-full bg-black/60 px-4 py-1.5 backdrop-blur">
+          <div className="absolute left-1/2 top-[calc(1rem+env(safe-area-inset-top))] -translate-x-1/2 z-20 flex items-center gap-2 rounded-full bg-black/60 px-4 py-1.5 backdrop-blur">
             <span className="text-sm font-semibold text-white">{peer.name}</span>
             <span className="text-xs text-white/50">·</span>
             <span className="text-xs font-mono text-white/70 tabular-nums" id="call-timer-audio">
@@ -769,8 +804,8 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
             </span>
           </div>
 
-          {/* Controls - bottom center */}
-          <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4 ${fullScreen ? "" : "mb-8"}`}>
+          {/* Controls - bottom center. Wraps on narrow phones. */}
+          <div className={`absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-20 flex max-w-[94vw] flex-wrap items-center justify-center gap-2 sm:gap-4 ${fullScreen ? "" : "mb-8"}`}>
             <button
               onClick={session.toggleMic}
               aria-label={session.micOn ? "Mute microphone" : "Unmute microphone"}

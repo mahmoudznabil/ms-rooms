@@ -99,7 +99,7 @@ export function Modal({
       aria-label={title}
     >
       <div
-        className={`modal-pop w-full ${wide ? "sm:max-w-lg" : "sm:max-w-sm"} rounded-t-3xl border border-white/10 bg-[#17171f] p-5 shadow-2xl sm:rounded-3xl`}
+        className={`modal-pop w-full ${wide ? "sm:max-w-lg" : "sm:max-w-sm"} max-h-[92dvh] overflow-y-auto rounded-t-3xl border border-white/10 bg-[#17171f] p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
@@ -107,7 +107,7 @@ export function Modal({
           <button
             onClick={onClose}
             aria-label="Close"
-            className="rounded-full bg-white/5 px-2.5 py-1 text-sm text-white/60 transition hover:bg-white/10 hover:text-white"
+            className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-sm text-white/60 transition hover:bg-white/10 hover:text-white"
           >
             ✕
           </button>
@@ -134,7 +134,8 @@ export function Field({
 }
 
 export const inputCls =
-  "w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none";
+  // text-base (16px): anything smaller makes iOS Safari auto-zoom on focus.
+  "w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white placeholder:text-white/30 focus:border-violet-400/60 focus:outline-none";
 
 export function PrimaryButton({
   children,

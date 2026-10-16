@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Camera, Gift, LogOut, MessageCircle, Mic, Pencil, Phone, Trophy, UserCheck, UserPlus, Users, Trash2, AlertTriangle, Link2, ImagePlus, Video } from "lucide-react";
+import { Camera, Gift, LogOut, MessageCircle, Mic, Pencil, Phone, Trophy, UserCheck, UserPlus, Users, Trash2, Link2, ImagePlus, Video, X } from "lucide-react";
 import { checkUsername, fetchProfile, fetchSocial, follow, unfollow, patchUser, type ApiUser, type ProfileStats, type SocialInfo } from "@/lib/api";
 import { placeCall } from "@/lib/calls";
 import { AVATAR_CHOICES, levelProgress } from "@/lib/levels";
@@ -224,7 +224,7 @@ function OwnProfile() {
               setEditing((v) => !v);
             }}
             aria-label="Edit profile"
-            className="rounded-full bg-white/5 p-2.5 text-white/60 transition hover:bg-white/10 hover:text-white"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white"
           >
             <Pencil size={15} />
           </button>
@@ -312,7 +312,7 @@ function OwnProfile() {
                     if (v && (v.startsWith("http://") || v.startsWith("https://"))) setAvatar(v);
                     else setError("Paste an http(s) image link first.");
                   }}
-                  className="shrink-0 rounded-2xl bg-white/10 px-3.5 text-xs font-bold text-white transition hover:bg-white/15"
+                  className="shrink-0 rounded-2xl bg-white/10 px-3.5 py-2.5 min-h-[44px] text-xs font-bold text-white transition hover:bg-white/15"
                 >
                   Use link
                 </button>
@@ -356,7 +356,7 @@ function OwnProfile() {
               <div className="flex gap-2">
                 {AVATAR_CHOICES.map((a: (typeof AVATAR_CHOICES)[number]) => (
                   <button key={a.id} title={a.label} aria-label={a.label} onClick={() => setAvatar(a.id)}
-                    className={`h-10 w-10 rounded-full transition active:scale-95 ${avatar === a.id ? "ring-2 ring-white ring-offset-2 ring-offset-[#15151d]" : "opacity-70 hover:opacity-100"}`}
+                    className={`h-11 w-11 rounded-full transition active:scale-95 ${avatar === a.id ? "ring-2 ring-white ring-offset-2 ring-offset-[#15151d]" : "opacity-70 hover:opacity-100"}`}
                     style={{ background: a.css }} />
                 ))}
               </div>
@@ -412,14 +412,15 @@ function OwnProfile() {
         <Trash2 size={15} /> Delete account
       </button>
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="modal-pop w-full max-w-sm rounded-3xl border border-white/10 bg-[#17171f] p-6 text-center shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="modal-pop w-full max-w-sm rounded-3xl border border-white/10 bg-[#17171f] p-6 text-center shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-end">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                className="rounded-full p-1 text-white/50 transition hover:bg-white/10 hover:text-white"
+                aria-label="Cancel deletion"
+                className="grid h-11 w-11 place-items-center rounded-full text-white/50 transition hover:bg-white/10 hover:text-white"
               >
-                <AlertTriangle size={16} />
+                <X size={16} />
               </button>
             </div>
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-red-500/15 text-red-300">
@@ -585,7 +586,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
             This is you — open your profile
           </Link>
         ) : (
-          <div className="mt-4 grid grid-cols-4 gap-2">
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <button
               onClick={() => void toggleFollow()}
               disabled={busyFollow}

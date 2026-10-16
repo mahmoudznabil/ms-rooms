@@ -41,6 +41,8 @@ export const viewport: Viewport = {
   themeColor: "#07070b",
   width: "device-width",
   initialScale: 1,
+  // Required for env(safe-area-inset-*) to be non-zero on notched iPhones.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

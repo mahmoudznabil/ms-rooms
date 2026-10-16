@@ -53,7 +53,7 @@ export default function RankingsPage() {
       <div className="mt-4 grid grid-cols-3 gap-2">
         {TYPES.map((t) => (
           <button key={t.id} onClick={() => setType(t.id)}
-            className={`rounded-2xl py-2.5 text-sm font-bold transition ${type === t.id ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}>
+            className={`rounded-2xl px-1 py-2.5 min-h-[44px] text-xs leading-tight font-bold transition sm:text-sm ${type === t.id ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}>
             {t.label}
           </button>
         ))}
@@ -61,7 +61,7 @@ export default function RankingsPage() {
       <div className="mt-2 flex gap-2">
         {PERIODS.map((p) => (
           <button key={p.id} onClick={() => setPeriod(p.id)}
-            className={`flex-1 rounded-full py-1.5 text-xs font-bold transition ${period === p.id ? "bg-violet-500/25 text-violet-200" : "bg-white/5 text-white/50 hover:bg-white/10"}`}>
+            className={`flex-1 rounded-full py-1.5 min-h-[44px] text-xs font-bold transition ${period === p.id ? "bg-violet-500/25 text-violet-200" : "bg-white/5 text-white/50 hover:bg-white/10"}`}>
             {p.label}
           </button>
         ))}

@@ -309,8 +309,8 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-white/10 p-3">
-        <button onClick={() => { setActiveId(null); setActiveConv(null); void loadList(); }} aria-label="Back to conversations" className="rounded-full p-1.5 text-white/60 hover:bg-white/10 hover:text-white">
+      <div className="flex items-center gap-1.5 border-b border-white/10 p-2 sm:gap-2 sm:p-3">
+        <button onClick={() => { setActiveId(null); setActiveConv(null); void loadList(); }} aria-label="Back to conversations" className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-white/60 hover:bg-white/10 hover:text-white">
           <ArrowLeft size={16} />
         </button>
         <div className="min-w-0 flex-1">
@@ -319,19 +319,19 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
         </div>
         {threadPeer && (
           <>
-            <button onClick={() => void callPeer("audio")} aria-label="Voice call" title="Voice call" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <button onClick={() => void callPeer("audio")} aria-label="Voice call" title="Voice call" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Phone size={15} />
             </button>
-            <button onClick={() => void callPeer("video")} aria-label="Video call" title="Video call" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <button onClick={() => void callPeer("video")} aria-label="Video call" title="Video call" className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Video size={15} />
             </button>
           </>
         )}
-        <button onClick={handleSummarize} disabled={summarizing || messages.length === 0} className="flex items-center gap-1 rounded-full bg-white/5 px-3 py-1.5 text-xs font-bold text-white/70 hover:bg-white/10 disabled:opacity-40">
-          <Sparkles size={13} /> {summarizing ? "…" : "Summary"}
+        <button onClick={handleSummarize} disabled={summarizing || messages.length === 0} className="flex min-h-[44px] items-center gap-1 rounded-full bg-white/5 px-3 py-1.5 text-xs font-bold text-white/70 hover:bg-white/10 disabled:opacity-40">
+          <Sparkles size={13} /> {summarizing ? "…" : <span className="hidden min-[400px]:inline">Summary</span>}
         </button>
         {onClose && (
-          <button onClick={onClose} aria-label="Close messages" className="rounded-full p-1.5 text-white/50 hover:bg-white/10 hover:text-white">
+          <button onClick={onClose} aria-label="Close messages" className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-white/50 hover:bg-white/10 hover:text-white">
             <X size={16} />
           </button>
         )}
@@ -347,9 +347,22 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
           const el = e.currentTarget;
           if (e.deltaY < 0 && el.scrollTop === 0) void loadMore();
         }}
+        onScroll={(e) => {
+          // Touch devices never fire wheel: same top-reached detection for scroll.
+          const el = e.currentTarget;
+          if (el.scrollTop <= 8) void loadMore();
+        }}
       >
         {loading && <p className="py-6 text-center text-sm text-white/40">Loading messages…</p>}
         {loadingMore && <p className="py-1 text-center text-xs text-white/30">Loading older…</p>}
+        {!loading && !loadingMore && hasMore && messages.length > 0 && (
+          <button
+            onClick={() => void loadMore()}
+            className="mx-auto block rounded-full bg-white/5 px-4 py-2 min-h-[44px] text-xs font-bold text-white/60 hover:bg-white/10"
+          >
+            Load older messages
+          </button>
+        )}
         {!loading && messages.length === 0 && (
           <div className="rounded-2xl border border-dashed border-white/15 p-6 text-center">
             <p className="text-sm font-bold text-white/70">Say hi 👋</p>
@@ -382,7 +395,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
                       </span>
                     )
                   )}
-                  <button onClick={() => void handleTranslate(m)} disabled={translatingId === m.id} className="flex items-center gap-0.5 text-[10px] font-bold opacity-60 hover:opacity-100 disabled:opacity-30">
+                  <button onClick={() => void handleTranslate(m)} disabled={translatingId === m.id} className="flex min-h-[44px] items-center gap-0.5 px-1 text-xs font-bold opacity-60 hover:opacity-100 disabled:opacity-30">
                     <Languages size={10} /> {translated ? "Original" : translatingId === m.id ? "…" : "Translate"}
                   </button>
                 </div>
@@ -403,7 +416,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
         </div>
       )}
 
-      <div className="flex items-center gap-2 p-3">
+      <div className="flex items-center gap-2 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -416,13 +429,13 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
           placeholder="Message…"
           aria-label="Direct message"
           maxLength={2000}
-          className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-violet-400/50 focus:outline-none"
+          className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white placeholder:text-white/30 focus:border-violet-400/50 focus:outline-none"
         />
         <button
           onClick={() => void handleSend()}
           disabled={!draft.trim() || sending}
           aria-label="Send message"
-          className="rounded-2xl bg-white p-2.5 text-black transition hover:bg-white/85 active:scale-95 disabled:opacity-40"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-black transition hover:bg-white/85 active:scale-95 disabled:opacity-40"
         >
           <Send size={16} />
         </button>

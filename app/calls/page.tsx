@@ -121,7 +121,7 @@ export default function CallsPage() {
           <h1 className="text-2xl font-black tracking-tight">Calls</h1>
           <p className="mt-0.5 text-xs text-white/50">Voice &amp; video — recents sync across devices.</p>
         </div>
-        <Link prefetch={false} href="/search" className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85">
+        <Link prefetch={false} href="/search" className="flex min-h-[44px] items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-black transition hover:bg-white/85">
           <Phone size={15} /> New call
         </Link>
       </div>
@@ -135,7 +135,7 @@ export default function CallsPage() {
             role="tab"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+            className={`min-h-[44px] rounded-full px-4 py-2 text-sm font-semibold transition ${
               tab === t ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
             }`}
           >
@@ -177,7 +177,7 @@ export default function CallsPage() {
                 <Link prefetch={false}
                   href={`/messages?userId=${encodeURIComponent(c.peer.id)}`}
                   aria-label={`Message ${c.peer.display_name}`}
-                  className="rounded-full bg-white/5 p-2.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
                 >
                   <MessageCircle size={16} />
                 </Link>
@@ -185,7 +185,7 @@ export default function CallsPage() {
                   onClick={() => void callBack(c.peer.id, c.peer.display_name)}
                   disabled={callingId === c.peer.id}
                   aria-label={`Call ${c.peer.display_name} back`}
-                  className="rounded-full bg-emerald-500/20 p-2.5 text-emerald-300 transition hover:bg-emerald-500/30 disabled:opacity-40"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-emerald-500/20 text-emerald-300 transition hover:bg-emerald-500/30 disabled:opacity-40"
                 >
                   <Phone size={16} />
                 </button>
@@ -193,7 +193,7 @@ export default function CallsPage() {
               {(c.status === "ringing" || c.status === "initiated") && (
                 <Link prefetch={false}
                   href={`/call?room=${encodeURIComponent(c.room_slug)}`}
-                  className="mt-2 block rounded-xl bg-emerald-500/15 py-2 text-center text-xs font-bold text-emerald-200 transition hover:bg-emerald-500/25"
+                  className="mt-2 block rounded-xl bg-emerald-500/15 py-2 min-h-[44px] content-center text-center text-xs font-bold text-emerald-200 transition hover:bg-emerald-500/25"
                 >
                   {c.direction === "in" ? "Answer now" : "Return to ringing call"}
                 </Link>

@@ -67,7 +67,7 @@ export default function CreateRoomPage() {
           <div className="flex flex-wrap gap-2">
             {CATEGORIES.map((c) => (
               <button key={c} onClick={() => setCategory(c)}
-                className={`rounded-full px-4 py-2 text-sm font-semibold transition ${category === c ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}>
+                className={`min-h-[44px] rounded-full px-4 py-2 text-sm font-semibold transition ${category === c ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}>
                 {c}
               </button>
             ))}
@@ -77,7 +77,7 @@ export default function CreateRoomPage() {
           <div className="flex gap-2">
             {COVERS.map((c) => (
               <button key={c} title={c} aria-label={`Cover ${c}`} onClick={() => setCover(c)}
-                className={`h-10 w-10 rounded-2xl transition active:scale-95 ${cover === c ? "ring-2 ring-white ring-offset-2 ring-offset-[#15151d]" : "opacity-70 hover:opacity-100"}`}
+                className={`h-11 w-11 rounded-2xl transition active:scale-95 ${cover === c ? "ring-2 ring-white ring-offset-2 ring-offset-[#15151d]" : "opacity-70 hover:opacity-100"}`}
                 style={{ backgroundColor: c }} />
             ))}
           </div>
@@ -87,7 +87,7 @@ export default function CreateRoomPage() {
             <div className="flex gap-2">
               {[4, 8, 12].map((n) => (
                 <button key={n} onClick={() => setCapacity(n as 4 | 8 | 12)}
-                  className={`flex-1 rounded-2xl py-2.5 text-sm font-bold transition ${capacity === n ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}>
+                  className={`min-h-[44px] flex-1 rounded-2xl py-2.5 text-sm font-bold transition ${capacity === n ? "bg-white text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}>
                   {n}
                 </button>
               ))}
@@ -95,7 +95,7 @@ export default function CreateRoomPage() {
           </Field>
           <Field label="Locking">
             <button onClick={() => setLocked((v) => !v)}
-              className={`w-full rounded-2xl py-2.5 text-sm font-bold transition ${locked ? "bg-amber-400 text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}>
+              className={`min-h-[44px] w-full rounded-2xl py-2.5 text-sm font-bold transition ${locked ? "bg-amber-400 text-black" : "bg-white/5 text-white/60 hover:bg-white/10"}`}>
               {locked ? "Locked 🔒" : "Open 🔓"}
             </button>
           </Field>

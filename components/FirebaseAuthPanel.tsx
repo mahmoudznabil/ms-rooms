@@ -28,40 +28,61 @@ type Mode = "signin" | "create" | "phone";
 function formatAuthError(e: unknown): string {
   const err = e as { code?: string; message?: string; customData?: unknown };
   const code = err?.code ?? "";
-  const msg = err?.message ?? String(e);
-  // auth/internal-error wraps the REAL cause (e.g. API-key referrer block).
-  // Surface it so the banner diagnoses itself.
-  let detail = "";
-  try {
-    const cd = err?.customData as { message?: string } | undefined;
-    if (cd?.message && cd.message !== msg) detail = cd.message;
-    else if (cd && typeof cd === "object") detail = JSON.stringify(cd);
-  } catch {}
-  if (detail) detail = detail.slice(0, 250);
-  const full = detail ? `${msg} | detail: ${detail}` : msg;
+  const msg = err instanceof Error ? err.message : String(e);
+  // Full technical detail goes to the console only. Users get plain language —
+  // a raw `{code: auth/...}` dump is a dead end for everyone except developers.
   try {
     console.error("[auth]", code, msg, (err?.customData ?? e) as unknown);
   } catch {}
   if (code.includes("app-check") || msg.toLowerCase().includes("app check")) {
-    return `${full} (code: ${code || "auth/firebase-app-check-token-is-invalid"}). Firebase Authentication is enforcing App Check, but this web app did not receive a valid App Check token. Confirm the v3 App Check site key is registered for web app 1:59506321553:web:d5db8040d4ce22667ef730 and that its domains include ms-rooms.pages.dev.`;
+    return "A security check failed. Try again, or use phone sign-in instead.";
   }
-  if (
-    code === "auth/internal-error" ||
-    msg.includes("internal-error") ||
-    msg.includes("Database is closing")
-  ) {
-    return `${full} (code: ${code || "auth/internal-error"}). Usually: popup blocked, 3rd-party cookies/adblock, domain missing from Firebase Authorized Domains, or Firebase JS 12.17+ popup bug — redirect fallback runs automatically, or run: npm i firebase@12.16.0.`;
+  if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+    return "The Google window closed before finishing. Tap again to retry.";
   }
-  return code ? `${full} (code: ${code})` : full;
+  if (code === "auth/network-request-failed") {
+    return "Could not reach Google. Check your connection and try again.";
+  }
+  if (code === "auth/unauthorized-domain") {
+    return "Google sign-in is not enabled for this site yet. Use email or phone instead.";
+  }
+  if (code === "auth/operation-not-allowed") {
+    return "This sign-in method is switched off. Use email or phone instead.";
+  }
+  if (code === "auth/user-not-found" || code === "auth/invalid-credential") {
+    return "No account matches that email and password. Check them, or create an account.";
+  }
+  if (code === "auth/wrong-password") {
+    return "Wrong password. Try again or reset it with Forgot password.";
+  }
+  if (code === "auth/email-already-in-use" || code === "auth/credential-already-in-use") {
+    return "That email already has an account. Sign in instead.";
+  }
+  if (code === "auth/weak-password") {
+    return "Use a password with at least 6 characters.";
+  }
+  if (code === "auth/invalid-email") {
+    return "That email address does not look right. Check it and try again.";
+  }
+  if (code === "auth/too-many-requests") {
+    return "Too many attempts. Wait a minute and try again.";
+  }
+  if (code === "auth/invalid-verification-code") {
+    return "That code is wrong. Check the SMS and try again.";
+  }
+  if (code === "auth/code-expired") {
+    return "That code expired. Send a new one.";
+  }
+  return "Sign-in did not complete. Try again, or use a different method.";
 }
 
 const inputCls =
-  "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/25 focus:border-violet-400/60 focus:outline-none focus:ring-1 focus:ring-violet-400/30";
+  "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-base text-white placeholder:text-white/25 focus:border-violet-400/60 focus:outline-none focus:ring-1 focus:ring-violet-400/30";
 const labelCls = "mb-1.5 block text-sm font-semibold text-white/85";
 const primaryBtn =
-  "w-full rounded-lg bg-white py-2 text-sm font-semibold text-black transition hover:bg-white/85 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40";
+  "w-full rounded-lg bg-white py-2 min-h-[44px] text-sm font-semibold text-black transition hover:bg-white/85 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40";
 const secondaryBtn =
-  "flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/5 py-2 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-40";
+  "flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/5 py-2 min-h-[44px] text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-40";
 
 export default function FirebaseAuthPanel() {
   const [mode, setMode] = useState<Mode>("signin");
@@ -183,10 +204,26 @@ export default function FirebaseAuthPanel() {
       if (appCheckBroken) {
         logAuthEvent("google", "failure", msg);
         setErr(formatAuthError(e));
-      } else if (popupBroken) {
-        // Don't redirect - just show the error and let user retry
-        logAuthEvent("google", "failure", msg);
-        setErr(formatAuthError(e));
+      } else if (popupBroken && code !== "auth/popup-closed-by-user" && code !== "auth/cancelled-popup-request") {
+        // Browsers with strict popup blocking (Edge, Brave, Firefox ETP,
+        // Safari ITP) kill the popup before the user ever sees it. Don't show
+        // an error — continue with a full-page redirect instead, which no
+        // popup blocker can intercept. The mount effect above completes it.
+        logAuthEvent("google", "failure", `popup fallback: ${code || msg}`);
+        try {
+          sessionStorage.setItem("msrooms_google_redirect", "1");
+        } catch {}
+        setMsg("Opening Google sign-in…");
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (re: unknown) {
+          try {
+            sessionStorage.removeItem("msrooms_google_redirect");
+          } catch {}
+          logAuthEvent("google", "failure", re instanceof Error ? re.message : undefined);
+          setErr(formatAuthError(re));
+        }
       } else {
         logAuthEvent("google", "failure", e instanceof Error ? e.message : undefined);
         setErr(formatAuthError(e));
@@ -277,7 +314,7 @@ export default function FirebaseAuthPanel() {
               <label htmlFor="auth-email" className={labelCls}>Email address</label>
               <input
                 id="auth-email" value={email} onChange={(e) => setEmail(e.target.value)}
-                type="email" autoComplete="email" placeholder="you@example.com"
+                type="email" inputMode="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" placeholder="you@example.com"
                 className={inputCls} />
             </div>
             <div className="mt-3">
@@ -345,13 +382,13 @@ export default function FirebaseAuthPanel() {
 
       <div className="mt-4 rounded-lg border border-white/10 px-4 py-3.5 text-center text-sm text-white/60">
         {mode === "signin" && (
-          <>New to MS-ROOMS? <button onClick={() => switchMode("create")} className="font-semibold text-violet-300 hover:underline">Create an account</button></>
+          <>New to MS-ROOMS? <button onClick={() => switchMode("create")} className="inline-block px-2 py-2.5 min-h-[44px] font-semibold text-violet-300 hover:underline">Create an account</button></>
         )}
         {mode === "create" && (
-          <>Already have an account? <button onClick={() => switchMode("signin")} className="font-semibold text-violet-300 hover:underline">Sign in</button></>
+          <>Already have an account? <button onClick={() => switchMode("signin")} className="inline-block px-2 py-2.5 min-h-[44px] font-semibold text-violet-300 hover:underline">Sign in</button></>
         )}
         {mode === "phone" && (
-          <>Prefer email? <button onClick={() => switchMode("signin")} className="font-semibold text-violet-300 hover:underline">Back to sign in</button></>
+          <>Prefer email? <button onClick={() => switchMode("signin")} className="inline-block px-2 py-2.5 min-h-[44px] font-semibold text-violet-300 hover:underline">Back to sign in</button></>
         )}
       </div>
 
@@ -368,7 +405,7 @@ export default function FirebaseAuthPanel() {
 
       <div className="mt-3 text-center text-xs text-white/40">
         {mode !== "phone" && (
-          <button onClick={() => switchMode("phone")} className="hover:text-white/70 hover:underline">Use phone instead</button>
+          <button onClick={() => switchMode("phone")} className="inline-block px-2 py-2.5 min-h-[44px] hover:text-white/70 hover:underline">Use phone instead</button>
         )}
         {mode === "signin" && (
           <>

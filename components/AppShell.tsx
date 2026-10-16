@@ -243,7 +243,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             {/* Lobby stays one tap away no matter which page you are on. */}
             <Link prefetch={false}
               href="/lobby"
-              className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-bold ${
+              className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-bold ${
                 pathname.startsWith("/lobby") ? "bg-white text-black" : "bg-white/5 text-white/70 hover:bg-white/10"
               }`}
             >
@@ -251,7 +251,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
           <div className="flex items-center gap-2">
-            <Link prefetch={false} href="/calls" aria-label="Calls" className="relative rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/calls" aria-label="Calls" className="relative grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Phone size={16} />
               {missed > 0 && (
                 <span className="absolute -right-1 -top-1 rounded-full bg-red-500 px-1 text-[9px] font-black text-white">
@@ -259,17 +259,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 </span>
               )}
             </Link>
-            <Link prefetch={false} href="/messages" aria-label="Messages" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/messages" aria-label="Messages" className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <MessageCircle size={16} />
             </Link>
-            <Link prefetch={false} href="/search" aria-label="Search" className="rounded-full bg-white/5 p-2 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/search" aria-label="Search" className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Search size={16} />
             </Link>
             {user ? (
               <>
                 <Link prefetch={false}
                   href="/wallet"
-                  className="flex items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200 transition-all duration-200 hover:bg-amber-300/20 hover:scale-105"
+                  className="flex min-h-[44px] items-center gap-1 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-sm font-bold text-amber-200 transition-all duration-200 hover:bg-amber-300/20 hover:scale-105"
                 >
                   <Coins size={14} />
                   {user.coins.toLocaleString()}
@@ -329,7 +329,7 @@ function TabLink({ href, label, icon, active, exact = false }: { href: string; l
   return (
     <Link prefetch={false}
       href={href}
-      className={`flex flex-col items-center gap-0.5 px-3 py-1.5 text-[11px] font-semibold transition ${
+      className={`flex min-h-[44px] min-w-[44px] flex-col items-center justify-center gap-0.5 px-3 py-1.5 text-[11px] font-semibold transition ${
         active ? "text-white" : "text-white/40 hover:text-white/70"
       }`}
     >

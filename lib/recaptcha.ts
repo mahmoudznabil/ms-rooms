@@ -32,8 +32,8 @@ let serverKey: string | null = null;
 export async function getSiteKeyAsync(): Promise<string> {
   if (serverKey) return serverKey;
   try {
-    const { API_BASE } = await import("@/lib/api");
-    const res = await fetch(`${API_BASE}/api/recaptcha/sitekey`, { signal: AbortSignal.timeout(8000) });
+    const { API_BASE, timeoutSignal } = await import("@/lib/api");
+    const res = await fetch(`${API_BASE}/api/recaptcha/sitekey`, { signal: timeoutSignal(8000) });
     const data = (await res.json().catch(() => null)) as { ok?: boolean; siteKey?: string } | null;
     if (data?.ok && data.siteKey) serverKey = data.siteKey;
   } catch {}
@@ -150,14 +150,14 @@ export function loadRecaptchaScript(): Promise<void> {
 export async function verifyRecaptchaToken(token: string): Promise<boolean> {
   // Client delegates verification to Worker so secret never leaks.
   // Bounded with a timeout: a stalled network must never freeze the UI.
-  const { API_BASE } = await import("@/lib/api");
+  const { API_BASE, timeoutSignal } = await import("@/lib/api");
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/recaptcha/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
-      signal: AbortSignal.timeout(15000),
+      signal: timeoutSignal(15000),
     });
   } catch (e) {
     throw new Error(e instanceof DOMException && e.name === "TimeoutError"

@@ -1,7 +1,7 @@
 "use client";
 
 import type { User } from "firebase/auth";
-import { API_BASE, ApiError } from "@/lib/api";
+import { API_BASE, ApiError, timeoutSignal } from "@/lib/api";
 
 /**
  * Exchange a Firebase ID token for a D1-backed app user + 30-day session token.
@@ -26,7 +26,7 @@ export async function syncFirebaseUser(firebaseUser: User): Promise<{ user: impo
         provider: firebaseUser.providerData[0]?.providerId ?? "firebase",
       }),
       // Bounded: a stalled sync must surface an error, never spin forever.
-      signal: AbortSignal.timeout(20000),
+      signal: timeoutSignal(20000),
     });
   } catch (e) {
     throw new ApiError(e instanceof DOMException && e.name === "TimeoutError"

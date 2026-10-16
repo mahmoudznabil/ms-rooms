@@ -10,7 +10,10 @@ let timer: ReturnType<typeof setInterval> | null = null;
 function getCtx(): AudioContext | null {
   try {
     if (ctx) return ctx;
-    const Ctor = window.AudioContext;
+    // Legacy Safari only exposes webkitAudioContext.
+    const Ctor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return null;
     ctx = new Ctor();
     return ctx;
