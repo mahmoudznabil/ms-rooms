@@ -33,6 +33,7 @@ import {
   isOfferer,
   isSpeaking,
   nextPollDelay,
+  resolveIceServers,
   shouldQueueIce,
 } from "@/lib/signaling/decisions";
 
@@ -129,7 +130,14 @@ function rmsLevel(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): numb
 function createLocalCapture(wantVideo: boolean) {
   let disposed = false;
   const streamPromise = navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      // `ideal`, not exact: a hard 48k requirement would reject devices whose
+      // hardware runs at 44.1k instead of resampling.
+      sampleRate: { ideal: 48000 },
+    },
     video: wantVideo
       ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
       : false,
@@ -323,8 +331,21 @@ export function useCallSession(roomId: string, caller: boolean, myUserId: string
       }
       if (closedRef.current) return;
 
-      const pc = new RTCPeerConnection({ iceServers: ice, bundlePolicy: "max-bundle" });
+      const pc = new RTCPeerConnection({ iceServers: resolveIceServers(ice), bundlePolicy: "max-bundle" });
       pcRef.current = pc;
+
+      // Attach the local microphone (and camera) as sendrecv transceivers.
+      // Without a sender the offer is recvonly and neither side ever hears
+      // the other — connected-but-silent calls. This must run before any
+      // createOffer/createAnswer on both the caller and callee paths.
+      for (const track of stream.getAudioTracks()) {
+        pc.addTransceiver(track, { direction: "sendrecv", streams: [stream] });
+      }
+      if (wantVideo) {
+        for (const track of stream.getVideoTracks()) {
+          pc.addTransceiver(track, { direction: "sendrecv", streams: [stream] });
+        }
+      }
 
       const remote = new MediaStream();
       setRemoteStream(remote);
@@ -761,7 +782,7 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     (peerId: string, ice: RTCIceServer[], roomId: string) => {
       let pc = pcsRef.current.get(peerId);
       if (pc) return pc;
-      pc = new RTCPeerConnection({ iceServers: ice, bundlePolicy: "max-bundle" });
+      pc = new RTCPeerConnection({ iceServers: resolveIceServers(ice), bundlePolicy: "max-bundle" });
       pcsRef.current.set(peerId, pc);
       const remote = new MediaStream();
       streamsRef.current.set(peerId, remote);

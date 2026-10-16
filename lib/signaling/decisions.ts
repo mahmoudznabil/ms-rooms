@@ -94,6 +94,20 @@ export function shouldQueueIce(hasRemoteDescription: boolean): boolean {
 export const ICE_QUEUE_LIMIT = 50;
 
 /**
+ * Resolve the ICE servers for a new peer connection.
+ *
+ * Minted Cloudflare TURN credentials when the backend has them; otherwise a
+ * public STUN fallback. An empty list would leave only host candidates, which
+ * silently fails for anyone behind a symmetric NAT — the exact users TURN
+ * exists for.
+ */
+export const FALLBACK_STUN_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+
+export function resolveIceServers(minted: RTCIceServer[]): RTCIceServer[] {
+  return minted.length > 0 ? minted : FALLBACK_STUN_SERVERS;
+}
+
+/**
  * Append to a bounded queue, dropping overflow.
  *
  * An unbounded queue against a flapping peer is a memory leak mid-call. Returns

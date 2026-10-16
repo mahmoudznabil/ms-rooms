@@ -9,6 +9,7 @@ import {
   isOfferer,
   isSpeaking,
   nextPollDelay,
+  resolveIceServers,
   SPEAKING_RMS_THRESHOLD,
   shouldQueueIce,
 } from "@/lib/signaling/decisions";
@@ -134,6 +135,21 @@ describe("speaking detection", () => {
   it("does not flag silence or the threshold itself", () => {
     expect(isSpeaking(0)).toBe(false);
     expect(isSpeaking(SPEAKING_RMS_THRESHOLD)).toBe(false);
+  });
+});
+
+describe("ICE server resolution", () => {
+  it("prefers the minted TURN servers when configured", () => {
+    const turn = [{ urls: "turn:example.com:3478" }];
+    expect(resolveIceServers(turn)).toBe(turn);
+  });
+
+  it("falls back to public STUN when TURN is unconfigured", () => {
+    // Without this, an empty iceServers list means host candidates only and
+    // anyone behind a symmetric NAT can never connect.
+    const resolved = resolveIceServers([]);
+    expect(resolved.length).toBeGreaterThan(0);
+    expect(JSON.stringify(resolved)).toContain("stun.l.google.com");
   });
 });
 

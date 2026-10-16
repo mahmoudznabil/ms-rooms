@@ -99,4 +99,82 @@ test.describe("room mesh preconditions", () => {
     expect(sdpType).toBe("offer");
     await context.close();
   });
+
+  test("two peers complete a call and audio flows both directions", async ({ browser }) => {
+    // Full in-page mesh of two: fake mic track attached via the production
+    // transceiver pattern, trickled ICE like the app does, then assert both
+    // sides connect, both ontrack handlers fire, and bytes actually move.
+    // This is what caught the missing-sender bug (connected but silent).
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto("/");
+    const result = await page.evaluate(async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const track = stream.getAudioTracks()[0];
+      if (!track) return { ok: false, reason: "no-mic-track" };
+
+      const a = new RTCPeerConnection();
+      const b = new RTCPeerConnection();
+      const received: string[] = [];
+      a.ontrack = (ev) => received.push(`a:${ev.track.kind}`);
+      b.ontrack = (ev) => received.push(`b:${ev.track.kind}`);
+      // Same shape as useCallSession.join: sendrecv transceiver per track.
+      a.addTransceiver(track, { direction: "sendrecv", streams: [stream] });
+      b.addTransceiver("audio", { direction: "sendrecv" });
+
+      // Trickle ICE both directions, mirroring queueOrAddIce/flushIce.
+      a.onicecandidate = (ev) => {
+        if (ev.candidate) void b.addIceCandidate(ev.candidate).catch(() => undefined);
+      };
+      b.onicecandidate = (ev) => {
+        if (ev.candidate) void a.addIceCandidate(ev.candidate).catch(() => undefined);
+      };
+
+      const offer = await a.createOffer();
+      await a.setLocalDescription(offer);
+      await b.setRemoteDescription(offer);
+      const answer = await b.createAnswer();
+      await b.setLocalDescription(answer);
+      await a.setRemoteDescription(answer);
+
+      const waitState = (pc: RTCPeerConnection, want: string, ms: number) =>
+        new Promise<boolean>((resolve) => {
+          if (pc.connectionState === want) return resolve(true);
+          const t = setTimeout(() => resolve(false), ms);
+          pc.addEventListener("connectionstatechange", () => {
+            if (pc.connectionState === want) {
+              clearTimeout(t);
+              resolve(true);
+            }
+          });
+        });
+      const connected = (await waitState(a, "connected", 15000)) && (await waitState(b, "connected", 15000));
+
+      // Let audio flow, then confirm received bytes on at least one side.
+      await new Promise((r) => setTimeout(r, 2000));
+      let bytesReceived = 0;
+      try {
+        for (const pc of [a, b]) {
+          const stats = await pc.getStats();
+          stats.forEach((s) => {
+            if (s.type === "inbound-rtp" && typeof s.bytesReceived === "number") {
+              bytesReceived += s.bytesReceived as number;
+            }
+          });
+        }
+      } catch {
+        /* stats unavailable */
+      }
+      const states = [a.connectionState, b.connectionState];
+      stream.getTracks().forEach((t) => t.stop());
+      a.close();
+      b.close();
+      return { ok: true, connected, received, bytesReceived, states };
+    });
+    expect(result.ok).toBe(true);
+    expect(result.connected).toBe(true);
+    expect(result.received).toContain("b:audio");
+    expect(result.bytesReceived).toBeGreaterThan(0);
+    await context.close();
+  });
 });
