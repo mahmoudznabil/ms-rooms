@@ -1296,6 +1296,27 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           .bind(id, hostId)
           .run();
         const room = await env.DB.prepare(`SELECT * FROM rooms WHERE id = ?`).bind(id).first();
+        // Notify followers that their host went live. Capped fan-out (100 most
+        // recent followers); failures never break room creation.
+        try {
+          const hostRow = (await env.DB.prepare(`SELECT display_name FROM users WHERE id = ?`).bind(hostId).first()) as Record<string, unknown> | null;
+          const hostName = (hostRow?.display_name as string) || "Someone you follow";
+          const followers = await env.DB.prepare(
+            `SELECT follower_id FROM follows WHERE followee_id = ? ORDER BY created_at DESC LIMIT 100`
+          ).bind(hostId).all();
+          const link = `/room?slug=${encodeURIComponent(slug)}`;
+          for (const f of ((followers.results ?? []) as Array<Record<string, unknown>>)) {
+            await env.DB.prepare(
+              `INSERT INTO notifications (id, user_id, type, title, body, link, actor_id)
+               VALUES (?, ?, 'room_live', ?, ?, ?, ?)`
+            ).bind(
+              newId("notif"), f.follower_id as string,
+              `${hostName} is live`.slice(0, 80),
+              `${title} — tap to join the room.`.slice(0, 140),
+              link, hostId
+            ).run();
+          }
+        } catch {}
         return j({ ok: true, room }, 201);
       }
 
@@ -1623,6 +1644,7 @@ return j({ ok: true, ended: true });
         await env.DB.prepare(`DELETE FROM checkins WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM spin_plays WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM reports WHERE reporter_id = ? OR target_id = ?`).bind(userId, userId).run();
+        await env.DB.prepare(`DELETE FROM notifications WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`DELETE FROM support_tickets WHERE user_id = ?`).bind(userId).run();
         await env.DB.prepare(`UPDATE rooms SET status = 'ended', updated_at = CURRENT_TIMESTAMP WHERE host_user_id = ? AND status = 'live'`).bind(userId).run();
         await env.DB.prepare(`UPDATE private_call_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP WHERE (caller_user_id = ? OR callee_user_id = ?) AND status IN ('initiated','ringing','connected')`).bind(userId, userId).run();
@@ -2882,6 +2904,73 @@ return j({ ok: true });
         return j({ ok: true, unread_count });
       }
 
+      // ---- Notifications -----------------------------------------------------------
+      // Daily checkin reminder: synthesized idempotently here (not on a cron —
+      // Pages has none). First list-call of the day creates it iff the user
+      // has neither checked in nor an unread reminder already.
+      if (path === "/api/notifications" && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const userId = me.id;
+        try {
+          const checked = await env.DB.prepare(
+            `SELECT 1 AS x FROM checkins WHERE user_id = ? AND day = date('now') LIMIT 1`
+          ).bind(userId).first();
+          if (!checked) {
+            const pending = await env.DB.prepare(
+              `SELECT 1 AS x FROM notifications WHERE user_id = ? AND type = 'checkin'
+               AND created_at >= datetime('now', 'start of day') AND read_at IS NULL LIMIT 1`
+            ).bind(userId).first();
+            if (!pending) {
+              await env.DB.prepare(
+                `INSERT INTO notifications (id, user_id, type, title, body, link)
+                 VALUES (?, ?, 'checkin', 'Your 100 free coins are waiting',
+                         'Claim your daily check-in before midnight to keep your streak.', '/wallet')`
+              ).bind(newId("notif"), userId).run();
+            }
+          }
+        } catch {}
+        const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 20) || 20));
+        const rows = await env.DB.prepare(
+          `SELECT id, type, title, body, link, actor_id, read_at, created_at
+           FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`
+        ).bind(userId, limit).all();
+        try {
+          await env.DB.prepare(`DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at < datetime('now', '-30 days')`).run();
+        } catch {}
+        return j({ ok: true, notifications: rows.results ?? [] });
+      }
+
+      if (path === "/api/notifications/unread-count" && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const c = await env.DB.prepare(
+          `SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL`
+        ).bind(me.id).first();
+        return j({ ok: true, unread: Number((c as Record<string, unknown> | null)?.n ?? 0) });
+      }
+
+      if (path === "/api/notifications/read" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const body = await readJson<{ ids?: unknown; all?: unknown }>(request);
+        if (body?.all === true) {
+          await env.DB.prepare(
+            `UPDATE notifications SET read_at = CURRENT_TIMESTAMP WHERE user_id = ? AND read_at IS NULL`
+          ).bind(me.id).run();
+        } else if (Array.isArray(body?.ids)) {
+          const ids = (body.ids as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 50);
+          for (const nid of ids) {
+            await env.DB.prepare(
+              `UPDATE notifications SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`
+            ).bind(nid, me.id).run();
+          }
+        } else {
+          return badRequest("ids or all required.");
+        }
+        return j({ ok: true });
+      }
+
       if (path === "/api/conversations/direct" && request.method === "POST") {
         const userId = await requireChatUser();
         if (!userId) return j({ ok: false, error: "Not signed in." }, 401);
@@ -3131,6 +3220,34 @@ return j({ ok: true });
           const attachments = await env.DB.prepare(
             `SELECT * FROM message_attachments WHERE message_id = ?`
           ).bind(id).all();
+          // DM notification fan-out (direct/group only — room chat is live-polled
+          // and notifying per message there would spam). One unread row per
+          // conversation: further messages while it is unread add nothing.
+          try {
+            const convRow = (await env.DB.prepare(`SELECT type FROM conversations WHERE id = ?`).bind(cid).first()) as Record<string, unknown> | null;
+            if (convRow?.type && convRow.type !== "room") {
+              const others = await env.DB.prepare(
+                `SELECT user_id FROM conversation_participants WHERE conversation_id = ? AND user_id != ? LIMIT 20`
+              ).bind(cid, userId).all();
+              const senderName = (m.display_name as string) || (m.username as string) || "Someone";
+              const link = `/messages?conversationId=${encodeURIComponent(cid)}`;
+              for (const o of ((others.results ?? []) as Array<Record<string, unknown>>)) {
+                const oid = o.user_id as string;
+                const dup = await env.DB.prepare(
+                  `SELECT 1 AS x FROM notifications WHERE user_id = ? AND type = 'message' AND link = ? AND read_at IS NULL LIMIT 1`
+                ).bind(oid, link).first();
+                if (dup) continue;
+                await env.DB.prepare(
+                  `INSERT INTO notifications (id, user_id, type, title, body, link, actor_id)
+                   VALUES (?, ?, 'message', ?, ?, ?, ?)`
+                ).bind(
+                  newId("notif"), oid,
+                  `New message from ${senderName}`.slice(0, 80),
+                  String(content).slice(0, 140), link, userId
+                ).run();
+              }
+            }
+          } catch { /* notifications never break sending */ }
           return j({ ok: true, message: {
             id: m.id, conversation_id: m.conversation_id, sender_id: m.sender_id,
             content: m.content, type: m.type, reply_to_id: m.reply_to_id, metadata: m.metadata,

@@ -9,6 +9,7 @@ import { useSession } from "@/stores/useSession";
 import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
 import ServerCheckinModal from "@/components/ServerCheckinModal";
+import NotificationBell from "@/components/NotificationBell";
 import OnboardingTour from "@/components/OnboardingTour";
 import IncomingCallGate from "@/components/IncomingCallGate";
 import { UserAvatar } from "@/components/bits";
@@ -265,6 +266,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <Link prefetch={false} href="/search" aria-label="Search" className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Search size={16} />
             </Link>
+            <NotificationBell />
             {user ? (
               <>
                 <Link prefetch={false}

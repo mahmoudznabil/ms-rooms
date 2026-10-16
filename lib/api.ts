@@ -555,6 +555,33 @@ export async function markConversationRead(conversationId: string): Promise<void
   await req(`/api/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST" });
 }
 
+export type AppNotificationType = "checkin" | "room_live" | "message" | "system";
+export interface AppNotification {
+  id: string;
+  type: AppNotificationType;
+  title: string;
+  body: string;
+  link: string;
+  actor_id: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export async function fetchNotifications(limit = 20): Promise<{ notifications: AppNotification[] }> {
+  return req(`/api/notifications?limit=${limit}`, { cache: "no-store" });
+}
+
+export async function notificationUnreadCount(): Promise<{ unread: number }> {
+  return req(`/api/notifications/unread-count`, { cache: "no-store" });
+}
+
+export async function markNotificationsRead(ids: string[] | "all"): Promise<void> {
+  await req(`/api/notifications/read`, {
+    method: "POST",
+    body: JSON.stringify(ids === "all" ? { all: true } : { ids }),
+  });
+}
+
 export async function getUnreadCount(): Promise<{ unread_count: number }> {
   return req(`/api/conversations/unread-count`, { cache: "no-store" });
 }
