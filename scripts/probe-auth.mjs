@@ -13,7 +13,6 @@ const probes = [
   ["POST", "/api/spin", {}],
   ["POST", "/api/checkin", {}],
   ["POST", "/api/rewards/claim", {}],
-  ["POST", "/api/moments", { text: "probe" }],
   ["POST", "/api/rooms", { title: "probe" }],
   ["PATCH", "/api/rooms/probe", { title: "probe" }],
   ["DELETE", "/api/rooms/probe", {}],

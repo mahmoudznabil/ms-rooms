@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Camera, Gift, LogOut, MessageCircle, Mic, Pencil, Phone, Sparkles, Trophy, UserCheck, UserPlus, Users, Trash2, AlertTriangle, Link2, ImagePlus, Video } from "lucide-react";
+import { Camera, Gift, LogOut, MessageCircle, Mic, Pencil, Phone, Trophy, UserCheck, UserPlus, Users, Trash2, AlertTriangle, Link2, ImagePlus, Video } from "lucide-react";
 import { checkUsername, fetchProfile, fetchSocial, follow, unfollow, patchUser, type ApiUser, type ProfileStats, type SocialInfo } from "@/lib/api";
 import { placeCall } from "@/lib/calls";
 import { AVATAR_CHOICES, levelProgress } from "@/lib/levels";
@@ -197,7 +197,6 @@ function OwnProfile() {
     { label: "Followers", value: social?.followers ?? stats?.followers ?? 0, icon: Users },
     { label: "Following", value: social?.following ?? stats?.following ?? 0, icon: Users },
     { label: "Live rooms", value: stats?.live_rooms ?? 0, icon: Mic },
-    { label: "Moments", value: stats?.moments ?? 0, icon: Sparkles },
     { label: "Gifts received", value: stats?.gifts_received ?? 0, icon: Gift },
     { label: "Gifts sent", value: stats?.gifts_sent ?? 0, icon: Gift },
   ];
@@ -548,7 +547,6 @@ function FriendProfile({ userKey }: { userKey: string }) {
     { label: "Followers", value: social?.followers ?? stats?.followers ?? 0, icon: Users },
     { label: "Following", value: social?.following ?? stats?.following ?? 0, icon: Users },
     { label: "Live rooms", value: stats?.live_rooms ?? 0, icon: Mic },
-    { label: "Moments", value: stats?.moments ?? 0, icon: Sparkles },
     { label: "Gifts received", value: stats?.gifts_received ?? 0, icon: Gift },
     { label: "Gifts sent", value: stats?.gifts_sent ?? 0, icon: Gift },
   ];

@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, Home, Radio, Phone, Plus, Search, Sparkles, Trophy, User, Wallet, Headset, MessageCircle, LayoutDashboard } from "lucide-react";
+import { Coins, Home, Radio, Phone, Plus, Search, Trophy, User, Wallet, Headset, MessageCircle, LayoutDashboard } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import { useCalls } from "@/stores/useCalls";
 import { levelForXp } from "@/lib/levels";
@@ -60,7 +60,6 @@ interface NavItem {
 const SIDEBAR_CONFIGS = {
   main: [
     { href: "/lobby", label: "Lobby", icon: Home, exact: false },
-    { href: "/moments", label: "Moments", icon: Sparkles },
     { href: "/calls", label: "Calls", icon: Phone },
     { href: "/rankings", label: "Rankings", icon: Trophy },
     { href: "/wallet", label: "Wallet", icon: Wallet },
@@ -313,7 +312,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <Link prefetch={false} href="/create" aria-label="Create room" className="app-tabs-create">
             <Plus size={22} />
           </Link>
-          <TabLink href="/moments" label="Moments" icon={<Sparkles size={20} />} active={pathname.startsWith("/moments")} />
           <TabLink href="/profile" label="Me" icon={<User size={20} />} active={pathname.startsWith("/profile")} />
         </nav>
 

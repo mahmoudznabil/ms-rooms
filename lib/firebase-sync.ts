@@ -5,7 +5,7 @@ import { API_BASE, ApiError } from "@/lib/api";
 
 /**
  * Exchange a Firebase ID token for a D1-backed app user + 30-day session token.
- * This is how progress (coins/xp/streak/rooms/moments) follows the user across devices:
+ * This is how progress (coins/xp/streak/rooms) follows the user across devices:
  * Firebase is the identity (phone/email/Google), D1 is the source of truth keyed by firebase_uid.
  * The Worker verifies the ID token via google tokeninfo and upserts the D1 row atomically.
  */

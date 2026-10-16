@@ -18,7 +18,7 @@ export default function PrivacyPolicyPage() {
         </section>
         <section>
           <h2 className="text-base font-bold text-white">2. What we collect</h2>
-          <p className="mt-1">Account (Firebase UID, email/phone when you provide them, display name, avatar, username), app activity (rooms, seats, messages, moments, follows, gifts, XP, transactions, check-ins, calls), device/technical (IP, user-agent, crash logs), security (reCAPTCHA token, CSRF token, Firebase ID token, TURN session metadata), support reports you submit. We do not collect payment cards: coins are earned-only (check-in, gifts, spin); there is no web checkout.</p>
+          <p className="mt-1">Account (Firebase UID, email/phone when you provide them, display name, avatar, username), app activity (rooms, seats, messages, follows, gifts, XP, transactions, check-ins, calls), device/technical (IP, user-agent, crash logs), security (reCAPTCHA token, CSRF token, Firebase ID token, TURN session metadata), support reports you submit. We do not collect payment cards: coins are earned-only (check-in, gifts, spin); there is no web checkout.</p>
         </section>
         <section>
           <h2 className="text-base font-bold text-white">3. How we use it</h2>
@@ -30,7 +30,7 @@ export default function PrivacyPolicyPage() {
         </section>
         <section>
           <h2 className="text-base font-bold text-white">5. Sharing</h2>
-          <p className="mt-1">We do not sell personal information. Processors: Cloudflare (hosting, D1, TURN), Google Firebase (auth), Google reCAPTCHA. Other users see your public profile/rooms/moments only. Legal/safety disclosures when required.</p>
+          <p className="mt-1">We do not sell personal information. Processors: Cloudflare (hosting, D1, TURN), Google Firebase (auth), Google reCAPTCHA. Other users see your public profile/rooms only. Legal/safety disclosures when required.</p>
         </section>
         <section>
           <h2 className="text-base font-bold text-white">6. Retention &amp; deletion</h2>

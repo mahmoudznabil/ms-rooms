@@ -491,7 +491,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
     <table class="table">
       <tr><th>Category</th><th>Examples</th><th>Source</th></tr>
       <tr><td>Account &amp; identity</td><td>Firebase UID (<code>firebase_uid</code>), email, phone, display name, avatar URL, provider (google / password / phone / email-link), username, id_tag</td><td>You + Firebase Auth</td></tr>
-      <tr><td>App activity</td><td>Rooms created/joined, seats, messages/moments, follows, likes, gift sends/receives (coins spent, gems 70% to host), XP events, transactions, daily rewards, call sessions</td><td>Your use of MS-ROOMS</td></tr>
+      <tr><td>App activity</td><td>Rooms created/joined, seats, messages, follows, likes, gift sends/receives (coins spent, gems 70% to host), XP events, transactions, daily rewards, call sessions</td><td>Your use of MS-ROOMS</td></tr>
       <tr><td>Device &amp; technical</td><td>IP (<code>CF-Connecting-IP</code>), region (<code>origin.region_code</code> for Cloud Armor), user-agent, device identifiers, crash logs</td><td>Automatically</td></tr>
       <tr><td>Verification &amp; safety</td><td>reCAPTCHA token/response (site key <code>6LeJIbwtAAAAABfH5omBJh8H-AqwRN2l9XzmdprD</code>), CSRF tokens, Firebase ID token (aud=<code>ms-room-audio</code>), Cloudflare Turn/CALLS session metadata</td><td>Security checks</td></tr>
       <tr><td>Support</td><td>Reports you submit</td><td>You</td></tr>
@@ -514,7 +514,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
     <p>We do not sell your personal information. We share only with:</p>
     <ul>
       <li><strong>Service providers / processors:</strong> Cloudflare (Workers, D1, Calls/TURN, CDN), Google Firebase/Google Cloud (Auth, tokeninfo), Google reCAPTCHA.</li>
-      <li><strong>Other users:</strong> profile, room, and moment data you make public (display name, avatar, rooms, followers).</li>
+      <li><strong>Other users:</strong> profile, room, and chat data you make public (display name, avatar, rooms, followers).</li>
       <li><strong>Legal/safety:</strong> if required by law or to protect rights/safety.</li>
       <li><strong>Business transfer:</strong> in merger/acquisition, with notice.</li>
     </ul>
@@ -602,10 +602,6 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
             "GET /api/auth/me",
             "POST /api/follow",
             "DELETE /api/follow",
-            "GET /api/moments",
-            "POST /api/moments",
-            "POST /api/moments/:id/like",
-            "DELETE /api/moments/:id/like",
             "POST /api/rewards/claim",
             "POST /api/checkin",
             "GET /api/gifts",
@@ -1073,7 +1069,7 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       // Security layer: Firebase is the identity provider, D1 is the source of truth.
       // The client signs in with Firebase, gets an ID token, then POSTs it here.
       // We verify the token signature + aud/iss, then upsert
-      // the D1 user by firebase_uid so coins/xp/rooms/moments follow the identity
+      // the D1 user by firebase_uid so coins/xp/rooms follow the identity
       // across any device. All progress mutations remain server-side in D1.
       if (path === "/api/auth/firebase" && request.method === "POST") {
         const idToken = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
@@ -1494,14 +1490,13 @@ return j({ ok: true, ended: true });
           `SELECT (SELECT COUNT(*) FROM follows WHERE followee_id = ?) AS followers,
                   (SELECT COUNT(*) FROM follows WHERE follower_id = ?) AS following,
                   (SELECT COUNT(*) FROM rooms WHERE host_user_id = ? AND status = 'live') AS live_rooms,
-                  (SELECT COUNT(*) FROM moments WHERE user_id = ?) AS moments,
                   (SELECT COALESCE(SUM(-t.amount), 0) FROM transactions t
                    JOIN rooms r ON r.id = t.room_id
                    WHERE r.host_user_id = ? AND t.type = 'gift_sent') AS gifts_received,
                   (SELECT COALESCE(SUM(-t.amount), 0) FROM transactions t
                    WHERE t.user_id = ? AND t.type = 'gift_sent') AS gifts_sent`
         )
-          .bind(user.id, user.id, user.id, user.id, user.id, user.id)
+          .bind(user.id, user.id, user.id, user.id, user.id)
           .first();
         return j({ ok: true, user: publicUser(user), stats: stats ?? {} });
       }
@@ -1604,80 +1599,6 @@ return j({ ok: true, ended: true });
           status: 200,
           headers: { "Content-Type": "application/json", ...cookieHeaders },
         });
-      }
-
-      // ---- Moments feed ----------------------------------------------------------------------
-      if (path === "/api/moments" && request.method === "GET") {
-        const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 20) || 20));
-        const viewerId = url.searchParams.get("viewer_id") ?? "";
-        const feed = await env.DB.prepare(
-          `SELECT m.id, m.text, m.created_at, m.user_id,
-                  u.username, u.display_name, u.avatar_url,
-                  (SELECT COUNT(*) FROM moment_likes l WHERE l.moment_id = m.id) AS likes,
-                  ${viewerId ? "EXISTS(SELECT 1 FROM moment_likes l2 WHERE l2.moment_id = m.id AND l2.user_id = ?) AS liked" : "0 AS liked"}
-           FROM moments m JOIN users u ON u.id = m.user_id
-           ORDER BY m.created_at DESC LIMIT ?`
-        );
-        const res = viewerId ? await feed.bind(viewerId, limit).all() : await feed.bind(limit).all();
-        return j({ ok: true, moments: res.results ?? [] });
-      }
-
-      if (path === "/api/moments" && request.method === "POST") {
-        const me = await requireUser(request, env);
-        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
-        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
-        const userId = me.id;
-        const body = await readJson<{ user_id?: unknown; text?: unknown }>(request);
-        if (typeof body?.user_id === "string" && body.user_id !== userId) {
-          return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
-        }
-        const text = typeof body?.text === "string" ? body.text.trim() : "";
-        if (text.length < 1 || text.length > 280) return badRequest("Moment must be 1-280 characters.");
-        const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
-        if (!user) return notFound("User not found.");
-        const id = newId("moment");
-        await env.DB.prepare(`INSERT INTO moments (id, user_id, text) VALUES (?, ?, ?)`)
-          .bind(id, userId, text)
-          .run();
-        // Posting earns a little XP.
-        await env.DB.prepare(`UPDATE users SET xp = xp + 5 WHERE id = ?`).bind(userId).run();
-        await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason) VALUES (?, ?, 5, 'Shared a moment')`)
-          .bind(newId("xp"), userId)
-          .run();
-        return j({ ok: true, id }, 201);
-      }
-
-      const likeMatch = path.match(/^\/api\/moments\/([^/]+)\/like$/);
-      if (likeMatch) {
-        const momentId = decodeURIComponent(likeMatch[1]);
-        if (request.method === "POST") {
-          const me = await requireUser(request, env);
-          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
-          if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
-          const userId = me.id;
-          const body = await readJson<{ user_id?: unknown }>(request);
-          if (typeof body?.user_id === "string" && body.user_id !== userId) {
-            return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
-          }
-          await env.DB.prepare(`INSERT OR IGNORE INTO moment_likes (moment_id, user_id) VALUES (?, ?)`)
-            .bind(momentId, userId)
-            .run();
-          return j({ ok: true, liked: true });
-        }
-        if (request.method === "DELETE") {
-          const meDel = await requireUser(request, env);
-          if (!meDel) return j({ ok: false, error: "Sign in required." }, 401);
-          if (meDel.banned) return j({ ok: false, error: "Account banned." }, 403);
-          const userId = meDel.id;
-          const qpUser = url.searchParams.get("user_id") ?? "";
-          if (qpUser && qpUser !== userId) {
-            return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
-          }
-          await env.DB.prepare(`DELETE FROM moment_likes WHERE moment_id = ? AND user_id = ?`)
-            .bind(momentId, userId)
-            .run();
-          return j({ ok: true, liked: false });
-        }
       }
 
       // ---- Persistent daily check-in --------------------------------------------------------------

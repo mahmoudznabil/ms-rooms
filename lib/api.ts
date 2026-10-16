@@ -128,18 +128,6 @@ export interface GiftCatalogItem {
   effect: "pop" | "banner" | "fullscreen";
 }
 
-export interface MomentItem {
-  id: string;
-  text: string;
-  created_at: string;
-  user_id: string;
-  username: string;
-  display_name: string;
-  avatar_url: string | null;
-  likes: number;
-  liked: number | boolean;
-}
-
 export interface Txn {
   id: string;
   user_id: string;
@@ -264,7 +252,6 @@ export interface ProfileStats {
   followers: number;
   following: number;
   live_rooms: number;
-  moments: number;
   gifts_received: number;
   gifts_sent: number;
 }
@@ -354,28 +341,6 @@ export async function searchAll(q: string): Promise<{ rooms: ApiRoomRow[]; users
     { cache: "no-store" }
   );
   return { rooms: data.rooms ?? [], users: data.users ?? [] };
-}
-
-export async function fetchMoments(viewer_id?: string, limit = 20): Promise<{ moments: MomentItem[] }> {
-  const q = `?limit=${limit}${viewer_id ? `&viewer_id=${encodeURIComponent(viewer_id)}` : ""}`;
-  return req(`/api/moments${q}`, { cache: "no-store" });
-}
-
-export async function postMoment(user_id: string, text: string): Promise<{ id: string }> {
-  return req(`/api/moments`, { method: "POST", body: JSON.stringify({ user_id, text }) });
-}
-
-export async function likeMoment(id: string, user_id: string): Promise<void> {
-  await req(`/api/moments/${encodeURIComponent(id)}/like`, {
-    method: "POST",
-    body: JSON.stringify({ user_id }),
-  });
-}
-
-export async function unlikeMoment(id: string, user_id: string): Promise<void> {
-  await req(`/api/moments/${encodeURIComponent(id)}/like?user_id=${encodeURIComponent(user_id)}`, {
-    method: "DELETE",
-  });
 }
 
 export async function reportUser(input: {
