@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Swords, Trophy } from "lucide-react";
 
 interface PKBattleBarProps {
@@ -12,6 +12,9 @@ interface PKBattleBarProps {
 
 export default function PKBattleBar({ roomA, roomB, endsAt, onEnd }: PKBattleBarProps) {
   const [left, setLeft] = useState(() => Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+  // The effect below re-runs on every score change; without this guard a late
+  // score update after expiry would fire onEnd a second time.
+  const endedRef = useRef(false);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -19,6 +22,8 @@ export default function PKBattleBar({ roomA, roomB, endsAt, onEnd }: PKBattleBar
       setLeft(l);
       if (l <= 0) {
         clearInterval(t);
+        if (endedRef.current) return;
+        endedRef.current = true;
         const winner = roomA.score === roomB.score ? "draw" : roomA.score > roomB.score ? "A" : "B";
         onEnd?.(winner);
       }

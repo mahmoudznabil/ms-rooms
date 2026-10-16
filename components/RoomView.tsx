@@ -591,7 +591,7 @@ function RoomViewInner() {
     if (rush) return;
     setRush({ endsAt: Date.now() + 60000, score: 0 });
     setRushLeft(60);
-    pushMsg({ user: "System", text: "Gift Rush started! Every gift you send for 60s scores coins toward bonus XP.", kind: "system" });
+    pushMsg({ user: "System", text: "Gift Rush started! Every gift you send for 60s adds to your rush score — and each gift still earns its usual +2 XP.", kind: "system" });
   };
 
   const startPK = () => {
@@ -600,7 +600,7 @@ function RoomViewInner() {
     const opp = opponents[Math.floor(Math.random() * opponents.length)];
     setPk({ endsAt: Date.now() + 120000, scoreA: 0, scoreB: 0, opponent: opp });
     setPkWinner(null);
-    pushMsg({ user: "System", text: `⚔️ PK Battle started: ${room?.title ?? "Your room"} vs ${opp} — 2 minutes! Send gifts to win.`, kind: "system" });
+    pushMsg({ user: "System", text: `⚔️ Practice PK started: ${room?.title ?? "Your room"} vs ${opp} — 2 minutes! Send gifts to win. Real room-vs-room battles are coming soon.`, kind: "system" });
   };
 
   const entryFx = levelForXp(user.xp) >= ENTRY_EFFECT_LEVEL;

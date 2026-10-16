@@ -57,8 +57,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     res = await doFetch(true);
   }
   const data = (await res.json().catch(() => null)) as (T & { ok?: boolean; error?: string }) | null;
-  if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/api/auth/")) {
-    // Global 401: session expired mid-session. Clear and bounce to login once.
+  // Global 401: the session truly expired mid-session. Clear and bounce once.
+  // Role-gated families are excluded: /api/auth/* carries its own login UX,
+  // and /api/admin/* 401s for every non-admin (e.g. AppShell's role check on
+  // every page load) — treating that as "logged out" signed users out and
+  // bounced them to /login right after signing in.
+  const sessionDead = res.status === 401 && !path.startsWith("/api/auth/") && !path.startsWith("/api/admin/");
+  if (sessionDead && typeof window !== "undefined") {
     try {
       const { useSession } = await import("@/stores/useSession");
       useSession.setState({ user: null, ready: true });
@@ -197,6 +202,9 @@ export async function awardXp(
   reason?: string,
   room_id?: string
 ): Promise<{ xp: number }> {
+  // Reserved for future server-driven games (Gift Rush/PK backends). No UI
+  // calls this today: client-triggered XP is farmable, so games must award XP
+  // from the backend when their handlers land — not by calling this.
   return req(`/api/xp/award`, { method: "POST", body: JSON.stringify({ user_id, amount, reason, room_id }) });
 }
 

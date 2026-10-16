@@ -51,7 +51,10 @@ All eight must hold before the first real user arrives. This is the go/no-go bar
 
 ### Phase 0 — Guardrails (3–5 days)
 
-Nothing risky should happen until we can detect and reverse it. This phase exists because the codebase currently has **no CI, no tests, no migration runner, no backups, no error tracking, and previews that write to production data.**
+~~Nothing risky should happen until we can detect and reverse it. This phase exists because the codebase currently has **no CI, no tests, no migration runner, no backups, no error tracking, and previews that write to production data.**~~
+Update 2026-10-16: CI (typecheck+build+lint+unit+E2E), migration chain
+0001–0012, nightly backups, and previews isolated on their own D1/R2 now
+exist — see §7. Remaining: vendor alerting (needs a signup), PNG icon, CSP.
 
 | Task | Detail |
 |---|---|
@@ -198,9 +201,39 @@ Voice is the reason users are here, and today it fails in ways users cannot diag
 
 ---
 
+## Session log — 2026-10-16 plan catch-up
+
+Closed, verified live unless noted:
+
+| Item | Evidence |
+|---|---|
+| Preview isolation (Phase 0) | preview D1 `366b9b76-…` + `ms-rooms-preview` R2 created; `[env.preview]` active in `wrangler.toml`; migrated 0001–0012 |
+| Prod D1 runner adoption (Phase 0/2) | 0011 applied via execute (username-dupe check clean); 0012 applied; `d1_migrations` marked 0001–0012. 0008/0009/0010 effects verified present — never re-run their destructive rebuilds |
+| Browser error telemetry (Phase 0) | migration 0012 + `POST /api/client-errors` collector + admin Errors tab; beacon verified stored on local stack |
+| Unauthenticated probe sweep (Phase 1.20) | `scripts/probe-auth.mjs` fully green on prod after fixing ticket-detail auth ordering (was an existence oracle: 404 vs 401) |
+| Security headers (Phase 1.13) | verified on prod: nosniff, SAMEORIGIN, strict referrer, mic/camera/display-capture Permissions-Policy. CSP deliberately not added (would risk breaking Firebase auth; needs report-only tuning) |
+| Grouped conversation hydration (Phase 2 N+1) | `GET /api/conversations` + `unread-count` down to 4 + 1 statements; shape/unread verified identical on local stack |
+| Account deletion (Phase 2) | attachment keys collected before message delete (was matching nothing), R2 objects deleted, `client_errors` nulled; ledger/tombstone model kept |
+| Session retention (Phase 2) | expired-session prune added to the existing sweep |
+| 1:1 call audio (Phase 3) | local tracks were never attached (recvonly offers, silent calls) — now sendrecv transceivers; STUN fallback; 48k ideal capture; E2E proves bytes flow |
+| Rush/PK honest copy + PK double-onEnd (Phase 4) | no more "bonus XP" / real-room claims; practice-bout labeling; endedRef guard |
+| Static shells, metadata, PWA manifest (Phase 5) | verified in `out/`: crawlable landing, per-route metadata, manifest linked |
+| AI moderation posture (Phase 1.19) | already fail-closed in `lib/ai.ts`; Gemini processing disclosed in privacy policy |
+| False-plan claims corrected | `infra/cloud-armor` already gone; ledger types already `admin_credit`/`debit`; gift attribution already host-correct; signal poison pill already chunked; 008/009 effects already on prod |
+
+Honestly remaining (needs a human, a device lab, or a signup):
+
+| Item | Why not done here |
+|---|---|
+| Real-device voice matrix (Phase 3 exit) | needs physical devices on LAN/home-NAT/hotspot + mid-call drop tests |
+| Sentry/vendor alerting + 5xx alerts | needs an account signup; the D1 beacon is the zero-cost substitute |
+| PNG `apple-touch-icon` | iOS ignores the SVG; needs an image export |
+| CSP header | needs report-only tuning against Firebase/reCAPTCHA to avoid breaking login |
+| Age-gate / moderation process docs | policy decision, not code |
+| Timestamp cross-table migration, avatar R2 move | risk > benefit while per-table formats are consistent (verified) |
 ## 5. Already completed in this session
 
-The two schema-mismatch fixes you approved — including the hardening they made necessary.
+The two schema-mismatch fixes you approved - including the hardening they made necessary.
 
 | Change | Files |
 |---|---|

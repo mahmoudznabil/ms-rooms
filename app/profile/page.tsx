@@ -145,9 +145,14 @@ function OwnProfile() {
   const deleteAccount = async () => {
     setDeleteBusy(true);
     try {
+      // Double-submit CSRF (same flow as lib/api.ts): the raw fetch below
+      // carries cookies but no custom header, which the backend rejects.
+      const csrfRes = await fetch("/api/csrf", { credentials: "include" });
+      const { csrf_token } = (await csrfRes.json().catch(() => ({}))) as { csrf_token?: string };
       const res = await fetch("/api/users/me/delete", {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json", ...(csrf_token ? { "X-CSRF-Token": csrf_token } : {}) },
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Failed to delete account");

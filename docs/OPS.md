@@ -33,6 +33,11 @@ npx wrangler pages deploy out --project-name=ms-rooms
 Exit criterion for Phase 0: deploy a build, confirm it serves, roll it back, and
 confirm the old build is live again.
 
+Rehearsal evidence 2026-10-16: prior production deployments stay addressable
+after newer deploys (e.g. `c34be5eb.ms-rooms.pages.dev/api/rooms` → 200 after
+`735d8084` went live), so the dashboard Rollback target always exists. A full
+dashboard-rollback drill remains a manual click away.
+
 **Order-of-operations rule for schema + code changes:** apply the SQL migration
 *first*, then deploy the code that depends on it. A code rollback (mechanism 1)
 never rolls back the schema; if you must undo the schema, restore the bookmark.
@@ -83,23 +88,21 @@ D1_DATABASE=audioroom-db node scripts/backup-d1.mjs
 
 ## 3. Observability
 
-### 3.1 Browser errors (wired)
+### 3.1 Browser errors (live)
 
 `components/Telemetry.tsx` installs global `error` / `unhandledrejection`
-capture from `lib/telemetry.ts` on every page. It is a **no-op** until you set a
-sink, so it ships safely by default.
+capture from `lib/telemetry.ts` on every page. Batches POST to the
+same-origin collector `POST /api/client-errors` by default — no configuration
+needed (override with build-time `NEXT_PUBLIC_TELEMETRY_URL` to forward to
+Sentry/a vendor instead).
 
-To enable: set the build-time variable to any endpoint that accepts
-`POST { events: [...] }`:
+Server side (`workers/backend.ts`): capped fields, 30/min rate limit,
+best-effort session attribution, 30-day retention prune on every write.
+Read them in the admin dashboard **Errors** tab (master only), which also shows
+24h counts by kind.
 
-```bash
-# .env.production (or the Pages build environment variable)
-NEXT_PUBLIC_TELEMETRY_URL="https://<your-collector>/ingest"
-```
-
-Recommended: a small Cloudflare Worker (or your existing log backend) that
-forwards to Sentry/DataDog. If you prefer the Sentry SDK directly, that is a
-drop-in later — the capture points are the same.
+Privacy: the beacon sends `{ kind, message, stack, url }` only — no form
+contents, no cookies. Stacks may contain route URLs; retention is 30 days.
 
 ### 3.2 Pages Function errors (wired)
 
@@ -138,11 +141,11 @@ your collector) and search the Function logs for it.
 These need a Cloudflare/GCP dashboard action or credentials I don't have. Each
 is a prerequisite for the phase it belongs to.
 
-| # | Action | Command / location | Phase |
-|---|---|---|---|
-| 1 | Create the preview D1 database | `npx wrangler d1 create audioroom-db-preview` | 0 |
-| 2 | Create the preview R2 bucket | `npx wrangler r2 bucket create ms-rooms-preview` | 0 |
-| 3 | Paste the preview ids into `wrangler.toml` | replace `REPLACE_WITH_PREVIEW_DATABASE_ID` | 0 |
+| # | Action | Command / location | Phase | Status |
+|---|---|---|---|---|
+| 1 | Create the preview D1 database | `npx wrangler d1 create audioroom-db-preview` | 0 | ✅ done 2026-10-16 (`366b9b76-…`, migrated 0001–0012) |
+| 2 | Create the preview R2 bucket | `npx wrangler r2 bucket create ms-rooms-preview` | 0 | ✅ done 2026-10-16 |
+| 3 | Paste the preview ids into `wrangler.toml` | replace `REPLACE_WITH_PREVIEW_DATABASE_ID` | 0 | ✅ done — `[env.preview]` active |
 | 4 | Create the backup R2 bucket | `npx wrangler r2 bucket create ms-rooms-backups` | 0 |
 | 5 | Add GitHub secrets for backup | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `R2_BACKUP_BUCKET` | 0 |
 | 6 | Set the telemetry sink | Pages build env `NEXT_PUBLIC_TELEMETRY_URL` | 0 |
