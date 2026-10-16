@@ -20,5 +20,10 @@ npm-debug.log*
 # local wrangler state (dev D1 data, build cache)
 .wrangler/
 
+# test artifacts
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
 # scaffold artifact from the initial generator workaround
 /best-audio-room/

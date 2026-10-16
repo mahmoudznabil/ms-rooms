@@ -65,6 +65,9 @@ export function logAIEvent(feature: "reply" | "summarize" | "moderate" | "transl
 // --- Performance traces (Firebase Performance Monitoring) ---
 export async function trace<T>(name: string, fn: () => Promise<T>): Promise<T> {
   if (typeof window === "undefined") return fn();
+  // Performance Monitoring collects usage and timing data just like Analytics;
+  // keep it behind the same explicit consent decision.
+  if (!hasAnalyticsConsent()) return fn();
   let stop: (() => void | Promise<void>) | null = null;
   try {
     const perf = await getFirebasePerformance();
