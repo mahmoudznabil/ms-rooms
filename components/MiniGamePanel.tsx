@@ -326,7 +326,6 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
           </p>
         )}
         {game === "ludo" && (
-        {game === "ludo" && (
           <div>
             <div className="mx-auto w-fit rounded-2xl bg-white/[0.04] p-2">
               <div

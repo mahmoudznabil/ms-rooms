@@ -15,13 +15,46 @@
 -- only by the room realtime layer and historically holds few rows (games were
 -- local-only until this migration), so the copy step is cheap.
 --
--- NOT RE-RUNNABLE: this drops and recreates `game_sessions`. Take a D1 Time
+-- NOT RE-RUNNABLE via the migrations runner (it drops and recreates
+-- `game_sessions`), with one deliberate exception below. Take a D1 Time
 -- Travel bookmark first. Additive after this point only.
+--
+-- PROD DISCOVERY (2026-10-16): prod has 0001–0013 marked applied but NO
+-- `game_sessions` table at all — 0001's CREATE evidently never ran there, so a
+-- bare RENAME would fail the whole batch. The migration therefore first ensures
+-- the table EXISTS (CREATE IF NOT EXISTS with the final schema), then runs the
+-- rebuild unconditionally:
+--   * table missing (prod)  → created, rebuild copies 0 rows, semantic no-op;
+--   * table new-shape (local, already migrated) → rebuild copies N rows back;
+--   * table old-shape (fresh 0001→0014 apply) → CHECK widened, 'none' mapped.
 --
 -- Apply with:
 --   npx wrangler d1 execute audioroom-db --remote --file=migrations/0014_widen_game_sessions.sql
 
 PRAGMA defer_foreign_keys = on;
+
+-- Ensure-exists so the RENAME below never fails on databases (like prod)
+-- where 0001's CREATE never ran. New-shape: a later rebuild in this same file
+-- is a copy-back no-op for it.
+CREATE TABLE IF NOT EXISTS game_sessions (
+  id TEXT PRIMARY KEY,
+  room_id TEXT,
+  game_type TEXT NOT NULL CHECK (game_type IN (
+    'ludo',
+    'reaction',
+    'trivia',
+    'memory',
+    'rush',
+    'pk'
+  )),
+  state_json TEXT NOT NULL DEFAULT '{}',
+  current_turn_user_id TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','active','finished')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+  FOREIGN KEY (current_turn_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
 
 ALTER TABLE game_sessions RENAME TO game_sessions_old;
 
