@@ -745,28 +745,45 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           }
           const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
           if (!user) return notFound("User not found.");
-          const existing = await env.DB.prepare(
-            `SELECT user_id FROM seats WHERE room_id = ? AND seat_index = ?`
-          )
-            .bind(roomId, seatIndex)
-            .first();
-          if (existing && (existing as Record<string, unknown>).user_id) {
-            return conflict(`Seat ${seatIndex} is already taken.`);
+          // Host/lock state drives the guards below.
+          const roomRow = (await env.DB.prepare(`SELECT host_user_id, locked FROM rooms WHERE id = ?`).bind(roomId).first()) as Record<string, unknown> | null;
+          const hostUserId = roomRow?.host_user_id as string | null;
+          if (Number(roomRow?.locked ?? 0) === 1 && userId !== hostUserId) {
+            return j({ ok: false, error: "This room is locked." }, 403);
           }
-          if (existing) {
-            await env.DB.prepare(
-              `UPDATE seats SET user_id = ?, role = ?, is_muted = 0, joined_at = CURRENT_TIMESTAMP
-               WHERE room_id = ? AND seat_index = ?`
-            )
-              .bind(userId, seatIndex === 0 ? "host" : "speaker", roomId, seatIndex)
-              .run();
-          } else {
-            await env.DB.prepare(
-              `INSERT INTO seats (room_id, seat_index, user_id, role, is_muted, joined_at)
-               VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`
-            )
-              .bind(roomId, seatIndex, userId, seatIndex === 0 ? "host" : "speaker")
-              .run();
+          // Seat 0 is the host seat: only the room host may hold it, so a
+          // stranger can never take it and appear as host.
+          if (seatIndex === 0 && userId !== hostUserId) {
+            return j({ ok: false, error: "Seat 1 is reserved for the host." }, 403);
+          }
+          // One seat per user: sitting twice splits presence across the grid.
+          const mySeat = (await env.DB.prepare(
+            `SELECT seat_index FROM seats WHERE room_id = ? AND user_id = ?`
+          ).bind(roomId, userId).first()) as Record<string, unknown> | null;
+          if (mySeat && Number(mySeat.seat_index) !== seatIndex) {
+            return conflict("You're already on another seat — leave it first.");
+          }
+          // Atomic claim: concurrent takes resolve to exactly one winner and
+          // the loser gets a 409 instead of a raw UNIQUE 500.
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO seats (room_id, seat_index, user_id, role, is_muted, joined_at)
+             VALUES (?, ?, NULL, 'speaker', 0, NULL)`
+          ).bind(roomId, seatIndex).run();
+          const claim = await env.DB.prepare(
+            `UPDATE seats SET user_id = ?, role = ?, is_muted = 0, joined_at = CURRENT_TIMESTAMP
+             WHERE room_id = ? AND seat_index = ? AND (user_id IS NULL OR user_id = ?)`
+          )
+            .bind(userId, seatIndex === 0 ? "host" : "speaker", roomId, seatIndex, userId)
+            .run();
+          const claimed = (claim as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
+          if (claimed !== 1) {
+            const holder = (await env.DB.prepare(
+              `SELECT user_id FROM seats WHERE room_id = ? AND seat_index = ?`
+            ).bind(roomId, seatIndex).first()) as Record<string, unknown> | null;
+            if (holder?.user_id && holder.user_id !== userId) {
+              return conflict(`Seat ${seatIndex} is already taken.`);
+            }
+            return j({ ok: false, error: "Could not take that seat. Try again." }, 500);
           }
           return j({ ok: true, room_id: roomId, seat_index: seatIndex, user_id: userId });
         }

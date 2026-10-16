@@ -206,6 +206,19 @@ function RoomViewInner() {
     return () => clearInterval(t);
   }, [slug, user, reloadSeats]);
 
+  // Server-mute backstop (sits with the other effects, above the early
+  // returns): if my seat reads muted — host muted me, or I muted on another
+  // device — while my local mic is still live, stop transmitting. Never send
+  // audio the room shows as muted.
+  const serverMuted = mySeat?.is_muted === 1;
+  const micLive = voice.micOn;
+  const voiceToggle = voice.toggleMic;
+  useEffect(() => {
+    if (serverMuted && micLive) {
+      void voiceToggle();
+    }
+  }, [serverMuted, micLive, voiceToggle]);
+
   // Chat autoscroll + notice timeout + rush countdown.
   useEffect(() => {
     const el = chatRef.current;
@@ -496,11 +509,21 @@ function RoomViewInner() {
   const handleMuteToggle = async (index: number, currentlyMuted: boolean) => {
     try {
       await muteSeat(slug, index, !currentlyMuted);
+      // Muting my own seat must also stop my transmitted audio right away:
+      // the seat flag is what others see, the track is what they hear, and
+      // the 5s seat poll would otherwise leave me transmitting while muted.
+      if (!currentlyMuted && mySeat?.seat_index === index && voice.micOn) {
+        await voice.toggleMic();
+      }
       await reloadSeats();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Could not change mic state.");
     }
   };
+
+  // Backstop for the other direction: the host muted my seat (or I muted on
+  // another device). If the server says muted but my mic is still live, stop
+  // transmitting — never send audio the room shows as muted.
 
   const handleSend = async () => {
     const text = draft.trim();
