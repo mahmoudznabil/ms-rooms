@@ -13,6 +13,7 @@ import NotificationBell from "@/components/NotificationBell";
 import OnboardingTour from "@/components/OnboardingTour";
 import IncomingCallGate from "@/components/IncomingCallGate";
 import { UserAvatar } from "@/components/bits";
+import { getUnreadCount } from "@/lib/api";
 
 // LoginView pulls in FirebaseAuthPanel, and with it firebase/auth and the
 // reCAPTCHA App Check script (~347 KB, ~1.5s of main-thread work). AppShell
@@ -138,10 +139,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const missed = useCalls((s) => s.missed);
   const refreshMissed = useCalls((s) => s.refreshMissed);
 
+  // Phase C3: the Messages tab is the unified chats+calls surface, so its
+  // badge combines missed calls with unread DMs. Polled on the same cadence
+  // as the missed-call badge; best-effort (a failed poll keeps the old dot).
+  const [convUnread, setConvUnread] = useState(0);
+
   useEffect(() => {
     if (!user) return;
     void refreshMissed();
-    const t = setInterval(() => void refreshMissed(), 30000);
+    const refreshConv = () => {
+      getUnreadCount()
+        .then((r) => setConvUnread(Number(r.unread_count ?? 0)))
+        .catch(() => undefined);
+    };
+    void refreshConv();
+    const t = setInterval(() => {
+      void refreshMissed();
+      refreshConv();
+    }, 30000);
     return () => clearInterval(t);
   }, [user, refreshMissed]);
 
@@ -201,6 +216,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <n.icon size={17} />
               {n.label}
               {n.href === "/calls" && <MissedBadge count={missed} />}
+              {n.href === "/messages" && <MissedBadge count={missed + convUnread} />}
             </Link>
           ))}
         </nav>
@@ -260,8 +276,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 </span>
               )}
             </Link>
-            <Link prefetch={false} href="/messages" aria-label="Messages" className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
+            <Link prefetch={false} href="/messages" aria-label="Messages" className="relative grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <MessageCircle size={16} />
+              {missed + convUnread > 0 && (
+                <span className="absolute -right-1 -top-1 rounded-full bg-red-500 px-1 text-[9px] font-black text-white">
+                  {missed + convUnread > 9 ? "9+" : missed + convUnread}
+                </span>
+              )}
             </Link>
             <Link prefetch={false} href="/search" aria-label="Search" className="grid h-11 w-11 place-items-center rounded-full bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white">
               <Search size={16} />

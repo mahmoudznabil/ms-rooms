@@ -204,7 +204,6 @@ empty/new-shape tables. Applied prod 2026-10-16, marked in `d1_migrations`.
 Same order-of-operations as §1: migration first, code second.
 
 ### 6.3 Server trivia packs (Phase B, `trivia_packs`)
-
 | Endpoint | Effect |
 |---|---|
 | `POST /api/admin/trivia/generate { topic?, title? }` | Admin-gated (`admin_session`). Prompts Workers AI (`@cf/meta/llama-3.2-1b-instruct` via `runAi`, `workers/backend.ts`); strictly validates the reply (exactly 5 × `{ q, options[4 unique], correct }`, shared validator `workers/trivia-validate.ts`) and stores it as `source='ai'`. 503 `ai_unavailable` when the `[ai]` binding is absent; 502 `ai_malformed` when the reply fails validation (stores nothing). Logs to `ai_usage_events`. |
@@ -216,3 +215,20 @@ prod, then mark in prod `d1_migrations`. The `[ai]` binding (`wrangler.toml`
 `[ai]` + `[env.preview.ai]` — singleton tables, not `[[ai]]` arrays, which
 wrangler rejects) flows through `functions/api/[[path]].ts`
 (`PagesEnv.AI`) untouched — the shim passes `env` wholesale.
+
+### 6.4 Unified chats tab (Phase C — client only, no migration)
+
+The Messages tab (`components/ChatPanel.tsx`) merges DMs and call recents
+into one per-peer list (pure kernel `lib/chat-list.ts`):
+- C1: each row shows the latest activity (last message OR last call) with a
+  timestamp; tapping a call row opens/creates the DM thread with that peer.
+- C2: inside a thread, the newest 5 calls with that peer render inline
+  ("Voice · 3:12 · ended", "Missed video call"). Recents refresh on open,
+  on the 4s message poll, and on the direct-DM boot path, so an ended call
+  appears without leaving the thread.
+- C3: the Messages tab badge (`components/AppShell.tsx`) sums missed calls
+  (`/api/calls/missed-count`) + unread DMs (`/api/conversations/unread-count`)
+  on the sidebar and mobile topbar. Per-thread unread reuses the existing
+  conversation `unread_count` badge; missed incoming calls show a persistent
+  red dot (WhatsApp style — a fact, not a clearable state). The standalone
+  Calls tab and its badge/clearing flow are unchanged.

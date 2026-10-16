@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Check, CheckCheck, Phone, Send, Sparkles, Languages, Video, X } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, Phone, PhoneMissed, Send, Sparkles, Languages, Video, X } from "lucide-react";
 import { useSession } from "@/stores/useSession";
 import {
   getConversation,
@@ -11,9 +11,17 @@ import {
   listMessages,
   sendMessage,
   markConversationRead,
+  callRecents,
+  type CallItem,
   type ConversationWithParticipants,
   type Message,
 } from "@/lib/api";
+import {
+  callsWithPeer,
+  formatCallSubtitle,
+  mergeChatEntries,
+  type ChatListEntry,
+} from "@/lib/chat-list";
 import { placeCall } from "@/lib/calls";
 import { aiModerateContent, aiTranslate, aiSummarizeConversation, aiSuggestReplies } from "@/lib/ai";
 import { logChatEvent } from "@/lib/metrics";
@@ -32,6 +40,10 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
   const [activeConv, setActiveConv] = useState<ConversationWithParticipants | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
+  // Call recents merged into the same list (Phase C1) and into the per-thread
+  // history block (Phase C2). Refreshed with the list, on thread open, and on
+  // the message poll so an ended call appears without leaving the thread.
+  const [recents, setRecents] = useState<CallItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sending, setSending] = useState(false);
@@ -51,12 +63,23 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
 
   const loadList = useCallback(async () => {
     try {
-      const { conversations } = await listConversations();
+      const [{ conversations }, { calls }] = await Promise.all([
+        listConversations(),
+        callRecents(30).catch(() => ({ calls: [] as CallItem[] })),
+      ]);
       setConversations(conversations);
+      setRecents(calls);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load conversations.");
     }
   }, []);
+
+  // One unified per-peer list (Phase C1): DMs and call recents collapse into
+  // a single row each showing whichever is latest.
+  const entries: ChatListEntry[] = useMemo(
+    () => mergeChatEntries(conversations, recents, user?.id ?? ""),
+    [conversations, recents, user]
+  );
 
   const openConversation = useCallback(async (id: string) => {
     setActiveId(id);
@@ -67,11 +90,14 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
     setError(null);
     setLoading(true);
     try {
-      const [{ messages }, conv] = await Promise.all([
+      const [{ messages }, conv, { calls }] = await Promise.all([
         listMessages(id, 50),
         getConversation(id).catch(() => null),
+        // Fresh recents for the in-thread call-history block (Phase C2).
+        callRecents(50).catch(() => ({ calls: [] as CallItem[] })),
       ]);
       setMessages(messages);
+      setRecents(calls);
       if (conv) setActiveConv(conv.conversation);
       void markConversationRead(id).catch(() => undefined);
       logChatEvent("open_conversation", { conversation_id: id });
@@ -81,6 +107,22 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
       setLoading(false);
     }
   }, []);
+
+  // Tapping a call row opens (creating if needed) the DM thread with that
+  // peer — the thread is where the call history lives (Phase C2).
+  const openPeerThread = useCallback(
+    async (peerId: string) => {
+      setError(null);
+      try {
+        const { conversation } = await getOrCreateDirectConversation(peerId);
+        await openConversation(conversation.id);
+        void loadList();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not open conversation.");
+      }
+    },
+    [loadList, openConversation]
+  );
 
   // Boot: DM target -> get-or-create; explicit id -> open; else list
   useEffect(() => {
@@ -94,9 +136,13 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
           if (!cancelled) {
             setActiveId(conversation.id);
             setActiveConv(conversation);
-            const { messages } = await listMessages(conversation.id, 50);
+            const [{ messages }, { calls }] = await Promise.all([
+              listMessages(conversation.id, 50),
+              callRecents(50).catch(() => ({ calls: [] as CallItem[] })),
+            ]);
             if (!cancelled) {
               setMessages(messages);
+              setRecents(calls);
               void markConversationRead(conversation.id).catch(() => undefined);
             }
           }
@@ -116,17 +162,22 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
     };
   }, [userId, initialId, loadList, openConversation]);
 
-  // Poll active thread
+  // Poll active thread (messages + recents so an ended call appears as a
+  // history row without leaving the thread — Phase C2 acceptance).
   useEffect(() => {
     if (!activeId) return;
     const t = setInterval(async () => {
       try {
-        const { messages } = await listMessages(activeId, 50);
+        const [{ messages }, { calls }] = await Promise.all([
+          listMessages(activeId, 50),
+          callRecents(50).catch(() => ({ calls: [] as CallItem[] })),
+        ]);
         setMessages((prev) => {
           const ids = new Set(prev.map((m) => m.id));
           const fresh = messages.filter((m) => !ids.has(m.id));
           return fresh.length ? [...prev, ...fresh] : prev;
         });
+        setRecents(calls);
       } catch {
         // silent — last state stays
       }
@@ -242,6 +293,17 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
     }
   };
 
+  // In-thread call history with this peer, newest 5 (Phase C2). Recents are
+  // refreshed on open and on the 4s poll, so an ended call appears as a row
+  // without leaving the thread. Declared before any early return (hooks
+  // order); the peer is derived inline from the active conversation.
+  const peerCalls = useMemo(() => {
+    const parts = (activeConv?.participants ?? []).filter((p) => p.user_id !== user?.id);
+    const direct = activeConv != null && activeConv.type === "direct" && parts.length === 1;
+    const peer = direct ? parts[0] : null;
+    return peer ? callsWithPeer(recents, peer.user_id, 5) : [];
+  }, [recents, activeConv, user]);
+
   if (!user) return <p className="p-6 text-center text-sm text-white/50">Sign in to message.</p>;
 
   // List view
@@ -261,29 +323,58 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
             <p className="py-10 text-center text-sm text-white/40">Loading conversations…</p>
           ) : error ? (
             <div className="rounded-2xl bg-red-500/10 p-4 text-center text-sm text-red-300">{error}</div>
-          ) : conversations.length === 0 ? (
+          ) : entries.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-white/15 p-8 text-center">
               <p className="font-bold text-white/80">No conversations yet</p>
-              <p className="mt-1 text-sm text-white/45">Open someone&apos;s profile and tap Message.</p>
+              <p className="mt-1 text-sm text-white/45">Open someone&apos;s profile and tap Message — calls with them will show up here too.</p>
             </div>
           ) : (
             <ul className="space-y-2">
-              {conversations.map((c) => {
-                const others = c.participants.filter((p) => p.user_id !== user.id);
-                const title = others.map((p) => p.user.display_name).join(", ") || "Chat";
+              {entries.map((entry) => {
+                if (entry.kind === "dm") {
+                  const c = entry.conversation;
+                  const time = c.last_message ? new Date(c.last_message.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+                  return (
+                    <li key={entry.key}>
+                      <button onClick={() => void openConversation(c.id)} className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm font-extrabold">
+                          {entry.peerInitial}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-baseline justify-between gap-2">
+                            <span className="truncate text-sm font-bold">{entry.peerName}</span>
+                            {time && <span className="shrink-0 text-[10px] text-white/35">{time}</span>}
+                          </span>
+                          <span className="block truncate text-xs text-white/45">{c.last_message?.content ?? "No messages yet"}</span>
+                        </span>
+                        {c.unread_count > 0 && (
+                          <span className="rounded-full bg-violet-500 px-2 py-0.5 text-xs font-bold">{c.unread_count > 99 ? "99+" : c.unread_count}</span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                }
+                // Call row: peer, last-call subtitle, timestamp; missed
+                // incoming calls carry a red dot (persistent fact, WhatsApp
+                // style). Tapping opens/creates the DM thread (Phase C2 lives
+                // there).
+                const sub = formatCallSubtitle(entry.call);
+                const time = new Date(entry.call.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                const peerId = entry.call.peer.id;
                 return (
-                  <li key={c.id}>
-                    <button onClick={() => void openConversation(c.id)} className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm font-extrabold">
-                        {title.slice(0, 1).toUpperCase()}
+                  <li key={`${entry.key}:${entry.call.id}`}>
+                    <button onClick={() => void openPeerThread(peerId)} className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/70">
+                        {sub.missed ? <PhoneMissed size={16} className="text-red-400" /> : entry.call.media === "video" ? <Video size={16} /> : <Phone size={16} />}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-bold">{title}</span>
-                        <span className="block truncate text-xs text-white/45">{c.last_message?.content ?? "No messages yet"}</span>
+                        <span className="flex items-baseline justify-between gap-2">
+                          <span className="truncate text-sm font-bold">{entry.peerName}</span>
+                          <span className="shrink-0 text-[10px] text-white/35">{time}</span>
+                        </span>
+                        <span className={`block truncate text-xs ${sub.missed ? "font-semibold text-red-400" : "text-white/45"}`}>{sub.text}</span>
                       </span>
-                      {c.unread_count > 0 && (
-                        <span className="rounded-full bg-violet-500 px-2 py-0.5 text-xs font-bold">{c.unread_count > 99 ? "99+" : c.unread_count}</span>
-                      )}
+                      {sub.missed && <span aria-label="Missed call" className="h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" />}
                     </button>
                   </li>
                 );
@@ -363,10 +454,29 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
             Load older messages
           </button>
         )}
-        {!loading && messages.length === 0 && (
+        {!loading && messages.length === 0 && peerCalls.length === 0 && (
           <div className="rounded-2xl border border-dashed border-white/15 p-6 text-center">
             <p className="text-sm font-bold text-white/70">Say hi 👋</p>
             <p className="mt-1 text-xs text-white/40">Messages sync across devices.</p>
+          </div>
+        )}
+        {peerCalls.length > 0 && (
+          <div aria-label="Recent calls" className="rounded-2xl bg-white/[0.03] p-2">
+            {peerCalls.map((call) => {
+              const sub = formatCallSubtitle(call);
+              const when = new Date(call.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+              return (
+                <div key={call.id} className="flex items-center gap-2.5 rounded-xl px-2 py-1.5">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/5 text-white/60">
+                    {sub.missed ? <PhoneMissed size={12} className="text-red-400" /> : call.media === "video" ? <Video size={12} /> : <Phone size={12} />}
+                  </span>
+                  <span className={`min-w-0 flex-1 truncate text-xs ${sub.missed ? "font-semibold text-red-400" : "text-white/55"}`}>
+                    {sub.text}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-white/30">{when}</span>
+                </div>
+              );
+            })}
           </div>
         )}
         {messages.map((m) => {
