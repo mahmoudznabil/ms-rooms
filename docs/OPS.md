@@ -168,3 +168,51 @@ is a prerequisite for the phase it belongs to.
 
 Never put server secrets in `.env.production`; that file holds only browser-public
 `NEXT_PUBLIC_*` values.
+
+---
+
+## 6. Paid games + voice metering (Phase A, live since `b44a70b`)
+
+### 6.1 Endpoints (`workers/backend.ts`)
+
+| Endpoint | Effect |
+|---|---|
+| `POST /api/games/start { game_type, room_id? }` | Atomic fee debit (`UPDATE … WHERE coins >= fee`), inserts a `game_sessions` row (`status='active'`), returns `session_id`. 409 when broke or at the 10/day/game cap. |
+| `POST /api/games/finish { session_id, score }` | Clamps `score` to the per-game max, awards FIXED xp (win 10 / play 2 — never proportional to score). Idempotent: double-finish returns the cached `{ xp_awarded, win }`, never a second award. |
+| `POST /api/rooms/:slug/voice-heartbeat` | 1 coin/min while the mic is on (+1 xp). Host exempt in own room; muted seats not billed; stops billing at 60 coins/day (caller keeps talking). 402 `out_of_coins` → client auto-mutes and shows a top-up nudge. |
+
+Fee table (server-side `GAME_ECON`, mirrored in `MiniGamePanel` only for the notice copy):
+ludo 5, trivia 5, reaction 2, memory 2, rush 10, pk 10.
+
+`POST /api/xp/award` stays reserved (no UI calls it) — game XP comes only from
+`/api/games/finish`, so an unfunded client cannot mint XP. Verified live by
+unauthenticated 403s on all three routes above (same guard shape as the rest of
+the API; see `scripts/probe-auth.mjs`).
+
+### 6.2 Schema
+
+`migrations/0014_widen_game_sessions.sql` — `game_type` CHECK widened from
+`('ludo','reaction','none')` to `('ludo','reaction','trivia','memory','rush','pk')`,
+`room_id` nullable (lobby/PK sessions), plus `idx_game_sessions_room` and
+`idx_game_sessions_user_type` for the finish-dedupe / daily-cap scans.
+
+**Prod discovery:** prod had 0001–0013 marked but NO `game_sessions` table
+(0001's CREATE never ran there — the table came from `scripts/migrate-004-pk-games.sql`,
+never a numbered migration). 0014 therefore starts with `CREATE TABLE IF NOT
+EXISTS` (final schema) and then rebuilds unconditionally — a copy-back no-op on
+empty/new-shape tables. Applied prod 2026-10-16, marked in `d1_migrations`.
+Same order-of-operations as §1: migration first, code second.
+
+### 6.3 Server trivia packs (Phase B, `trivia_packs`)
+
+| Endpoint | Effect |
+|---|---|
+| `POST /api/admin/trivia/generate { topic?, title? }` | Admin-gated (`admin_session`). Prompts Workers AI (`@cf/meta/llama-3.2-1b-instruct` via `runAi`, `workers/backend.ts`); strictly validates the reply (exactly 5 × `{ q, options[4 unique], correct }`, shared validator `workers/trivia-validate.ts`) and stores it as `source='ai'`. 503 `ai_unavailable` when the `[ai]` binding is absent; 502 `ai_malformed` when the reply fails validation (stores nothing). Logs to `ai_usage_events`. |
+| `GET /api/trivia/pack` | Returns the newest pack, else `{ pack: null, fallback: true }`. A stored row that fails validation reads as "no pack". No auth (questions are public); the panel (`loadTriviaDeck`, `components/MiniGamePanel.tsx`) asks the server first and falls back to its static 60-question pool. |
+
+`migrations/0015_trivia_packs.sql` — purely additive (`CREATE TABLE IF NOT
+EXISTS trivia_packs` + `idx_trivia_packs_created`). Apply local → preview →
+prod, then mark in prod `d1_migrations`. The `[ai]` binding (`wrangler.toml`
+`[ai]` + `[env.preview.ai]` — singleton tables, not `[[ai]]` arrays, which
+wrangler rejects) flows through `functions/api/[[path]].ts`
+(`PagesEnv.AI`) untouched — the shim passes `env` wholesale.

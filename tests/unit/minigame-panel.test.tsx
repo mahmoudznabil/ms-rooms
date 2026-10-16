@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MiniGamePanel from "@/components/MiniGamePanel";
 import { canMove, LUDO_HOME, LUDO_PLAYERS, ludoMove, TRACK, YARD } from "@/lib/games/ludo";
@@ -30,6 +30,11 @@ describe("MiniGamePanel — Ludo turn loop", () => {
     vi.spyOn(Math, "random").mockImplementation(lcg(0xbeef));
   });
   afterEach(() => {
+    // This repo's vitest config does not set `globals: true`, so
+    // @testing-library/react's auto-cleanup never registers — unmount
+    // explicitly, or every mount() piles another board into document.body and
+    // getByRole/querySelectorAll see all of them at once.
+    cleanup();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -42,21 +47,29 @@ describe("MiniGamePanel — Ludo turn loop", () => {
 
   /** Drive the human roll plus every bot turn until control returns (or a win). */
   function advanceOneRound() {
-    act(() => {
-      // 30s of virtual time covers a human roll (~0.7s) and several bot turns
-      // (0.9s wait + ~0.7s animation each, plus 6-granted extra turns). Once
-      // the human's turn returns no further timers fire, so overshooting is
-      // idempotent.
-      vi.advanceTimersByTime(30_000);
-    });
+    // Advance in 1s chunks (up to 60s virtual). A single large
+    // advanceTimersByTime STALLS the bot chain: the bot's setTimeout is
+    // scheduled from a useEffect that must commit between timer firings, and
+    // one giant synchronous tick never lets that commit happen mid-flight
+    // (proven by a debug spec: chunked 1s advances finish a full round in
+    // ~7s virtual; a single 30s advance sticks on "Blue is rolling…").
+    for (let t = 0; t < 60; t++) {
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      const humanBack = screen.queryByRole("button", { name: /roll dice/i }) !== null;
+      const won = screen.queryAllByText(/wins the round/i).length > 0;
+      if (humanBack || won) break;
+    }
   }
 
   it("20 rolls: every outcome is explained and the roll button always returns", () => {
     const { rollBtn } = mount();
 
     for (let i = 0; i < 20; i++) {
-      // If any player reached home, reset and keep rolling.
-      if (screen.queryByText(/wins the round/i)) {
+      // If any player reached home, reset and keep rolling. queryAllByText:
+      // the banner AND the status line both contain the phrase.
+      if (screen.queryAllByText(/wins the round/i).length > 0) {
         act(() => {
           fireEvent.click(screen.getByRole("button", { name: /reset game/i }));
         });
@@ -84,8 +97,11 @@ describe("MiniGamePanel — Ludo turn loop", () => {
     act(() => {
       vi.mocked(Math.random).mockReturnValue(0.4); // floor(0.4*6)+1 = 3
       fireEvent.click(rollBtn());
+      // Human animation is 660ms; the bot timer fires at 900ms. Advancing
+      // 800ms settles exactly the human roll, so the status line still shows
+      // the human's own dead-roll reason instead of a later bot's message.
+      vi.advanceTimersByTime(800);
     });
-    advanceOneRound();
 
     const status = screen.getByRole("status");
     expect(status.textContent).toMatch(/needs a 6 to leave the yard/i);
@@ -94,27 +110,28 @@ describe("MiniGamePanel — Ludo turn loop", () => {
   it("an overshoot roll near home is refused with an exact-roll explanation", () => {
     const { rollBtn } = mount();
 
-    // Walk the human token out and almost home with guaranteed 6s.
-    act(() => {
-      vi.mocked(Math.random).mockReturnValue(0.9); // 6
-      fireEvent.click(rollBtn());
+    // Script the FINALS of the next rolls: exit + three 6s walk 0→6→12→18
+    // (every 6 keeps the human turn, so no bot rolls interleave), then a 5,
+    // which overshoots home from 18 and must be refused. Each roll consumes
+    // 12 random calls (11 animation ticks + the final), so the script keys
+    // off every 12th call. A flat mockReturnValue(0.9) would NOT work here:
+    // every bot would also roll 6s and take infinite extra turns.
+    const finals = [6, 6, 6, 6, 5];
+    let calls = 0;
+    vi.mocked(Math.random).mockImplementation(() => {
+      calls++;
+      if (calls % 12 === 0) {
+        const v = finals[Math.floor(calls / 12) - 1] ?? 1;
+        return (v - 1) / 6 + 0.01; // floor(r*6)+1 === v
+      }
+      return 0.05; // animation ticks — the shown face is irrelevant
     });
-    advanceOneRound();
-    // Token is on START[0]=0. Three exact 6s → tile 18.
-    for (let i = 0; i < 3; i++) {
-      const btn = rollBtn();
-      if (btn.disabled) return; // a bot reached home first; nothing to assert
+    for (let i = 0; i < 5; i++) {
       act(() => {
-        fireEvent.click(btn);
+        fireEvent.click(rollBtn());
+        vi.advanceTimersByTime(800);
       });
-      advanceOneRound();
     }
-    // Now at 18: a 5 overshoots home and must be refused.
-    act(() => {
-      vi.mocked(Math.random).mockReturnValue(0.8); // floor(0.8*6)+1 = 5
-      fireEvent.click(rollBtn());
-    });
-    advanceOneRound();
 
     const status = screen.getByRole("status");
     expect(status.textContent).toMatch(/exact/i);

@@ -253,6 +253,38 @@ export async function finishGame(session_id: string, score: number): Promise<Gam
   return req(`/api/games/finish`, { method: "POST", body: JSON.stringify({ session_id, score }) });
 }
 
+// ---- Server trivia packs (Phase B) ------------------------------------------------
+// The panel asks the server first and falls back to its static 60-question pool
+// when no pack exists or the request fails. Server questions share the
+// TriviaQuestion shape ({ q, options[4], correct }).
+export interface ServerTriviaPack {
+  id: string;
+  title: string;
+  questions: Array<{ q: string; options: string[]; correct: number }>;
+  source: string;
+}
+
+export async function fetchTriviaPack(): Promise<ServerTriviaPack | null> {
+  const res = await req<{ ok: boolean; pack: ServerTriviaPack | null; fallback?: boolean }>(
+    `/api/trivia/pack`,
+    { cache: "no-store" }
+  );
+  if (!res || !res.pack || !Array.isArray(res.pack.questions)) return null;
+  const clean = res.pack.questions.filter(
+    (q) =>
+      q &&
+      typeof q.q === "string" &&
+      q.q.trim().length > 0 &&
+      Array.isArray(q.options) &&
+      q.options.length === 4 &&
+      q.options.every((o) => typeof o === "string" && o.trim().length > 0) &&
+      Number.isInteger(q.correct) &&
+      (q.correct as number) >= 0 &&
+      (q.correct as number) < 4
+  );
+  if (clean.length === 0) return null;
+  return { ...res.pack, questions: clean };
+}
 // ---- Voice heartbeat metering (Phase A4) ----------------------------------------
 // Posted by useRoomVoice every 60s while the mic is on. The host is exempt in
 // their own room and muted seats are not billed (the server decides both). A 402

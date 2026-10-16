@@ -10,6 +10,7 @@
 
 import { R2Bucket } from "@cloudflare/workers-types";
 import { requireUser, timingSafeEqual } from "./auth";
+import { isValidTriviaPack, parseTriviaPackReply } from "./trivia-validate";
 
 interface Env {
   // Typed as `any` to avoid requiring @cloudflare/workers-types.
@@ -34,6 +35,11 @@ interface Env {
   FIREBASE_PROJECT_ID?: string;
   RECAPTCHA_SITE_KEY?: string;
   RECAPTCHA_SECRET_KEY?: string;
+  // Workers AI binding (see [[ai]] in wrangler.toml). Optional: when absent
+  // (local dev, or a deployment without the binding) `runAi` returns null and
+  // callers degrade to static content instead of failing.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  AI?: any;
 }
 
 // Allowed origins. The API and the app are served from the same origin by
@@ -115,6 +121,32 @@ function newId(prefix: string): string {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
   return `${prefix}-${r}`;
+}
+
+// ---- Workers AI (Phase B) ---------------------------------------------------
+// Model for server-side trivia generation: small, instruction-tuned, ~12
+// Neurons per 5-question pack — comfortably inside the 10k req/day free tier.
+// `runAi` is the only place that touches `env.AI`: it returns the model's
+// plain-text answer, or null when the binding is absent / errors, so every
+// caller degrades to static content instead of 500ing.
+const TRIVIA_AI_MODEL = "@cf/meta/llama-3.2-1b-instruct";
+
+async function runAi(env: Env, prompt: string): Promise<string | null> {
+  try {
+    // `Env.AI` is typed `any` (workers-types not imported) — no cast needed.
+    const binding = env.AI as
+      | { run?: (model: string, input: unknown) => Promise<unknown> }
+      | undefined;
+    if (!binding || typeof binding.run !== "function") return null;
+    const out = (await binding.run(TRIVIA_AI_MODEL, {
+      prompt,
+      max_tokens: 1024,
+    })) as { response?: unknown } | null;
+    const text = out && typeof out.response === "string" ? out.response.trim() : "";
+    return text ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 // Best-effort in-isolate rate limiter. Keyed by IP+path, sliding 60s window.
@@ -1345,6 +1377,85 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         return j({ ok: true, session_id: sessionId, win, xp_awarded: xpAwarded, score, coins: (updated as Record<string, unknown> | null)?.coins ?? null, xp: (updated as Record<string, unknown> | null)?.xp ?? null });
       }
 
+      // ---- Server-side trivia packs (Phase B) -----------------------------------
+      // The client used to deal only from a static pool, which repeated within a
+      // single evening. Admins mint fresh 5-question packs with Workers AI; the
+      // game panel asks the server first and falls back to its static pool when
+      // no pack exists (or the AI binding is absent — `runAi` returns null and
+      // this endpoint degrades instead of 500ing).
+      //
+      // Validation is strict because the questions come from an LLM: exactly 5
+      // entries, each with a non-empty q, exactly 4 unique non-empty options,
+      // and a correct index in range. Anything else is rejected and nothing is
+      // stored — a malformed pack must never reach a room.
+      if (path === "/api/admin/trivia/generate" && request.method === "POST") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Invalid admin session." }, 401);
+        const body = await readJson<{ topic?: unknown; title?: unknown }>(request);
+        const topic = typeof body?.topic === "string" ? body.topic.slice(0, 80) : "general knowledge";
+        const title = typeof body?.title === "string" ? body.title.slice(0, 80) : "";
+
+        const prompt =
+          `Write 5 easy multiple-choice trivia questions about ${topic}. ` +
+          `Reply with ONLY a JSON array, no other text. Each item must look like ` +
+          `{"q":"...","options":["...","...","...","..."],"correct":0} ` +
+          `where correct is the 0-based index of the right answer. ` +
+          `Keep every question and option short, family-friendly, and factual.`;
+        const startedAt = Date.now();
+        const text = await runAi(env, prompt);
+        if (!text) {
+          return j({ ok: false, error: "AI binding unavailable — pack not generated.", code: "ai_unavailable" }, 503);
+        }
+
+        // Strict shape check: a malformed LLM reply stores nothing.
+        const parsed = parseTriviaPackReply(text);
+        if (!parsed || !isValidTriviaPack(parsed)) {
+          return j({ ok: false, error: "The AI returned a malformed pack — nothing stored. Try again.", code: "ai_malformed" }, 502);
+        }
+
+        try {
+          await env.DB.prepare(
+            `CREATE TABLE IF NOT EXISTS trivia_packs (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', questions_json TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT 'static' CHECK (source IN ('static', 'ai')), model TEXT NOT NULL DEFAULT '', created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (created_by) REFERENCES admin_users(id) ON DELETE SET NULL)`
+          ).run();
+        } catch { /* exists */ }
+        const packId = newId("tp");
+        await env.DB.prepare(
+          `INSERT INTO trivia_packs (id, title, questions_json, source, model, created_by) VALUES (?, ?, ?, 'ai', ?, ?)`
+        ).bind(packId, title || `AI pack: ${topic}`, JSON.stringify(parsed), TRIVIA_AI_MODEL, String(adm.id ?? "")).run();
+        try {
+          await env.DB.prepare(
+            `INSERT INTO ai_usage_events (id, user_id, feature, model, latency_ms, ok) VALUES (?, ?, 'trivia-generate', ?, ?, 1)`
+          ).bind(newId("ai"), String(adm.id ?? ""), TRIVIA_AI_MODEL, Date.now() - startedAt).run();
+        } catch { /* metrics best-effort */ }
+
+        return j({ ok: true, pack_id: packId, title: title || `AI pack: ${topic}`, questions: parsed }, 201);
+      }
+
+      if (path === "/api/trivia/pack" && request.method === "GET") {
+        try {
+          await env.DB.prepare(
+            `CREATE TABLE IF NOT EXISTS trivia_packs (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', questions_json TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT 'static' CHECK (source IN ('static', 'ai')), model TEXT NOT NULL DEFAULT '', created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (created_by) REFERENCES admin_users(id) ON DELETE SET NULL)`
+          ).run();
+        } catch { /* exists */ }
+        const row = await env.DB.prepare(
+          `SELECT id, title, questions_json, source, created_at FROM trivia_packs ORDER BY created_at DESC LIMIT 1`
+        ).first();
+        if (!row) return j({ ok: true, pack: null, fallback: true });
+        let questions: unknown = null;
+        try {
+          questions = JSON.parse(String((row as Record<string, unknown>).questions_json ?? "[]"));
+        } catch {
+          questions = null;
+        }
+        // A stored row that fails validation reads as "no pack" — the client
+        // falls back to its static pool instead of rendering garbage.
+        if (!isValidTriviaPack(questions)) {
+          return j({ ok: true, pack: null, fallback: true });
+        }
+        const r = row as Record<string, unknown>;
+        return j({ ok: true, pack: { id: r.id, title: r.title, questions, source: r.source }, fallback: false });
+      }
+
       // ---- Voice heartbeat metering (Phase A4) ----------------------------------------
       // Talking in a room costs 1 coin/min. The client posts this every 60s while the
       // mic is on; presence is already proven by the 5s seat poll, so a dropped tab
@@ -1787,7 +1898,7 @@ return j({ ok: true, ended: true });
         // Collect the user's attachment keys BEFORE their messages are deleted:
         // the cleanup subselect below reads messages.sender_id, so running it
         // after the message delete would match nothing and leak R2 objects.
-        let attachmentKeys: string[] = [];
+        const attachmentKeys: string[] = [];
         try {
           const rows = await env.DB.prepare(
             `SELECT r2_key, thumbnail_r2_key FROM message_attachments

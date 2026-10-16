@@ -184,11 +184,16 @@ export function ludoMove(players: LudoPlayer[], player: number, value: number): 
     };
   }
 
+  // A plain track move. Rolling a 6 keeps the turn (classic Ludo) — the yard
+  // exit is not special here; the extra turn belongs to the die face.
+  const rolledSix = value === 6;
   return {
     players: next,
-    nextPlayer: (player + 1) % next.length,
-    message: `${name} moved to tile ${landing + 1}.`,
-    extraTurn: false,
+    nextPlayer: rolledSix ? player : (player + 1) % next.length,
+    message: rolledSix
+      ? `${name} moved to tile ${landing + 1} — a 6, roll again!`
+      : `${name} moved to tile ${landing + 1}.`,
+    extraTurn: rolledSix,
     captured: [],
     moved: true,
   };

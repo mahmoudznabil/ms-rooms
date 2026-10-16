@@ -12,7 +12,7 @@ import {
   YARDS,
 } from "@/lib/games/ludo";
 import { buildTriviaDeck, TRIVIA_POOL, TRIVIA_ROUND, type TriviaQuestion } from "@/lib/games/trivia-pack";
-import { finishGame, startGame } from "@/lib/api";
+import { fetchTriviaPack, finishGame, startGame } from "@/lib/api";
 
 type GameType = "ludo" | "reaction" | "trivia" | "memory";
 
@@ -97,11 +97,34 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
   const [memoryMatched, setMemoryMatched] = useState<number[]>([]);
   const [memoryMoves, setMemoryMoves] = useState(0);
 
-  const ensureTriviaDeck = useCallback(() => {
-    setTriviaDeck((d) => (d.length ? d : buildTriviaDeck(TRIVIA_ROUND, [])));
+  // Phase B: ask the server for a fresh AI pack first; fall back to the static
+  // pool when none exists or the request fails. Server questions are shuffled
+  // and filtered against already-seen ones so repeat visits still feel fresh.
+  // `seenRef` mirrors `triviaSeen` so the async fetch never reads stale state.
+  const triviaSeenRef = useRef<string[]>([]);
+  useEffect(() => { triviaSeenRef.current = triviaSeen; }, [triviaSeen]);
+  const loadTriviaDeck = useCallback(async () => {
     setTriviaPos(0);
     setTriviaScore(0);
     setTriviaAnswer(null);
+    try {
+      const pack = await fetchTriviaPack();
+      if (pack) {
+        const seen = new Set(triviaSeenRef.current);
+        const fresh = pack.questions.filter((q) => !seen.has(q.q));
+        const source = fresh.length > 0 ? fresh : pack.questions;
+        const deck = [...source];
+        for (let i = deck.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [deck[i], deck[j]] = [deck[j], deck[i]];
+        }
+        setTriviaDeck(deck.slice(0, Math.min(TRIVIA_ROUND, deck.length)));
+        return;
+      }
+    } catch {
+      // fall through to the static pool
+    }
+    setTriviaDeck((d) => (d.length ? d : buildTriviaDeck(TRIVIA_ROUND, [])));
   }, []);
 
   const question = triviaDeck[triviaPos] ?? TRIVIA_POOL[0];
@@ -136,14 +159,14 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
         const started = await startGame(next, roomId);
         sessionRef.current = started.session_id;
         setGame(next);
-        if (next === "trivia") ensureTriviaDeck();
+        if (next === "trivia") void loadTriviaDeck();
         if (next === "memory") initMemory();
       } catch (err) {
         const message = err instanceof Error ? err.message : "Could not start the game.";
         setFeeNotice(`${message} (${GAME_FEE[next]} coins)`);
       }
     },
-    [roomId, ensureTriviaDeck, initMemory]
+    [roomId, loadTriviaDeck, initMemory]
   );
 
   // Settle the open session exactly once when a round ends. `finalScore` is the

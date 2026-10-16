@@ -16,6 +16,7 @@ import backend from "../../workers/backend";
 interface PagesEnv {
   DB?: unknown;
   CHAT_ATTACHMENTS?: unknown;
+  AI?: unknown;
   RECAPTCHA_SITE_KEY?: string;
   RECAPTCHA_SECRET_KEY?: string;
   TURN_KEY_ID?: string;

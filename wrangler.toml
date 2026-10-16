@@ -28,6 +28,14 @@ migrations_dir = "migrations"
 binding = "CHAT_ATTACHMENTS"
 bucket_name = "ms-rooms"
 
+# Workers AI (Workers AI LLM binding for Pages Functions). Used by Phase B
+# server-side trivia generation (`POST /api/admin/trivia/generate`).
+# Singleton table (NOT [[ai]]): wrangler rejects the array form.
+# When absent (local dev without the binding), the backend degrades to the
+# static 60-question pack — see `runAi` in workers/backend.ts.
+[ai]
+binding = "AI"
+
 # ---------------------------------------------------------------------------
 # Preview environment (ACTIVE — created 2026-10-16).
 #
@@ -48,3 +56,6 @@ migrations_dir = "migrations"
 [[env.preview.r2_buckets]]
 binding = "CHAT_ATTACHMENTS"
 bucket_name = "ms-rooms-preview"
+
+[env.preview.ai]
+binding = "AI"

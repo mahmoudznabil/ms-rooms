@@ -65,6 +65,20 @@ describe("ludoMove — track movement", () => {
     expect(res.moved).toBe(true);
   });
 
+  it("a 6 on the track keeps the turn; any other roll passes it", () => {
+    const six = ludoMove(board([0, YARD, YARD, YARD]), 0, 6);
+    expect(six.players[0].token).toBe(6);
+    expect(six.moved).toBe(true);
+    expect(six.extraTurn).toBe(true);
+    expect(six.nextPlayer).toBe(0);
+    expect(six.message).toMatch(/roll again/i);
+
+    const four = ludoMove(board([0, YARD, YARD, YARD]), 0, 4);
+    expect(four.players[0].token).toBe(4);
+    expect(four.extraTurn).toBe(false);
+    expect(four.nextPlayer).toBe(1);
+  });
+
   it("never walks past home — a roll crossing the finish is refused", () => {
     // The token circles the ring exactly once; there is no wrap-around past
     // the 20th tile. 18 + 5 would be 23, so the roll must be refused.
