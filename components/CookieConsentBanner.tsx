@@ -95,12 +95,23 @@ export default function CookieConsentBanner() {
       aria-label="Cookie consent"
     >
       <div className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong/95 backdrop-blur-sm p-4 shadow-2xl">
-        <div className="flex items-start gap-3 md:items-center">
+        {/* Three siblings: icon, copy, actions.
+
+            The actions used to be NESTED INSIDE the copy column, which kept the
+            banner three rows tall (measured 145px on the deployed site). On a
+            full-width strip there is horizontal room for them beside the copy,
+            and halving the height is what stops the notice covering the landing
+            hero's content on a short viewport.
+
+            flex-wrap handles the narrow case: the copy column is basis-full
+            below md so it takes its own line and the actions drop underneath,
+            which is the correct stacked order on mobile. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-xl bg-violet-500/20 text-violet-300">
             <Cookie size={20} />
           </div>
 
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-full md:basis-auto">
             <h3 className="text-sm font-bold text-white">Cookies & Sign-In</h3>
             <p className="mt-1 text-xs text-white/60 leading-relaxed">
               This site uses cookies for authentication. Google sign-in requires{" "}
@@ -115,30 +126,30 @@ export default function CookieConsentBanner() {
                 </div>
               </div>
             )}
+          </div>
 
-            <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 md:mt-0 md:pl-4">
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={accept}
+              className="rounded-lg bg-white px-4 py-1.5 min-h-[44px] text-xs font-semibold text-black transition hover:bg-white/85"
+            >
+              Accept All
+            </button>
+            <button
+              onClick={decline}
+              className="rounded-lg border border-white/15 bg-white/5 px-4 py-1.5 min-h-[44px] text-xs font-semibold text-white transition hover:bg-white/10"
+            >
+              Decline
+            </button>
+            {thirdPartyBlocked && (
               <button
-                onClick={accept}
-                className="rounded-lg bg-white px-4 py-1.5 min-h-[44px] text-xs font-semibold text-black transition hover:bg-white/85"
+                onClick={openCookieSettings}
+                className="flex items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/10 px-4 py-1.5 min-h-[44px] text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
               >
-                Accept All
+                <Settings size={12} />
+                Open Cookie Settings
               </button>
-              <button
-                onClick={decline}
-                className="rounded-lg border border-white/15 bg-white/5 px-4 py-1.5 min-h-[44px] text-xs font-semibold text-white transition hover:bg-white/10"
-              >
-                Decline
-              </button>
-              {thirdPartyBlocked && (
-                <button
-                  onClick={openCookieSettings}
-                  className="flex items-center gap-1 rounded-lg border border-violet-400/30 bg-violet-500/10 px-4 py-1.5 min-h-[44px] text-xs font-semibold text-violet-300 transition hover:bg-violet-500/20"
-                >
-                  <Settings size={12} />
-                  Open Cookie Settings
-                </button>
-              )}
-            </div>
+            )}
           </div>
 
           <button
