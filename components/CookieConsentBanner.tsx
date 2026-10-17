@@ -13,6 +13,10 @@ export default function CookieConsentBanner() {
   const [showBanner, setShowBanner] = useState(false);
   /** Observed by ResizeObserver so the reserved space tracks the real height. */
   const measureRef = useRef<HTMLDivElement | null>(null);
+
+  /** Single source of truth for "is the notice on screen", so the measuring
+   *  effect and the early return can never disagree. */
+  const bannerVisible = showBanner && state !== "granted" && state !== "denied";
   const [thirdPartyBlocked, setThirdPartyBlocked] = useState(false);
 
   useEffect(() => {
@@ -110,9 +114,25 @@ export default function CookieConsentBanner() {
 //
 // Cleared on unmount so the padding does not outlive the banner.
 useEffect(() => {
-  const el = measureRef.current;
   const root = document.documentElement;
-  if (!el) return;
+  const el = measureRef.current;
+
+  // `bannerVisible` in the dependency list is what makes this work at all.
+  //
+  // On the first render `showBanner` is false, so the notice is not in the tree
+  // and `measureRef.current` is null. An effect with `[]` dependencies runs
+  // exactly once, at that moment, returns early, and never runs again — so the
+  // variable was never published and the body never got its padding. That was
+  // measured on the deployed site as padding-bottom: 0px while the rule was
+  // present in the stylesheet.
+  //
+  // Depending on `bannerVisible` means the effect re-runs after the notice is
+  // actually rendered and committed, at which point the ref is populated.
+  if (!bannerVisible || !el) {
+    root.style.setProperty("--consent-banner-h", "0px");
+    return;
+  }
+
   const publish = () => {
     const h = Math.ceil(el.getBoundingClientRect().height);
     // +8px clears the banner's own bottom offset (1rem / md:bottom-4).
@@ -125,9 +145,9 @@ useEffect(() => {
     ro.disconnect();
     root.style.setProperty("--consent-banner-h", "0px");
   };
-}, []);
+}, [bannerVisible]);
 
-if (!showBanner || state === "granted" || state === "denied") return null;
+if (!bannerVisible) return null;
 
   return (
     <div
