@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS gift_catalog (
   name TEXT NOT NULL,
   emoji TEXT NOT NULL,
   cost INTEGER NOT NULL CHECK (cost > 0),
-  effect TEXT NOT NULL DEFAULT 'pop'
+  effect TEXT NOT NULL DEFAULT 'pop',
+  -- Production has always had this column -- added by hand at some point and
+  -- recorded in no migration at all, which meant migrations/ could not rebuild
+  -- production from scratch. Declared here so a fresh database matches, and
+  -- 0020_schema_reconciliation.sql copies it back where it already exists.
+  created_at TEXT
 );
 
 INSERT OR IGNORE INTO gift_catalog (id, name, emoji, cost, effect) VALUES

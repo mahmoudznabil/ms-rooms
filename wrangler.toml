@@ -50,7 +50,7 @@ binding = "AI"
 [[env.preview.d1_databases]]
 binding = "DB"
 database_name = "audioroom-db-preview"
-database_id = "366b9b76-4ac7-4d18-a567-efbf1a826673"
+database_id = "96576012-0b0f-4434-b9e2-ef433f1b3c8c"
 migrations_dir = "migrations"
 
 [[env.preview.r2_buckets]]

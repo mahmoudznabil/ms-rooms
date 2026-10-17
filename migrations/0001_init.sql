@@ -195,7 +195,11 @@ CREATE TABLE IF NOT EXISTS pricing_tiers (
   standard_price_cents INTEGER NOT NULL,
   app_coins INTEGER NOT NULL,
   app_price_cents INTEGER NOT NULL,
-  bonus_percent REAL NOT NULL DEFAULT 10.0
+  -- INTEGER, not REAL: this column is only ever selected and handed to the
+  -- client (there is no arithmetic on it anywhere) and every value is a whole
+  -- percentage. Production always had INTEGER; migrations/0001 said REAL and was
+  -- the wrong one. Corrected by 0020_schema_reconciliation.sql.
+  bonus_percent INTEGER NOT NULL DEFAULT 10
 );
 INSERT OR IGNORE INTO admin_users (id, username, display_name, role, password_hash) VALUES
   ('admin-master', 'master', 'Master Admin', 'master_admin', '3eb3fe66b31e0ea2f5892c6daf441a28f9013d07c3a5a3c5d1b9b4f3a8a3c5e3b4'),
