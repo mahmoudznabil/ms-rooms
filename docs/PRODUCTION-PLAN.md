@@ -1,3 +1,9 @@
+> **Historical document.** A point-in-time plan. References to
+> `scripts/init-db.sql` and `scripts/migrate-*.sql` are stale — that schema-script
+> family was removed during the cleanup audit, after production was verified to
+> be reproducible from `migrations/` alone. `docs/OPS.md` §6.11 records what that
+> verification found and what still differs.
+
 # MS-ROOMS — Production Readiness Plan
 
 **Companion to:** [CODE-REVIEW.md](./CODE-REVIEW.md) (full findings with line references)

@@ -1,3 +1,11 @@
+> **Historical document — read before acting on it.** This is a point-in-time
+> review of `master` @ `43a5c89`, kept because it records findings that are
+> still open. Some line references point at `scripts/migrate-*.sql`,
+> `scripts/init-db.sql` and `scripts/signal-db.sql`: a superseded schema-script
+> family removed during the cleanup audit after production was diffed against a
+> `migrations/`-only rebuild to prove they were redundant. See `docs/OPS.md`
+> §6.11. Re-verify line numbers before trusting any specific reference.
+
 # BestAudioRoom / MS-ROOMS — Code Review & Recommendations
 
 **Date:** review of `master` @ `43a5c89`

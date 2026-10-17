@@ -240,10 +240,11 @@ the API; see `scripts/probe-auth.mjs`).
 `room_id` nullable (lobby/PK sessions), plus `idx_game_sessions_room` and
 `idx_game_sessions_user_type` for the finish-dedupe / daily-cap scans.
 
-**Prod discovery:** prod had 0001–0013 marked but NO `game_sessions` table
-(0001's CREATE never ran there — the table came from `scripts/migrate-004-pk-games.sql`,
-never a numbered migration). 0014 therefore starts with `CREATE TABLE IF NOT
-EXISTS` (final schema) and then rebuilds unconditionally — a copy-back no-op on
+**Prod discovery:** prod had 0001-0013 marked but NO `game_sessions` table
+(0001's CREATE never ran there - the table came from a legacy script that was
+never a numbered migration, and which has since been removed). 0014 therefore
+starts with `CREATE TABLE IF NOT
+EXISTS` (final schema) and then rebuilds unconditionally - a copy-back no-op on
 empty/new-shape tables. Applied prod 2026-10-16, marked in `d1_migrations`.
 Same order-of-operations as §1: migration first, code second.
 
@@ -566,3 +567,42 @@ CMS summaries); confirm each with an Egyptian lawyer before relying on it.
 and gated, which is the right foundation. But `check:legal:strict` is *failing on
 purpose* because three registration fields are unknown, and the PDPL deadline is
 close. Do not treat the legal work as complete until those are resolved.
+
+### 6.11 Schema reconciliation (cleanup audit)
+
+A cleanup audit diffed a local database built **purely from `migrations/`** against
+production, table by table and column by column. The legacy
+`scripts/migrate-*.sql` family was removed only after that diff proved
+`migrations/` is self-sufficient. Recorded here because four discrepancies
+survive and are production facts, not cleanup residue.
+
+**`migrations/` alone now reproduces production, except:**
+
+| Item | In prod | In `migrations/` | Impact |
+|---|---|---|---|
+| `gift_catalog.created_at` | present | **absent** | Added to prod by hand and never recorded in any migration. No code reads it. A migration-only rebuild would lose it. |
+| `admin_transactions.id` | `TEXT` | `INTEGER PRIMARY KEY AUTOINCREMENT` | Code omits `id` on insert; works in prod because prod's is nullable, and works locally because `AUTOINCREMENT` fills it. Same code, two different behaviours. |
+| `pricing_tiers.bonus_percent` | `INTEGER` | `REAL` | Type drift. No arithmetic currently depends on the width. |
+| `pk_battles` | **absent** | present | `0001` creates it; prod never did. **No code references this table** — `PKBattleBar.tsx` is self-contained UI. Dead schema on both sides. |
+
+**Deliberately not "fixed" during a cleanup.** All four are schema changes
+against a live database with real rows, and three of them would require a table
+rebuild — which in SQLite means copying the data back and hoping the copy is
+faithful. Doing that during a tidy-up is how you lose a ledger. Each needs its
+own migration, its own backup, and its own verification:
+
+```
+npm run db:backup
+# then a single additive migrations/00NN_*.sql, applied to preview first
+```
+
+The `gift_catalog.created_at` gap was deliberately **not** written as a
+migration. A plain `ALTER TABLE ... ADD COLUMN` fails against production,
+because production already has the column — so the migration would break the one
+database it was meant to describe. A documented gap is strictly better than a
+migration that cannot be applied.
+
+**Dead schema worth removing eventually:** `pk_battles` (referenced nowhere) and
+`moments` / `moment_likes` (the Moments feature was removed from the product but
+the tables and their code paths remain). Deleting a table is not a file delete —
+it is a data decision.
