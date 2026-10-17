@@ -358,3 +358,116 @@ says "Gems convert at cash-out".
 - Monitoring worth watching: `no_hosts` rate on `/api/matchup/queue` (means the
   host pool is empty) and 402s on the heartbeat (means callers are out of
   coins — a top-up-conversion signal, not an error).
+
+### 6.8 Legal consent gate (Phase F3, `legal_consent`)
+
+Bilingual — English and Arabic — Terms of Service, Privacy Policy and Community
+Guidelines. Both languages are shipped in-bundle (`lib/legal-documents.ts`) and
+versioned as `LEGAL_VERSION = 2026-10-17`. In-bundle on purpose: a consent
+record citing a document version nobody can reproduce later is worthless as
+evidence.
+
+**The rule** (pure + unit-tested in `lib/legal-documents.ts`, 16 cases):
+
+- A **new** account cannot be created unless every required document has been
+  accepted **at the current version**. Missing consent returns **HTTP 428**
+  (`legal_consent_required`) from `POST /api/auth/firebase`.
+- The check runs **before** the `INSERT INTO users`, so a refused signup leaves
+  no orphan user row behind.
+- Acceptance is keyed on `firebase_uid` first, because at signup the browser
+  holds only a Firebase token — there is no session and no `users` row yet. The
+  record is attached to the account once it exists (`claimPendingConsent`).
+- Age: `age_confirmed: true` is required and never inferred. Under-18 is refused
+  outright (400 `age_confirmation_required`), not flagged for later review.
+- **Bumping `LEGAL_VERSION` re-gates everyone automatically**, because clearance
+  is always evaluated against the current version.
+
+**Endpoints**
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /api/legal/documents?lang=en\|ar` | none | Full document bodies. Public on purpose — a consent prompt that hides the text is not consent. |
+| `POST /api/legal/accept` | Firebase bearer **or** session | Records acceptance. Idempotent via unique `(user, doc, version)`. |
+| `GET /api/legal/status` | session | Which documents are still outstanding for the signed-in user. |
+
+CSRF: `/api/legal/accept` is exempt when it carries an `Authorization` header
+(bearer is never ambient, so cross-site forgery does not apply). The session path
+still goes through the double-submit check.
+
+**Existing users are NOT blocked — and that is a decision, not an oversight.**
+On first rollout every pre-existing account has `legal_consent_version = NULL`,
+because nobody accepted text that did not exist when they signed up. Blocking
+them would lock out customers who have paid and would assert a consent that never
+happened. They get a persistent, dismissable prompt instead
+(`LEGAL_ENFORCE_RETURNS = false`).
+
+**To make a revision binding:** bump `LEGAL_VERSION` **and** set
+`LEGAL_ENFORCE_RETURNS = true`. The version bump changes which documents count as
+current; the flag decides whether the difference is enforced.
+
+**Unfilled placeholders — REQUIRED before this reaches customers.** Six
+`{{...}}` markers stand in for operator-specific facts:
+
+| Placeholder | Meaning |
+|---|---|
+| `{{OPERATOR_LEGAL_NAME}}` | Registered legal entity |
+| `{{REGISTERED_ADDRESS}}` | Registered address |
+| `{{GOVERNING_LAW}}` | Governing law / jurisdiction |
+| `{{LIABILITY_CAP}}` | Liability cap |
+| `{{SUPPORT_EMAIL}}` | Support contact |
+
+These are deliberately **not** filled with invented values — a plausible-looking
+but false registered address is worse than an obvious gap, because it is harder
+to notice and it is still a false statement to a customer.
+
+```
+npm run check:legal          # warns on unfilled placeholders, fails on corruption
+npm run check:legal:strict   # fails on either — use as a release gate
+```
+
+`check-legal.mjs` also detects **mixed-script corruption** in the Arabic (stray
+Latin or CJK fragments). The generated Arabic text had exactly that problem once
+— it is invisible to tests, type checking and review-by-eye, and visibly broken
+Arabic in a legal document undermines the credibility the text depends on.
+
+These documents are a solid starting point matched to how the product works. They
+have **not** been reviewed by a qualified lawyer in the operator's jurisdiction.
+
+### 6.9 Room seat capacity (Phase F4, no migration)
+
+**Room policy is the single source of truth for how many seats a room has.**
+`workers/room-policy.ts`, shared by client and server, 13 cases.
+
+Seat endpoints previously hardcoded `seatIndex > 7`. Two silent bugs followed:
+
+- A room configured for **12** seats drew twelve tiles the server refused —
+  the last four were permanently unreachable.
+- A **private 1-on-1 paid call** (`capacity = 2`) would have accepted **eight**
+  people into a session the host is being billed for.
+
+Now:
+
+- `roomSeatPolicy(room)` honours the stored capacity as written. It is
+  deliberately **not** snapped to a set of "nice" sizes — a 3-seat panel is a
+  real configuration and rounding it would admit someone the owner never
+  offered a seat to.
+- **Private calls are pinned to exactly two seats**, overriding the stored
+  capacity. That is an invariant, not a preference: admitting a third person
+  would put an unbilled stranger into a paid session.
+- Out-of-range values clamp to `ROOM_CAPACITY_MAX = 12`, mirroring the `seats`
+  table's own `CHECK (seat_index BETWEEN 0 AND 11)`.
+- `RoomView` derives its grid from the same function, so the UI can neither offer
+  a seat the API would refuse nor hide one it would accept.
+
+Verify against a live database:
+
+```
+node scripts/verify-seat-capacity.mjs         # prod
+D1_REMOTE=0 node scripts/verify-seat-capacity.mjs   # local
+```
+
+**Known schema drift:** prod's `seats` table has **no `CHECK` constraint** on
+`seat_index`, unlike `migrations/0001_init.sql`. The code enforces the bound, so
+this is defence-in-depth only. Not rebuilt in place — a SQLite table rebuild on
+a live table with seat rows is not worth the risk for a constraint the
+application already guarantees.
