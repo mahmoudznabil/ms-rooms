@@ -423,6 +423,32 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </button>
         )}
 
+        {/* Standing legal link. Always reachable, and it deep-links into the
+            bilingual reader rather than to a hand-maintained copy. */}
+        <div className="border-t border-white/5 px-4 py-3 text-center text-[11px] text-white/30">
+          <Link
+            prefetch={false}
+            href="/legal"
+            className="mx-2 hover:text-white/55 hover:underline"
+          >
+            Terms of Service
+          </Link>
+          <Link
+            prefetch={false}
+            href="/legal#privacy"
+            className="mx-2 hover:text-white/55 hover:underline"
+          >
+            Privacy Policy
+          </Link>
+          <Link
+            prefetch={false}
+            href="/legal#guidelines"
+            className="mx-2 hover:text-white/55 hover:underline"
+          >
+            Community Guidelines
+          </Link>
+        </div>
+
         <Suspense fallback={null}>
           <IncomingCallGate />
         </Suspense>

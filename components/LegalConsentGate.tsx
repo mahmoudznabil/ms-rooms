@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronUp, Globe, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ChevronDown, ChevronUp, Globe, X } from "lucide-react";
 import {
   acceptLegalDocuments,
   fetchLegalDocuments,
-  fetchLegalStatus,
   type ApiLegalDocument,
   type LegalLang,
 } from "@/lib/api";
@@ -26,9 +25,23 @@ import { LEGAL_VERSION, MINIMUM_AGE } from "@/lib/legal-documents";
  *     acceptance. Accepting English while only being shown English is a
  *     different record from being shown both.
  *
- * Every document must be opened before the accept button unlocks. That is
- * deliberately a little friction: it makes "I accepted" mean "I read", which is
- * the only version of this that is worth anything if it is ever tested.
+ * ONE checkbox, not one per document.
+ *
+ * An earlier version gated acceptance on opening all three documents
+ * individually. That was a well-meaning invention that was wrong on the merits:
+ * what a customer gives consent to is a single agreement made of three parts,
+ * so the meaningful act is affirming that agreement as a whole. Demanding three
+ * separate ticks implies three separate decisions, which is not what the
+ * contract is and not what the law asks for.
+ *
+ * The friction it added was theatre. It also made the record worse: three ticks
+ * produce three rows implying three independent agreements, whereas a single
+ * acceptance produces one row covering all three documents at one version —
+ * which is what a consent record should actually say.
+ *
+ * The documents stay in the gate, fully readable and expandable. The obligation
+ * is that the terms are PRESENT and that acceptance is EXPLICIT; it is not that
+ * the reader has to click through them one at a time before the button works.
  */
 
 type DocKey = ApiLegalDocument["key"];
@@ -60,9 +73,9 @@ export default function LegalConsentGate({
 }: Props) {
   const [lang, setLang] = useState<LegalLang>("en");
   const [docs, setDocs] = useState<ApiLegalDocument[]>([]);
-  const [read, setRead] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [ageOk, setAgeOk] = useState(false);
+  // A single affirmation covers both age and agreement to every document.
+  const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -91,14 +104,13 @@ export default function LegalConsentGate({
     };
   }, [lang]);
 
-  const allRead = useMemo(() => docs.length > 0 && docs.every((d) => read[d.key]), [docs, read]);
-  const canAccept = allRead && ageOk && !busy && docs.length > 0;
+  // Ready when the single affirmation is ticked and the documents have
+  // actually loaded — if they failed to load there is nothing to agree to, and
+  // an "accept" button that records acceptance of nothing is worse than none.
+  const canAccept = agreed && !busy && docs.length === DOC_ORDER.length;
 
   const openDoc = useCallback((key: string) => {
     setOpen((o) => ({ ...o, [key]: !o[key] }));
-    // Marked read on open rather than on expand-close: a long document scrolled
-    // to the bottom is the honest signal, not whether they finished fiddling.
-    setRead((r) => ({ ...r, [key]: true }));
   }, []);
 
   const submit = async () => {
@@ -109,7 +121,7 @@ export default function LegalConsentGate({
       const payload = {
         lang,
         docs: docs.map((d) => ({ key: d.key, version: d.version })),
-        ageConfirmed: ageOk,
+        ageConfirmed: agreed,
       };
       if (onSubmit) {
         await onSubmit(payload);
@@ -191,13 +203,13 @@ export default function LegalConsentGate({
             <div className="space-y-3">
               {docs.map((d) => {
                 const isOpen = !!open[d.key];
-                const isRead = !!read[d.key];
                 return (
+                  // No per-document tick. Acceptance is one decision about the
+                  // whole agreement, and a row of checkmarks that appear as the
+                  // user scrolls misrepresents that as three separate decisions.
                   <section
                     key={d.key}
-                    className={`overflow-hidden rounded-2xl border transition ${
-                      isRead ? "border-arc-line bg-arc-quiet" : "border-white/10 bg-white/[0.025]"
-                    }`}
+                    className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.025] transition"
                   >
                     <button
                       type="button"
@@ -205,13 +217,6 @@ export default function LegalConsentGate({
                       aria-expanded={isOpen}
                       className="flex w-full items-center gap-3 px-4 py-3 text-start transition hover:bg-white/[0.03]"
                     >
-                      <span
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
-                          isRead ? "border-arc bg-arc text-white" : "border-white/25 text-transparent"
-                        }`}
-                      >
-                        <Check size={14} strokeWidth={3} />
-                      </span>
                       <span className="min-w-0 flex-1">
                         <span className="block text-sm font-extrabold text-white">{d.title}</span>
                         <span className="mt-0.5 block text-xs text-white/50">{d.summary}</span>
@@ -244,27 +249,36 @@ export default function LegalConsentGate({
 
         {/* Footer */}
         <div className="border-t border-white/10 px-5 py-4">
-          <label className="flex cursor-pointer items-start gap-3 text-[13px] text-white/75">
+          {/* One checkbox, one decision. The three document titles are named in
+              the label and are expandable above, so nothing is hidden behind
+              this tick — it affirms agreement to the whole set at one version. */}
+          <label className="flex cursor-pointer items-start gap-3 text-[13px] text-white/80">
             <input
               type="checkbox"
-              checked={ageOk}
-              onChange={(e) => setAgeOk(e.target.checked)}
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--arc)]"
             />
             <span>
-              {rtl
-                ? `أقر بأن عمري ${MINIMUM_AGE} عامًا أو أكثر، وأوافق على قراءة وأوافق على الشروط وسياسة الخصوصية وإرشادات المجتمع.`
-                : `I confirm I am at least ${MINIMUM_AGE} years old, and I have read and agree to the Terms of Service, Privacy Policy and Community Guidelines.`}
+              {rtl ? (
+                <>
+                  أقر بأن عمري {MINIMUM_AGE} عامًا أو أكثر، وقد قرأتْ وأوافق على{" "}
+                  <span className="font-bold text-white">شروط الخدمة</span>، و
+                  <span className="font-bold text-white">سياسة الخصوصية</span>، و
+                  <span className="font-bold text-white">إرشادات المجتمع</span>{" "}
+                  (الإصدار {LEGAL_VERSION}).
+                </>
+              ) : (
+                <>
+                  I confirm I am at least {MINIMUM_AGE} years old, and I have read and agree to the{" "}
+                  <span className="font-bold text-white">Terms of Service</span>, the{" "}
+                  <span className="font-bold text-white">Privacy Policy</span> and the{" "}
+                  <span className="font-bold text-white">Community Guidelines</span> (version{" "}
+                  {LEGAL_VERSION}).
+                </>
+              )}
             </span>
           </label>
-
-          {!allRead && docs.length > 0 && (
-            <p className="mt-2 text-xs text-amber-300/80">
-              {rtl
-                ? "يرجى فتح كل مستند وقراءته قبل المتابعة."
-                : "Please open and read each document before continuing."}
-            </p>
-          )}
 
           {error && (
             <p role="alert" className="mt-2 text-xs text-red-300">

@@ -31,10 +31,14 @@ export default function LoginView() {
 
       <FirebaseAuthPanel />
 
-      <div className="mt-8 flex items-center justify-center gap-4 text-xs text-white/35">
+      <div className="mt-8 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-white/35">
         {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
         <a href="/" className="hover:text-white/60 hover:underline">Home</a>
         <a href="/support" className="hover:text-white/60 hover:underline">Support</a>
+        {/* The documents have to be reachable from the screen where someone
+            decides whether to register. A policy only linked from settings is
+            a policy nobody reads before signing up. */}
+        <a href="/legal" className="hover:text-white/60 hover:underline">Terms &amp; Privacy</a>
       </div>
       <p className="mt-4 text-center text-[11px] leading-relaxed text-white/20">
         Your coins, gems and rooms follow you on every device.
