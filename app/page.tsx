@@ -116,15 +116,23 @@ export default function Home() {
         </div>
       </header>
 
-      {/* ---- Hero. The one bold moment: a live stage, because the product IS a stage. ---- */}
-      <section className="mx-auto w-full max-w-6xl px-5 pt-14 pb-16 sm:pt-20">
+      {/* ---- Hero. The one bold moment: a live stage, because the product IS a stage.
+
+           `hero-shell` carries a max-height compaction in globals.css. At viewport
+           heights below ~700px the hero plus the consent notice no longer fit, and
+           the notice would sit over the primary CTA. Shrinking the type and
+           padding at short heights keeps the CTA clear instead of letting the
+           notice cover it. Width-based breakpoints cannot do this: the same
+           desktop width is a short viewport on a laptop and a tall one on a
+           monitor. ---- */}
+      <section className="hero-shell mx-auto w-full max-w-6xl px-5 pt-14 pb-16 sm:pt-20">
         <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_1fr]">
           <div>
             <span className="inline-flex items-center gap-2 rounded-full border border-live/30 bg-live/10 px-3 py-1 text-xs font-bold text-live">
               <Radio size={13} /> Live rooms, right now
             </span>
 
-            <h1 className="mt-5 text-4xl font-extrabold leading-[1.1] sm:text-5xl lg:text-6xl">
+            <h1 className="hero-title mt-5 text-4xl font-extrabold leading-[1.1] sm:text-5xl lg:text-6xl">
               Grab a mic.
               <br />
               Join a room.
@@ -132,7 +140,7 @@ export default function Home() {
               <span className="text-live">Play.</span>
             </h1>
 
-            <p className="mt-5 max-w-[52ch] text-base leading-relaxed text-paper-dim sm:text-lg">
+            <p className="hero-lede mt-5 max-w-[52ch] text-base leading-relaxed text-paper-dim sm:text-lg">
               MS-ROOMS is a live voice party app that runs in your browser. Take a seat on
               stage, talk to the room, send gifts, play games together and call your friends
               one to one. Nothing to install.

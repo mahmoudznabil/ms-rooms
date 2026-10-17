@@ -544,6 +544,49 @@ select:focus {
   transition: padding-bottom 0.2s ease;
 }
 
+/* Landing hero: compact it when the viewport is SHORT.
+ *
+ * The reservation above guarantees the consent notice never covers content that
+ * the page has room for. It cannot help when the hero is genuinely taller than
+ * the space left after the notice: at a 640px viewport the hero plus the 109px
+ * notice exceeded the screen and the notice sat over the hero's primary CTA.
+ * `min-height` does not fix that -- the box grows past its own padding.
+ *
+ * So the hero gets shorter instead. Width breakpoints cannot express this: the
+ * same desktop width is a short viewport on a laptop and a tall one on a
+ * monitor, so it has to key off height.
+ *
+ * Measured on the deployed site at 1440px wide: CTA overlap 43px at a 640px
+ * viewport, 0px at 720px and above. These rules target the range below that.
+ */
+@media (max-height: 720px) {
+  .hero-shell {
+    padding-top: 1.5rem;
+    padding-bottom: 1.5rem;
+  }
+  .hero-title {
+    font-size: 2.25rem;
+    line-height: 1.1;
+  }
+  .hero-lede {
+    margin-top: 0.75rem;
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-height: 620px) {
+  .hero-shell {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+  .hero-title {
+    font-size: 1.875rem;
+  }
+  .hero-lede {
+    display: none;
+  }
+}
+
 .app-tabs {
   position: fixed;
   bottom: 0;
