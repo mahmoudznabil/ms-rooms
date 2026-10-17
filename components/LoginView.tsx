@@ -17,7 +17,7 @@ export default function LoginView() {
   }, [user, router]);
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-[340px] flex-col px-4 py-10">
+    <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-[340px] flex-col px-4 pb-safe py-10">
       <div className="flex justify-center pt-4">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-12 w-12 rounded-xl object-contain ring-1 ring-white/10" />

@@ -134,9 +134,15 @@ useEffect(() => {
   }
 
   const publish = () => {
-    const h = Math.ceil(el.getBoundingClientRect().height);
-    // +8px clears the banner's own bottom offset (1rem / md:bottom-4).
-    root.style.setProperty("--consent-banner-h", `${h + 8}px`);
+    const rect = el.getBoundingClientRect();
+    // The reserved space has to cover the notice AND the gap it floats above
+    // the viewport edge (`bottom-[calc(1rem+env(safe-area-inset-bottom))]` on
+    // mobile, `md:bottom-4` on desktop). Measuring the gap rather than assuming
+    // it means the reservation stays correct if that offset ever changes, and
+    // it accounts for the iOS safe-area inset, which is not a constant.
+    const gap = Math.max(0, window.innerHeight - rect.bottom);
+    const reserved = Math.ceil(rect.height + gap);
+    root.style.setProperty("--consent-banner-h", `${reserved}px`);
   };
   publish();
   const ro = new ResizeObserver(publish);

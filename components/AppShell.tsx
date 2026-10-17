@@ -29,7 +29,7 @@ const LoginView = dynamic(() => import("@/components/LoginView"), {
 
 function BootScreen() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink">
+    <div className="flex min-h-screen items-center justify-center bg-ink pb-safe">
       <div className="flex flex-col items-center gap-3">
         <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/15 border-t-violet-400" />
         <p className="text-sm font-semibold text-paper-dim">Loading…</p>

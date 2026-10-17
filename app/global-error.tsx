@@ -6,7 +6,7 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
   return (
     <html lang="en">
       <body className="bg-ink text-paper antialiased">
-        <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-center gap-3 px-5 text-center">
+        <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-center gap-3 px-5 pb-safe text-center">
           <h1 className="text-2xl font-black">Something went wrong</h1>
           <p className="text-sm text-white/60">Please try again. If this keeps happening, contact support.</p>
           {error?.digest ? <p className="text-xs text-white/30">Ref: {error.digest}</p> : null}
