@@ -43,7 +43,6 @@ export const MESH_CAP = 7;
 const POLL_MS = 900;
 const ICE_REPUBLISH_MS = 2500;
 const PEER_REFRESH_MS = 6000;
-const HANGUP_MS = 12_000;
 
 // ---------------------------------------------------------------------------
 // TURN credentials
@@ -210,7 +209,16 @@ function createLocalCapture(wantVideo: boolean) {
   let buf: Uint8Array<ArrayBuffer> | null = null;
   let raf = 0;
 
-  const ensureCtx = async (stream: MediaStream): Promise<AudioContext> => {
+  /**
+   * Ensure a usable AudioContext and return it.
+   *
+   * Deliberately takes no stream argument. It used to accept one and never read
+   * it — the caller already holds the stream and does `createMediaStreamSource`
+   * itself. Leaving the parameter in made the signature read as if the context
+   * wired the stream up, which it does not, and sent the next reader looking for
+   * a connection step that is actually at the call sites.
+   */
+  const ensureCtx = async (): Promise<AudioContext> => {
     if (!ctx) ctx = createAudioContext();
     if (!ctx) throw new Error("Audio is not supported in this browser.");
     if (ctx.state === "suspended") await ctx.resume().catch(() => undefined);
@@ -224,7 +232,7 @@ function createLocalCapture(wantVideo: boolean) {
       try {
         const stream = await streamPromise;
         if (disposed) return false;
-        const audio = await ensureCtx(stream);
+        const audio = await ensureCtx();
         if (!monitorGain) {
           const src = audio.createMediaStreamSource(stream);
           monitorGain = audio.createGain();
@@ -254,7 +262,7 @@ function createLocalCapture(wantVideo: boolean) {
       void streamPromise.then(async (stream) => {
         if (disposed || ctx) return;
         try {
-          const audio = await ensureCtx(stream);
+          const audio = await ensureCtx();
           const src = audio.createMediaStreamSource(stream);
           analyser = audio.createAnalyser();
           analyser.fftSize = 512;
