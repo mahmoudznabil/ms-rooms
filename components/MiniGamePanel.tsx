@@ -443,7 +443,7 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
                 <button
                   onClick={roll}
                   disabled={rolling || activeLudo !== 0}
-                  className="flex-1 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-2.5 text-sm font-bold text-white transition hover:opacity-90 disabled:opacity-50"
+                  className="flex-1 rounded-2xl bg-arc py-2.5 text-sm font-bold text-white transition hover:bg-arc-hover disabled:opacity-50"
                 >
                   {rolling ? "Rolling…" : activeLudo !== 0 ? `${LUDO_PLAYERS[activeLudo].name} is rolling…` : "Roll Dice"}
                 </button>
@@ -515,7 +515,7 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
                   onClick={() => flipMemoryCard(idx)}
                   className={`flex h-14 w-full items-center justify-center rounded-xl text-lg font-black transition ${
                     memoryFlipped.includes(idx) || memoryMatched.includes(card)
-                      ? "bg-violet-500 text-white"
+                      ? "bg-arc text-white"
                       : "bg-white/5 text-white/30 hover:bg-white/10"
                   }`}
                 >

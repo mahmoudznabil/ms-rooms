@@ -16,6 +16,20 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: microphone=(self), camera=(self), display-capture=(self)
   Cross-Origin-Opener-Policy: same-origin-allow-popups
+  # Content-Security-Policy in REPORT-ONLY mode (Phase F2).
+  #
+  # Report-only, not enforcing, on purpose: a policy that breaks the Firebase
+  # or reCAPTCHA login flow locks every user out of the product, and that is a
+  # far worse outcome than the injection risk it mitigates. This header tells
+  # the browser to collect violations without blocking anything, so the policy
+  # can be tuned against real traffic before it is ever allowed to enforce.
+  #
+  # To go enforcing later: rename this to `Content-Security-Policy:` ONLY after
+  # the report endpoint shows a clean run. Note `'unsafe-inline'` is still
+  # needed for styles — Next injects critical CSS inline — and `'unsafe-eval'`
+  # for dev-mode React; both should be removable as part of that tuning pass.
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://www.firebaseinstallationservice.googleapis.com https://securetoken.googleapis.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallationservice.googleapis.com https://www.google.com https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data:; img-src 'self' data: blob: https:; media-src 'self' blob: data:; worker-src 'self' blob:; frame-src 'self' https://accounts.google.com https://*.firebaseapp.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; report-uri /api/csp-report
+  Report-To: {"group":"csp","max_age":86400}
 
 # Build output is content-hashed, so a given URL can never change meaning.
 /_next/static/*

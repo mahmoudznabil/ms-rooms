@@ -924,7 +924,7 @@ function RoomViewInner() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
           <div className="modal-pop w-full max-w-md rounded-3xl border border-white/10 bg-[#17171f] p-6 shadow-2xl">
             <div className="flex flex-col items-center gap-4">
-              <div className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full bg-arc">
                 {incomingCall.callerAvatar ? (
                   <img src={incomingCall.callerAvatar} alt={incomingCall.callerName} className="h-full w-full rounded-full object-cover" />
                 ) : (

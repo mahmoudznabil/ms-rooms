@@ -55,7 +55,7 @@ export default function PKBattleBar({ roomA, roomB, endsAt, onEnd }: PKBattleBar
         </div>
       </div>
       <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all" style={{ width: `${pctA}%` }} />
+        <div className="h-full bg-arc transition-colors" style={{ width: `${pctA}%` }} />
         <div className="h-full bg-gradient-to-l from-amber-400 to-orange-500 transition-all" style={{ width: `${pctB}%` }} />
       </div>
       <p className="mt-1.5 text-center text-xs text-white/50">

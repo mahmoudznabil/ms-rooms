@@ -227,12 +227,67 @@ wrangler rejects) flows through `functions/api/[[path]].ts`
 **Pricing ladder** (0.8× competitor median ≈ $1.08/100 coins):
 $0.99→92, $4.99→462, $9.99→925, $29.99→2,950+177 bonus, $99.99→10,400+1,248 bonus.
 
-**The allowance rule** (pure + unit-tested in `workers/recharge-policy.ts`, 18 cases):
+**The allowance rule** (pure + unit-tested in `workers/recharge-policy.ts`, 26 cases) —
+two phases:
 
-- Below `RECHARGE_GRACE_RECHARGES = 30` successful recharges, an admin may credit freely.
-- At/above 30, the user may carry at most `RECHARGE_OUTSTANDING_CAP_USD = 100` of **unpaid** credit. A further credit that would cross the cap is refused with 409 `allowance_cap` and an operator-readable reason.
-- Marking an earlier credit **paid** frees the allowance again; voiding it removes it from both the cap and the recharge count.
-- Both constants live only in `workers/recharge-policy.ts` — change the policy there, nowhere else.
+- **Phase 1, prepaid — first `RECHARGE_GRACE_RECHARGES = 30` successful recharges.**
+  The user pays the admin *first*, then receives the credit. An admin may credit
+  freely; the working assumption is that nothing is owed.
+- **Phase 2, postpaid — from the 31st.** The user has a card on file and billing
+  is active. They may carry up to `RECHARGE_OUTSTANDING_CAP_USD = 100` of
+  **unpaid** credit, which the system withdraws (charges the saved card) once
+  reached. A credit that stays unpaid past `RECHARGE_SETTLEMENT_DAYS = 7` is
+  **overdue**: the allowance stops extending immediately (409
+  `allowance_overdue`), *before* the cap does — otherwise bad debt would simply
+  sit at exactly $100 forever.
+- Marking a credit **paid** frees the allowance again; **void** removes it from
+  both the cap and the recharge count.
+- All three constants live only in `workers/recharge-policy.ts` — change the
+  policy there, nowhere else.
+
+Why 30 is the line: it is roughly where card networks and PSPs start treating
+an account as established. Letting a user cross it on convenience and carry a
+balance indefinitely is the shape of *friendly fraud* (a stolen card used to
+build history, then maxed out and charged back). Phase 2 exists to bound that
+exposure.
+
+### 6.7 Why there is no self-hosted card gateway (decision record)
+
+Recharges are deliberately admin-managed rather than self-hosted card
+processing, and this is a compliance decision, not a technical shortcut.
+
+**What was asked:** an Egypt/MENA debit/credit gateway built on Pages/Workers,
+where we own the customer data and the system auto-withdraws the $100 balance.
+
+**Why not:**
+
+| Blocker | Detail |
+|---|---|
+| **Licensing** | Processing cards in Egypt requires Central Bank of Egypt authorisation. Each market has its own regulator (SAMA, CBUAE, Central Bank Jordan). A licence cannot be self-hosted into existence. |
+| **Scheme membership** | Visa/Mastercard/Meeza require a signed direct agreement or integration through an authorised member. Meeza is Egypt's national scheme, CBE-run — same constraint. There is no "build your own" path. |
+| **Card data location** | A PAN must never sit on Workers/Pages. PCI DSS Level 1 expects HSM-backed tokenisation and audited key custody; Cloudflare provides neither and its terms rule it out. |
+
+**What *is* buildable — and achieves the underlying goal.** The real desire is
+owning the customer, the data and the withdrawal. That is an **orchestration
+layer**, not an acquirer, and it runs fine on Pages/Workers:
+
+- **We own** — the customer record, the wallet ledger, the allowance rules, the
+  recharge history, invoicing/receipts, and the drain schedule.
+- **A licensed PSP owns** — only the authorisation step for the actual money
+  movement.
+- **Consequence:** full customer-data ownership and automated collection are both
+  achievable, without ever touching a PAN.
+
+Egypt-specific rails worth evaluating when automated collection is ready (all
+integrate via a licensed aggregator, none require us to become one): **Paymob**
+(cards + Meeza + mobile wallets), **Fawry** (very large Egyptian consumer reach),
+**InstaPay** (CBE real-time bank-to-bank, the closest fit to instant collection),
+and Network International / PayTabs for wider GCC coverage.
+
+**Operational implication of phase 2:** once billing is live, the scheduled job
+that withdraws at the cap becomes revenue-critical. Until a PSP is integrated,
+phase 2 is settled manually via `POST /api/admin/recharge/mark-paid` — the
+`overdue` flag is the manual-collection worklist.
 
 **Admin desk** (`app/admin/RechargeTab.tsx`, tab "Recharge"):
 

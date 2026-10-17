@@ -32,7 +32,17 @@
   --live: #ff2d78;
   --join: #00e5a0;
   --coin: #ffc53d;
-  --arc: #8b5cf6;
+
+  /* Brand chrome. A solid, slightly desaturated indigo rather than the old
+     violet→fuchsia gradient: gradients on every primary action were the single
+     loudest "template" signal in the UI. Solid fills read as deliberate; a
+     gradient now means identity (logo, avatar, coin header) rather than
+     interaction, which is what makes the few that remain feel intentional. */
+  --arc: #6d4aff;
+  --arc-hover: #7d5cff;
+  --arc-press: #5c3ce0;
+  --arc-quiet: rgba(109, 74, 255, 0.14);
+  --arc-line: rgba(109, 74, 255, 0.35);
 
   --ease-out: cubic-bezier(0.2, 0.9, 0.3, 1);
   --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.2);
@@ -54,12 +64,21 @@
   --color-join: var(--join);
   --color-coin: var(--coin);
   --color-arc: var(--arc);
+  --color-arc-hover: var(--arc-hover);
+  --color-arc-press: var(--arc-press);
+  --color-arc-quiet: var(--arc-quiet);
+  --color-arc-line: var(--arc-line);
 
-  /* Arial is resolved from the OS, so these need no @font-face and no
-     download. Order matters: Liberation Sans / Helvetica are metric-compatible
-     stand-ins on Linux, and the generic sans-serif is the final safety net. */
-  --font-display: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
-  --font-body: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  /* Inter Variable, self-hosted (SIL OFL). A true variable font, so the whole
+     100–900 range is real ink rather than a synthesised smear — which is what
+     let the old Arial setup collapse every intermediate weight onto 400.
+     The system stack behind it is the fallback if the woff2 fails to load. */
+  --font-display: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Optical sizing: Inter's variable axes tighten as size grows, which is what
+     makes a heading look designed rather than merely enlarged. */
+  --font-optical-sizing: auto;
 }
 
 * {
@@ -83,7 +102,7 @@ body {
   overflow-x: hidden;
   overflow-x: clip;
   margin: 0;
-  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background:
     radial-gradient(760px 420px at 12% -8%, rgba(255, 45, 120, 0.16), transparent 62%),
     radial-gradient(620px 380px at 92% 2%, rgba(139, 92, 246, 0.15), transparent 62%),
@@ -94,34 +113,32 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Type: Arial, with weight reserved for the two real Arial cuts.
+   Type: Inter Variable.
 
-   Arial ships exactly two real weights: Regular (400) and Bold (700). Asking
-   for 500, 600 or 800 makes the browser *synthesise* a heavier stroke by
-   smearing the glyph outline — that reads blurry on light backgrounds, muddy on
-   dark ones, and it breaks under Windows High Contrast.
+   The app ran on Arial purely to avoid a webfont request, and that cost more
+   than it saved: Arial ships only 400 and 700, so every `font-medium` /
+   `font-semibold` / `font-black` in the UI was a *synthesised* smear rather
+   than real ink. That is most of why the interface read as demo-grade.
 
-   So the intermediate weights collapse onto real cuts:
+   Inter is now self-hosted (one woff2 via @fontsource-variable/inter, SIL OFL
+   so it redistributes with the app; no third-party request at runtime). It is a
+   true variable font, so the weight ladder the components already assume is
+   real at every step.
 
-     500 / 600  ->  400   (labels, chips, secondary controls, body-ish UI)
-     700 / 800 / 900 -> 700 (headings, primary buttons, emphasis)
-
-   Hierarchy comes from size, colour and spacing rather than a ladder of fake
-   weights. That is what makes "bold" mean something: if text is bold it is
-   genuinely bold, and it is a heading or a primary action — never body copy.
-
-   Note this block deliberately sets font-family/weight/tracking only. Sizes stay
-   with Tailwind's text-* utilities so this change cannot silently restyle the
-   whole app's type scale.
+   This block deliberately does NOT change the type scale — sizes stay with
+   Tailwind's text-* utilities, so no component can silently restyle.
 --------------------------------------------------------------------------- */
 
 /* Body copy: Regular, the default. Nothing inherits Bold by accident. */
 body {
-  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-weight: 400;
+  /* Inter's optical-size axis tightens as type grows, which is what makes a
+     heading look designed rather than merely enlarged. */
+  font-optical-sizing: auto;
 }
 
-/* Headers: Bold — the one heavy weight we are allowed. */
+/* Headers: the heavy cut, with a touch of negative tracking. */
 h1,
 h2,
 h3,
@@ -129,9 +146,9 @@ h4,
 h5,
 h6,
 .font-display {
-  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.022em;
   text-wrap: balance;
 }
 
@@ -143,28 +160,19 @@ dt {
   font-weight: 400;
 }
 
-/* Collapse weights Arial cannot render, so nothing is ever synthesised.
-   These live outside @layer so they beat Tailwind's font-* utilities. */
-.font-thin,
-.font-light,
-.font-normal,
-.font-medium,
-.font-semibold {
-  font-weight: 400;
-}
-.font-bold,
-.font-extrabold,
-.font-black {
-  font-weight: 700;
-}
-
-/* Controls inherit Arial — the platform default (Times, on some systems) is
+/* Controls inherit Inter — the platform default (Times, on some systems) is
    the most common reason a form looks half-styled. */
 input,
 textarea,
 select,
 button {
-  font-family: Arial, "Liberation Sans", Helvetica, "Helvetica Neue", sans-serif;
+  font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Balances, timers and tables line up when the font has tabular figures; Inter
+   Variable does, so those surfaces opt in rather than inheriting it. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 ::placeholder {

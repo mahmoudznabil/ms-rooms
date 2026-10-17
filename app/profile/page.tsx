@@ -277,7 +277,7 @@ function OwnProfile() {
             <span>{user.xp.toLocaleString()} / {prog.target.toLocaleString()} XP</span>
           </div>
           <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/10">
-            <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500" style={{ width: `${prog.pct}%` }} />
+            <div className="h-full rounded-full bg-arc" style={{ width: `${prog.pct}%` }} />
           </div>
         </div>
 
@@ -493,7 +493,7 @@ function OwnProfile() {
                       disabled={hostBusy}
                       onClick={() => void saveHostSettings({ call_rate: o.rate })}
                       className={`min-h-[44px] rounded-2xl px-2 py-2 text-xs font-bold transition disabled:opacity-40 ${
-                        callRate === o.rate ? "bg-violet-500 text-white" : "bg-white/10 text-white/75 hover:bg-white/15"
+                        callRate === o.rate ? "bg-arc text-white" : "bg-white/10 text-white/75 hover:bg-white/15"
                       }`}
                     >
                       {o.label}
@@ -722,7 +722,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
             <span>{profileUser.xp.toLocaleString()} / {prog.target.toLocaleString()} XP</span>
           </div>
           <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/10">
-            <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500" style={{ width: `${prog.pct}%` }} />
+            <div className="h-full rounded-full bg-arc" style={{ width: `${prog.pct}%` }} />
           </div>
         </div>
 

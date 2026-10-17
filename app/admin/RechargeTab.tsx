@@ -54,7 +54,11 @@ export default function RechargeTab({
 }) {
   const [scope, setScope] = useState<Scope>("mine");
   const [customers, setCustomers] = useState<AdminCustomer[]>([]);
-  const [policy, setPolicy] = useState({ grace_recharges: 30, outstanding_cap_usd: 100 });
+  const [policy, setPolicy] = useState({
+    grace_recharges: 30,
+    outstanding_cap_usd: 100,
+    settlement_days: 7,
+  });
   const [queue, setQueue] = useState<AdminRechargeRequest[]>([]);
   const [packages, setPackages] = useState<CoinPackage[]>([]);
   const [detail, setDetail] = useState<{ user_id: string; credits: LedgerCredit[] } | null>(null);
@@ -71,7 +75,7 @@ export default function RechargeTab({
         listRechargeRequests("open"),
       ]);
       setCustomers(c.customers ?? []);
-      setPolicy(c.policy ?? { grace_recharges: 30, outstanding_cap_usd: 100 });
+      setPolicy(c.policy ?? { grace_recharges: 30, outstanding_cap_usd: 100, settlement_days: 7 });
       setQueue(q.requests ?? []);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not load customers.");
@@ -240,17 +244,28 @@ export default function RechargeTab({
                   <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-white/5 pt-2">
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
-                        c.in_grace
-                          ? "bg-violet-500/20 text-violet-200"
-                          : c.outstanding_usd > 0
-                            ? "bg-amber-500/20 text-amber-200"
-                            : "bg-emerald-500/20 text-emerald-200"
+                        c.overdue
+                          ? "bg-red-500/25 text-red-200"
+                          : c.phase === "prepaid"
+                            ? "bg-violet-500/20 text-violet-200"
+                            : c.outstanding_usd > 0
+                              ? "bg-amber-500/20 text-amber-200"
+                              : "bg-emerald-500/20 text-emerald-200"
                       }`}
                     >
-                      {c.in_grace
-                        ? `grace ${c.recharge_count}/${policy.grace_recharges}`
-                        : `outstanding $${c.outstanding_usd.toFixed(2)}`}
+                      {c.overdue
+                        ? `overdue ${policy.settlement_days}+d`
+                        : c.phase === "prepaid"
+                          ? `prepaid ${c.recharge_count}/${policy.grace_recharges}`
+                          : c.outstanding_usd > 0
+                            ? `outstanding $${c.outstanding_usd.toFixed(2)}`
+                            : "postpaid clear"}
                     </span>
+                    {c.phase === "postpaid" && !c.overdue && (
+                      <span className="text-[10px] text-white/35">
+                        card charged when the ${policy.outstanding_cap_usd} line is reached
+                      </span>
+                    )}
                     {c.open_requests > 0 && (
                       <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-white/70">
                         {c.open_requests} pending

@@ -224,7 +224,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {context === "main" && user && (
           <Link prefetch={false}
             href="/create"
-            className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
+            className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-arc py-3 text-sm font-bold text-white transition hover:bg-arc-hover"
           >
             <Plus size={16} /> Start a room
           </Link>
@@ -233,7 +233,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {context === "creator" && (
           <Link prefetch={false}
             href="/create"
-            className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3 text-sm font-bold text-white transition hover:opacity-90"
+            className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl bg-arc py-3 text-sm font-bold text-white transition hover:bg-arc-hover"
           >
             <Plus size={16} /> Create Room
           </Link>

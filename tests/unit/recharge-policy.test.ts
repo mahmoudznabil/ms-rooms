@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   RECHARGE_GRACE_RECHARGES,
   RECHARGE_OUTSTANDING_CAP_USD,
+  RECHARGE_SETTLEMENT_DAYS,
   checkAllowance,
+  hasOverdueCredit,
   outstandingCents,
   pickAdminForAssignment,
   successfulRecharges,
@@ -11,20 +13,37 @@ import {
 
 /**
  * The recharge allowance is the one place a bug silently creates money, so the
- * rule is pinned here rather than left to the handler: admins credit users
- * offline, and after the grace period a user may carry at most $100 of UNPAID
- * credit. Marking a recharge paid frees the allowance again.
+ * rule is pinned here rather than left to the handler.
+ *
+ * Two phases:
+ *   - First 30 recharges: PREPAID — the user pays before receiving credit, so
+ *     an admin may credit freely.
+ *   - From the 31st: POSTPAID — the user has a card on file and may carry up to
+ *     $100 unpaid, which is charged once reached. Anything unpaid past 7 days is
+ *     overdue and stops the allowance extending.
  */
 
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse("2026-10-17T12:00:00Z");
+
 let seq = 0;
-function credit(usd: number, status: CreditRecord["status"] = "unpaid"): CreditRecord {
+function credit(
+  usd: number,
+  status: CreditRecord["status"] = "unpaid",
+  daysAgo = 0
+): CreditRecord {
   seq += 1;
-  return { id: `c${seq}`, usdCents: Math.round(usd * 100), status };
+  return {
+    id: `c${seq}`,
+    usdCents: Math.round(usd * 100),
+    status,
+    createdAt: new Date(NOW - daysAgo * DAY).toISOString(),
+  };
 }
 
 /** N settled recharges, so a user is past the grace period. */
 function pastGrace(n = RECHARGE_GRACE_RECHARGES): CreditRecord[] {
-  return Array.from({ length: n }, () => credit(1, "paid"));
+  return Array.from({ length: n }, (_, i) => credit(1, "paid", n - i));
 }
 
 describe("outstandingCents / successfulRecharges", () => {
@@ -74,7 +93,7 @@ describe("checkAllowance — grace period", () => {
 
 describe("checkAllowance — the $100 cap past grace", () => {
   it("allows a credit that fits under the cap", () => {
-    const d = checkAllowance(pastGrace(), 99_99);
+    const d = checkAllowance(pastGrace(), 99_99, NOW);
     expect(d.allowed).toBe(true);
     expect(d.inGrace).toBe(false);
   });
@@ -82,36 +101,36 @@ describe("checkAllowance — the $100 cap past grace", () => {
   it("allows a credit that lands exactly on the cap", () => {
     const list = pastGrace();
     list.push(credit(99));
-    const d = checkAllowance(list, 1_00);
+    const d = checkAllowance(list, 1_00, NOW);
     expect(d.allowed).toBe(true);
   });
 
   it("refuses when the request would overshoot the cap", () => {
     const list = pastGrace();
     list.push(credit(99));
-    const d = checkAllowance(list, 5_00);
+    const d = checkAllowance(list, 5_00, NOW);
     expect(d.allowed).toBe(false);
-    expect(d.reason).toMatch(/only \$1\.00/i);
-    expect(d.reason).toMatch(/mark an earlier recharge as paid/i);
+    expect(d.reason).toMatch(/only \$1\.00 of unpaid allowance left/i);
+    expect(d.reason).toMatch(/settle an earlier recharge/i);
   });
 
   it("refuses everything once the cap is fully consumed", () => {
     const list = pastGrace();
     list.push(credit(RECHARGE_OUTSTANDING_CAP_USD));
-    const d = checkAllowance(list, 1_00);
+    const d = checkAllowance(list, 1_00, NOW);
     expect(d.allowed).toBe(false);
     expect(d.remainingUsd).toBe(0);
     expect(d.reason).toMatch(/reached the \$100 unpaid allowance cap/i);
   });
 
-  it("frees the allowance again when credit is marked paid", () => {
+  it("frees the allowance again when credit is settled", () => {
     const list = pastGrace();
     list.push(credit(RECHARGE_OUTSTANDING_CAP_USD));
-    expect(checkAllowance(list, 1_00).allowed).toBe(false);
+    expect(checkAllowance(list, 1_00, NOW).allowed).toBe(false);
 
     // Marking the big credit paid drops outstanding to 0 → creditable again.
     list[list.length - 1].status = "paid";
-    const after = checkAllowance(list, 99_99);
+    const after = checkAllowance(list, 99_99, NOW);
     expect(after.allowed).toBe(true);
     expect(after.remainingUsd).toBeCloseTo(RECHARGE_OUTSTANDING_CAP_USD, 5);
   });
@@ -119,8 +138,63 @@ describe("checkAllowance — the $100 cap past grace", () => {
   it("voided credit frees the allowance without counting as a recharge", () => {
     const list = pastGrace();
     list.push(credit(RECHARGE_OUTSTANDING_CAP_USD, "void"));
-    const d = checkAllowance(list, 99_99);
+    const d = checkAllowance(list, 99_99, NOW);
     expect(d.allowed).toBe(true);
+  });
+});
+
+describe("hasOverdueCredit — the 7-day settlement window", () => {
+  it("is false when nothing is unpaid", () => {
+    expect(hasOverdueCredit(pastGrace(), NOW)).toBe(false);
+  });
+
+  it("is false while unpaid credit is inside the window", () => {
+    const list = pastGrace();
+    list.push(credit(50, "unpaid", RECHARGE_SETTLEMENT_DAYS - 1));
+    expect(hasOverdueCredit(list, NOW)).toBe(false);
+  });
+
+  it("is true once unpaid credit ages past the window", () => {
+    const list = pastGrace();
+    list.push(credit(50, "unpaid", RECHARGE_SETTLEMENT_DAYS + 1));
+    expect(hasOverdueCredit(list, NOW)).toBe(true);
+  });
+
+  it("ignores a settled credit that is old", () => {
+    const list = pastGrace();
+    list.push(credit(50, "paid", 90));
+    expect(hasOverdueCredit(list, NOW)).toBe(false);
+  });
+
+  it("treats an undated unpaid credit as not overdue (admin can still see it)", () => {
+    expect(hasOverdueCredit([{ id: "x", usdCents: 100, status: "unpaid" }], NOW)).toBe(false);
+  });
+});
+
+describe("checkAllowance — overdue blocks before the cap", () => {
+  it("refuses a credit when an earlier one is overdue, even under the cap", () => {
+    const list = pastGrace();
+    list.push(credit(10, "unpaid", RECHARGE_SETTLEMENT_DAYS + 2));
+    const d = checkAllowance(list, 5_00, NOW);
+    expect(d.allowed).toBe(false);
+    expect(d.overdue).toBe(true);
+    expect(d.reason).toMatch(/past its 7-day settlement window/i);
+  });
+
+  it("a stale unpaid balance is caught before bad debt can reach the cap", () => {
+    // Outstanding is still tiny; the window, not the cap, is what stops it.
+    const list = pastGrace();
+    list.push(credit(1, "unpaid", 30));
+    expect(outstandingCents(list)).toBeLessThan(RECHARGE_OUTSTANDING_CAP_USD * 100);
+    expect(checkAllowance(list, 1_00, NOW).allowed).toBe(false);
+  });
+
+  it("reports overdue without blocking while still prepaid", () => {
+    const list = [credit(5, "unpaid", 30)];
+    const d = checkAllowance(list, 5_00, NOW);
+    expect(d.inGrace).toBe(true);
+    expect(d.overdue).toBe(true);
+    expect(d.allowed).toBe(true); // prepaid: admin may still credit
   });
 });
 

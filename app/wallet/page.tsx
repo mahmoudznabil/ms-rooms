@@ -125,7 +125,7 @@ export default function WalletPage() {
           <p className="mt-1 truncate text-xl font-black text-amber-200">{(user.coins ?? 0).toLocaleString()}</p>
           <p className="text-xs text-white/40">Hard — bought / recharged</p>
         </div>
-        <div className="min-w-0 rounded-3xl border border-violet-300/20 bg-gradient-to-br from-violet-500/15 to-fuchsia-500/5 p-3">
+        <div className="min-w-0 rounded-3xl border border-violet-300/20 bg-arc-quiet p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-violet-200/70">Gems</p>
           <p className="mt-1 truncate text-xl font-black text-violet-200">{((user as unknown as { gems?: number }).gems ?? 0).toLocaleString()}</p>
           <p className="text-xs text-white/40">Soft — gift earnings 70%</p>
@@ -143,7 +143,7 @@ export default function WalletPage() {
           <span>{(user.xp ?? 0).toLocaleString()} / {prog.target.toLocaleString()} XP</span>
         </div>
         <div className="mt-1 h-2 overflow-hidden rounded-full bg-black/30">
-          <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500" style={{ width: `${prog.pct}%` }} />
+          <div className="h-full rounded-full bg-arc" style={{ width: `${prog.pct}%` }} />
         </div>
         <p className="mt-1 text-xs text-white/35">XP from chatting, staying in rooms, sending gifts. Unlocks badges & leaderboard.</p>
         {notice && <p className="mt-3 rounded-xl bg-black/30 px-3 py-2 text-center text-xs font-bold text-amber-100">{notice}</p>}
@@ -213,21 +213,44 @@ export default function WalletPage() {
                 )
               )}
 
-              {/* The $100 unpaid allowance, once past the grace period. */}
+              {/* Phase 2: the $100 line drawn against the card on file. */}
               {!recharge.in_grace && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                <div
+                  className={`rounded-2xl border px-3 py-2.5 ${
+                    recharge.overdue
+                      ? "border-red-400/30 bg-red-500/10"
+                      : "border-white/10 bg-white/[0.03]"
+                  }`}
+                >
                   <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-white/60">Unpaid allowance</span>
-                    <span className={recharge.outstanding_usd > 0 ? "text-amber-300" : "text-emerald-300"}>
+                    <span className="text-white/60">Card balance</span>
+                    <span className={recharge.overdue ? "text-red-300" : recharge.outstanding_usd > 0 ? "text-amber-300" : "text-emerald-300"}>
                       ${recharge.outstanding_usd.toFixed(2)} / ${recharge.allowance_cap_usd}
                     </span>
                   </div>
-                  <p className="mt-1 text-[11px] text-white/35">
-                    {recharge.outstanding_usd > 0
-                      ? "Settle with your admin to free the rest of your allowance."
-                      : "Clear — you can be credited up to the full cap."}
+                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-black/30">
+                    <div
+                      className={`h-full rounded-full ${recharge.overdue ? "bg-red-400" : "bg-gradient-to-r from-amber-400 to-orange-500"}`}
+                      style={{ width: `${Math.min(100, (recharge.outstanding_usd / recharge.allowance_cap_usd) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-white/35">
+                    {recharge.overdue
+                      ? `A charge is past its ${recharge.settlement_days}-day window — please settle with your admin.`
+                      : recharge.outstanding_usd > 0
+                        ? `Your card on file is charged when this reaches $${recharge.allowance_cap_usd}. Anything unpaid is due within ${recharge.settlement_days} days.`
+                        : `Clear. Your card on file covers you up to $${recharge.allowance_cap_usd}.`}
                   </p>
                 </div>
+              )}
+
+              {/* Phase 1 progress: pay first, then receive the credit. */}
+              {recharge.in_grace && (
+                <p className="text-[11px] text-white/35">
+                  Prepaid — you pay your admin, then coins land in your wallet.{" "}
+                  {recharge.recharge_count} of {recharge.grace_recharges} recharges before card billing
+                  opens.
+                </p>
               )}
             </div>
           )}

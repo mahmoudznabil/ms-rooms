@@ -337,7 +337,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
                   return (
                     <li key={entry.key}>
                       <button onClick={() => void openConversation(c.id)} className="flex w-full items-center gap-3 rounded-2xl bg-white/5 p-3 text-left transition hover:bg-white/10">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-sm font-extrabold">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-arc text-sm font-extrabold">
                           {entry.peerInitial}
                         </span>
                         <span className="min-w-0 flex-1">

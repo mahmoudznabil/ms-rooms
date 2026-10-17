@@ -14,7 +14,9 @@ import { isValidTriviaPack, parseTriviaPackReply } from "./trivia-validate";
 import {
   RECHARGE_GRACE_RECHARGES,
   RECHARGE_OUTSTANDING_CAP_USD,
+  RECHARGE_SETTLEMENT_DAYS,
   checkAllowance,
+  hasOverdueCredit,
   outstandingCents,
   pickAdminForAssignment,
   successfulRecharges,
@@ -199,6 +201,7 @@ function isRateLimited(key: string, path: string, method: string): boolean {
   else if (path.startsWith("/api/signal/")) limit = 120;
   else if (path === "/api/spin") limit = 10;
   else if (path === "/api/client-errors") limit = 30;
+    else if (path === "/api/csp-report") limit = 60;
   else if (path === "/api/attachments/upload") limit = 20;
   else if (method !== "GET") limit = 100;
   else return false;
@@ -458,6 +461,11 @@ if (request.method === "OPTIONS") {
     // the endpoint takes no privileged action (append-only log, capped fields,
     // session attached read-only for attribution).
     if (path === "/api/client-errors") return true;
+    // Same reasoning for CSP violation reports (Phase F2): the browser posts
+    // them with `Content-Type: application/csp-report` and cannot attach a
+    // custom header. Append-only log, no privileged action, so a forged report
+    // can at worst fill a capped log.
+    if (path === "/api/csp-report") return true;
     // All other state-changing requests are cookie-authenticated: require
     // double-submit (header == cookie, constant-time compare). No Origin
     // bypass: an allowlisted Origin still needs the token.
@@ -2219,8 +2227,9 @@ return j({
           id: c.id as string,
           usdCents: Number(c.usd_cents ?? 0),
           status: (c.status as "unpaid" | "paid" | "void") ?? "unpaid",
+          createdAt: (c.created_at as string) ?? undefined,
         }));
-        const decision = checkAllowance(records, 0);
+        const summary = allowanceSummary(records);
 
         const requests = await env.DB.prepare(
           `SELECT r.id, r.package_id, r.coins, r.status, r.created_at, r.resolved_at, a.username AS admin_username
@@ -2241,11 +2250,7 @@ return j({
           admin: owner
             ? { username: (owner as Record<string, unknown>).username, display_name: (owner as Record<string, unknown>).display_name }
             : null,
-          recharge_count: successfulRecharges(records),
-          grace_recharges: RECHARGE_GRACE_RECHARGES,
-          in_grace: decision.inGrace,
-          outstanding_usd: outstandingCents(records) / 100,
-          allowance_cap_usd: RECHARGE_OUTSTANDING_CAP_USD,
+          ...summary,
           credits: (credits.results ?? []),
           requests: requests.results ?? [],
         });
@@ -2868,13 +2873,33 @@ return j({
       /** Load a user's credit ledger for the allowance decision. */
       async function loadCredits(userId: string) {
         const rows = await env.DB.prepare(
-          `SELECT id, usd_cents, status FROM recharge_credits WHERE user_id = ?`
+          `SELECT id, usd_cents, status, created_at FROM recharge_credits WHERE user_id = ?`
         ).bind(userId).all();
         return ((rows.results ?? []) as Array<Record<string, unknown>>).map((c) => ({
           id: c.id as string,
           usdCents: Number(c.usd_cents ?? 0),
           status: (c.status as "unpaid" | "paid" | "void") ?? "unpaid",
+          createdAt: (c.created_at as string) ?? undefined,
         }));
+      }
+
+      /** The phase + allowance summary both the wallet and the admin desk show. */
+      function allowanceSummary(credits: Array<Parameters<typeof checkAllowance>[0][number]>) {
+        const now = Date.now();
+        const decision = checkAllowance(credits, 0, now);
+        return {
+          recharge_count: successfulRecharges(credits),
+          grace_recharges: RECHARGE_GRACE_RECHARGES,
+          // Phase 1 = prepaid (pay first, then credit). Phase 2 = postpaid with
+          // a card on file and a $100 line drawn against it.
+          phase: decision.inGrace ? ("prepaid" as const) : ("postpaid" as const),
+          in_grace: decision.inGrace,
+          outstanding_usd: outstandingCents(credits) / 100,
+          allowance_cap_usd: RECHARGE_OUTSTANDING_CAP_USD,
+          settlement_days: RECHARGE_SETTLEMENT_DAYS,
+          overdue: hasOverdueCredit(credits, now),
+          remaining_allowance_usd: decision.remainingUsd,
+        };
       }
 
       /** The admin who currently owns this user, or null. */
@@ -2896,7 +2921,9 @@ return j({
                  c.admin_id, c.assigned_at, a.username AS admin_username,
                  (SELECT COUNT(*) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status != 'void') AS recharge_count,
                  (SELECT COALESCE(SUM(rc.usd_cents), 0) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status = 'unpaid') AS outstanding_cents,
-                 (SELECT COUNT(*) FROM recharge_requests rr WHERE rr.user_id = u.id AND rr.status = 'open') AS open_requests
+                 (SELECT COUNT(*) FROM recharge_requests rr WHERE rr.user_id = u.id AND rr.status = 'open') AS open_requests,
+                 (SELECT COUNT(*) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status = 'unpaid'
+                    AND rc.created_at < datetime('now', '-7 days')) AS overdue_count
           FROM users u
           LEFT JOIN admin_customers c ON c.user_id = u.id
           LEFT JOIN admin_users a ON a.id = c.admin_id`;
@@ -2921,7 +2948,12 @@ return j({
           recharge_count: Number(r.recharge_count ?? 0),
           outstanding_usd: Number(r.outstanding_cents ?? 0) / 100,
           open_requests: Number(r.open_requests ?? 0),
+          phase:
+            Number(r.recharge_count ?? 0) < RECHARGE_GRACE_RECHARGES
+              ? ("prepaid" as const)
+              : ("postpaid" as const),
           in_grace: Number(r.recharge_count ?? 0) < RECHARGE_GRACE_RECHARGES,
+          overdue: Number(r.overdue_count ?? 0) > 0,
         }));
 
         return j({
@@ -2931,6 +2963,7 @@ return j({
           policy: {
             grace_recharges: RECHARGE_GRACE_RECHARGES,
             outstanding_cap_usd: RECHARGE_OUTSTANDING_CAP_USD,
+            settlement_days: RECHARGE_SETTLEMENT_DAYS,
           },
         });
       }
@@ -3064,16 +3097,14 @@ return j({
 
         // ---- Allowance gate (pure policy, unit-tested) ----
         const credits = await loadCredits(userId);
-        const decision = checkAllowance(credits, usdCents);
+        const decision = checkAllowance(credits, usdCents, Date.now());
         if (!decision.allowed) {
           return j(
             {
               ok: false,
               error: decision.reason,
-              code: "allowance_cap",
-              outstanding_usd: outstandingCents(credits) / 100,
-              recharge_count: successfulRecharges(credits),
-              in_grace: decision.inGrace,
+              code: decision.overdue ? "allowance_overdue" : "allowance_cap",
+              ...allowanceSummary(credits),
             },
             409
           );
@@ -3108,10 +3139,7 @@ return j({
           coins,
           usd_cents: usdCents,
           balance: (balance as Record<string, unknown> | null)?.coins ?? null,
-          recharge_count: successfulRecharges(after),
-          outstanding_usd: outstandingCents(after) / 100,
-          remaining_allowance_usd: (checkAllowance(after, 0).remainingUsd),
-          in_grace: checkAllowance(after, 0).inGrace,
+          ...allowanceSummary(after),
         }, 201);
       }
 
@@ -3157,8 +3185,7 @@ return j({
           ok: true,
           credit_id: creditId,
           status: makeVoid ? "void" : "paid",
-          outstanding_usd: outstandingCents(credits) / 100,
-          recharge_count: successfulRecharges(credits),
+          ...allowanceSummary(credits),
         });
       }
 
@@ -3228,6 +3255,63 @@ return j({
           .bind(adminId, adminUsername, ((t.display_name as string) || (t.username as string) || adminUsername).slice(0, 40), role, passwordHash, firebaseUid)
           .run();
         return j({ ok: true, admin_id: adminId, admin_username: adminUsername, role, firebase_login: !!firebaseUid }, 201);
+      }
+
+      // ---- CSP violation reports (Phase F2, report-only mode) --------------------------
+      // The browser posts here when the Content-Security-Policy-Report-Only
+      // header fires. These are the data that tells us whether the policy is
+      // safe to switch to enforcing: if this stays quiet across real traffic,
+      // nothing depends on the sources we are about to remove.
+      //
+      // Reports arrive as application/csp-report (legacy JSON) or
+      // application/reports+json (Reporting API), both handled below.
+      if (path === "/api/csp-report" && request.method === "POST") {
+        const raw = await request.text();
+        let payload: unknown = null;
+        try {
+          payload = JSON.parse(raw);
+        } catch {}
+        if (!payload) return j({ ok: true, stored: 0 });
+
+        // Legacy shape: { "csp-report": { ... } }. Reporting API shape: an array.
+        const reports = (Array.isArray(payload) ? payload : [(payload as Record<string, unknown>)["csp-report"]]) as Array<
+          Record<string, unknown> | undefined
+        >;
+
+        let stored = 0;
+        for (const rep of reports.slice(0, 10)) {
+          if (!rep || typeof rep !== "object") continue;
+          const r = (rep as Record<string, unknown>)["csp-report"] ?? rep;
+          const rr = r as Record<string, unknown>;
+          const docUri = typeof rr["document-uri"] === "string" ? rr["document-uri"] : typeof rr.documentURL === "string" ? rr.documentURL : "";
+          const violated = typeof rr["violated-directive"] === "string" ? rr["violated-directive"] : typeof rr.violatedDirective === "string" ? rr.violatedDirective : "unknown";
+          const blocked = typeof rr["blocked-uri"] === "string" ? rr["blocked-uri"] : typeof rr.blockedURL === "string" ? rr.blockedURL : "";
+          const sample = typeof rr["script-sample"] === "string" ? rr["script-sample"] : typeof rr.sample === "string" ? rr.sample : "";
+          if (!violated && !blocked) continue;
+
+          let uid: string | null = null;
+          try {
+            uid = await sessionUserId();
+          } catch {}
+          // Reuse the client_errors table: same shape, same capped fields, same
+          // 30-day retention, and the admin Errors tab already reads it — so CSP
+          // violations show up beside JS errors without a second dashboard.
+          await env.DB.prepare(
+            `INSERT INTO client_errors (id, user_id, route, kind, message, stack, user_agent)
+             VALUES (?, ?, ?, 'csp', ?, ?, ?)`
+          )
+            .bind(
+              newId("csp"),
+              uid,
+              docUri.slice(0, 300),
+              `${violated} blocked ${blocked}`.slice(0, 500),
+              sample.slice(0, 2000),
+              "csp-report"
+            )
+            .run();
+          stored++;
+        }
+        return j({ ok: true, stored });
       }
 
       // ---- Browser error telemetry (Phase 0 observability) -------------------------------

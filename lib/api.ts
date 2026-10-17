@@ -339,11 +339,17 @@ export interface MyRechargeState {
   ok: boolean;
   coins: number;
   admin: { username: string; display_name: string } | null;
+  /** Phase 1 = prepaid (pay first, then credit). Phase 2 = postpaid $100 line. */
+  phase: "prepaid" | "postpaid";
   recharge_count: number;
   grace_recharges: number;
   in_grace: boolean;
   outstanding_usd: number;
   allowance_cap_usd: number;
+  settlement_days: number;
+  /** True when an unpaid credit is past its settlement window. */
+  overdue: boolean;
+  remaining_allowance_usd: number;
   credits: Array<{
     id: string;
     coins: number;
@@ -382,12 +388,15 @@ export interface AdminCustomer {
   recharge_count: number;
   outstanding_usd: number;
   open_requests: number;
+  /** Phase 1 = prepaid, phase 2 = postpaid $100 line. */
+  phase: "prepaid" | "postpaid";
   in_grace: boolean;
+  overdue: boolean;
 }
 
 export async function listAdminCustomers(
   scope: "mine" | "all" | "unassigned" = "mine"
-): Promise<{ ok: boolean; scope: string; customers: AdminCustomer[]; policy: { grace_recharges: number; outstanding_cap_usd: number } }> {
+): Promise<{ ok: boolean; scope: string; customers: AdminCustomer[]; policy: { grace_recharges: number; outstanding_cap_usd: number; settlement_days: number } }> {
   return req(`/api/admin/customers?scope=${encodeURIComponent(scope)}`, { cache: "no-store" });
 }
 

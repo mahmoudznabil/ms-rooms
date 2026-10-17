@@ -1,16 +1,19 @@
 import type { Metadata, Viewport } from "next";
+import "@fontsource-variable/inter";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import RegisterSW from "@/components/RegisterSW";
 import CookieConsentBanner from "@/components/CookieConsentBanner";
 import Telemetry from "@/components/Telemetry";
 
-// Arial throughout — a system font, so there is no webfont to download, no
-// FOUT/FOIT, and no extra bytes on first paint. The single trade-off is that
-// Arial ships only two real weights (400 / 700); CSS font-weight values between
-// them get synthesised by the browser. globals.css collapses those intermediate
-// steps onto real Arial weights instead of letting the browser fake them, and
-// relies on size + colour for hierarchy rather than weight variety.
+// Inter, self-hosted via @fontsource-variable/inter (SIL Open Font License, so
+// it redistributes with the app). Self-hosting keeps first paint free of a
+// third-party request and avoids the GDPR problem of hitting Google Fonts.
+//
+// This replaced Arial, which only ships two real cuts (400/700) — every other
+// weight the UI asked for was a synthesised smear. Inter is a true variable
+// font, so the full 100-900 range is real and the type hierarchy the components
+// assume actually renders.
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://ms-rooms.pages.dev"),
@@ -22,7 +25,14 @@ export const metadata: Metadata = {
     "MS-ROOMS is live audio party rooms in your browser. Take a mic seat, send gifts, play games together, and talk face to face — no download needed.",
   manifest: "/manifest.json",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "MS-ROOMS" },
-  icons: { icon: "/ms-rooms-logo.svg", apple: "/ms-rooms-logo.svg" },
+  icons: {
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
   openGraph: {
     type: "website",
     siteName: "MS-ROOMS",
