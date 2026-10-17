@@ -216,30 +216,47 @@ prod, then mark in prod `d1_migrations`. The `[ai]` binding (`wrangler.toml`
 wrangler rejects) flows through `functions/api/[[path]].ts`
 (`PagesEnv.AI`) untouched — the shim passes `env` wholesale.
 
-### 6.5 Coin packages & Stripe recharge (Phase D, `coin_packages`)
+### 6.5 Coin packages & admin-managed recharge (Phase D/F, `coin_packages`)
 
 | Endpoint | Effect |
 |---|---|
 | `GET /api/recharge/packages` | Returns the active `coin_packages` rows (migration 0016) ordered by `display_order`. Falls back to the hardcoded Phase D ladder when the table is empty. |
-| `POST /api/recharge/create-checkout { package_id }` | Auth-gated. Creates a Stripe Payment Link for the package (creating a Stripe Price on the fly if `stripe_price_id` is unset) and returns `{ checkout_url }`. 503 `stripe_unavailable` when `STRIPE_SECRET_KEY` is absent. |
-| `POST /api/recharge/webhook` | Stripe webhook. Verifies the `stripe-signature` header (HMAC-SHA256, 5-min tolerance), then on `checkout.session.completed` credits `coins + bonus_coins` atomically and records the purchase. Idempotent via `purchases(provider, provider_transaction_id)` UNIQUE — a replayed webhook returns 200 `already_processed` without double-crediting. |
+| `POST /api/recharge/request { package_id }` | User asks for a pack. Creates one `recharge_requests` row (one open request per user — a second returns 409). **On the user's first ever request the system assigns them to an admin** — the least-loaded one by (customers, open requests, id), via `pickAdminForAssignment` — and writes `admin_customers`. |
+| `GET /api/recharge/mine` | The caller's own state: coins, assigned admin, recharge count, whether they are in grace, unpaid allowance, credit ledger and request history. Drives the wallet panel. |
 
 **Pricing ladder** (0.8× competitor median ≈ $1.08/100 coins):
 $0.99→92, $4.99→462, $9.99→925, $29.99→2,950+177 bonus, $99.99→10,400+1,248 bonus.
 
-**Secrets** (Pages project → Settings → Environment variables):
-- `STRIPE_SECRET_KEY` — Stripe secret key (sk_live_…) for Payment Link creation.
-- `STRIPE_WEBHOOK_SECRET` — webhook signing secret (whsec_…) from the Stripe dashboard.
-- `APP_URL` — public URL for the post-payment redirect (defaults to `https://ms-rooms.pages.dev`).
+**The allowance rule** (pure + unit-tested in `workers/recharge-policy.ts`, 18 cases):
 
-**Stripe dashboard setup**: create a webhook endpoint pointing at
-`https://ms-rooms.pages.dev/api/recharge/webhook`, subscribe to
-`checkout.session.completed`, and copy the signing secret into
-`STRIPE_WEBHOOK_SECRET`. For local testing use the Stripe CLI
-(`stripe listen --forward-to localhost:8788/api/recharge/webhook`).
+- Below `RECHARGE_GRACE_RECHARGES = 30` successful recharges, an admin may credit freely.
+- At/above 30, the user may carry at most `RECHARGE_OUTSTANDING_CAP_USD = 100` of **unpaid** credit. A further credit that would cross the cap is refused with 409 `allowance_cap` and an operator-readable reason.
+- Marking an earlier credit **paid** frees the allowance again; voiding it removes it from both the cap and the recharge count.
+- Both constants live only in `workers/recharge-policy.ts` — change the policy there, nowhere else.
 
-`migrations/0016_coin_packages.sql` — purely additive. Apply local →
-preview → prod, then mark in prod `d1_migrations`.
+**Admin desk** (`app/admin/RechargeTab.tsx`, tab "Recharge"):
+
+| Endpoint | Effect |
+|---|---|
+| `GET /api/admin/customers?scope=mine\|unassigned\|all` | Customer list with per-user recharge count, unpaid USD, open requests, grace flag. `scope=all` is master-only. |
+| `POST /api/admin/customers/claim` | Take an unassigned user (adopts their open requests). 409 if another admin owns them. |
+| `POST /api/admin/customers/release` | Hand a user back to the pool. |
+| `POST /api/admin/customers/assign` | Master-only: move a user to a named admin. |
+| `GET /api/admin/recharge/requests?status=` | The open queue for my customers (oldest first). |
+| `POST /api/admin/recharge/fulfil` | **The only path that credits purchased coins.** Writes the `recharge_credits` row and the balance change together, then a `purchase` ledger row. Runs the allowance gate first (409 on refusal). Fulfils the linked request in the same call so the queue and the ledger can never disagree. |
+| `GET /api/admin/recharge/ledger?user_id=` | That user's credits, for settling. |
+| `POST /api/admin/recharge/mark-paid` | Settle (`paid`) or void a credit — this is what frees allowance. |
+
+RBAC: `fulfil` / `mark-paid` require `finance` or `master_admin`; the rest of the
+customer desk is open to any admin (support can grow and work their base).
+
+**Secrets**: none. There is no payment provider, so no Stripe keys and no
+webhook to configure. Delete `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` from
+the Pages project if they were ever set — nothing reads them.
+
+`migrations/0016_coin_packages.sql` and `migrations/0018_admin_recharge.sql` —
+both purely additive. Apply local → preview → prod, then mark in prod
+`d1_migrations`.
 
 ### 6.4 Unified chats tab (Phase C — client only, no migration)
 

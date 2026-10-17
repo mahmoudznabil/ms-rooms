@@ -293,7 +293,7 @@ export async function fetchTriviaPack(): Promise<ServerTriviaPack | null> {
   if (clean.length === 0) return null;
   return { ...res.pack, questions: clean };
 }
-// ---- Coin packages & Stripe recharge (Phase D) -----------------------------------------
+// ---- Coin packages (Phase D pricing; Phase F admin-managed fulfilment) ----------------
 export interface CoinPackage {
   id: string;
   name: string;
@@ -302,7 +302,6 @@ export interface CoinPackage {
   total_coins: number;
   price_cents: number;
   price: string;
-  stripe_price_id: string | null;
   value_note: string;
 }
 
@@ -317,19 +316,133 @@ export async function fetchCoinPackages(): Promise<RechargePackagesResult> {
   return req(`/api/recharge/packages`, { cache: "no-store" });
 }
 
-export interface CreateCheckoutResult {
+// ---- Recharge: admin-managed (no card processor) ----------------------------------------
+// The user asks for a package; an admin fulfils it and collects payment
+// offline. On the first request the system assigns the user to the
+// least-loaded admin, and the admin keeps that customer from then on.
+export interface RechargeRequestResult {
   ok: boolean;
-  checkout_url?: string;
+  request_id?: string;
   package_id?: string;
+  coins?: number;
+  auto_assigned?: boolean;
+  admin_id?: string | null;
+  message?: string;
+  error?: string;
+}
+
+export async function requestRecharge(packageId: string): Promise<RechargeRequestResult> {
+  return req(`/api/recharge/request`, { method: "POST", body: JSON.stringify({ package_id: packageId }) });
+}
+
+export interface MyRechargeState {
+  ok: boolean;
+  coins: number;
+  admin: { username: string; display_name: string } | null;
+  recharge_count: number;
+  grace_recharges: number;
+  in_grace: boolean;
+  outstanding_usd: number;
+  allowance_cap_usd: number;
+  credits: Array<{
+    id: string;
+    coins: number;
+    usd_cents: number;
+    status: "unpaid" | "paid" | "void";
+    note?: string;
+    created_at: string;
+    settled_at?: string | null;
+  }>;
+  requests: Array<{
+    id: string;
+    package_id: string;
+    coins: number;
+    status: "open" | "fulfilled" | "declined";
+    created_at: string;
+    resolved_at?: string | null;
+    admin_username?: string | null;
+  }>;
+}
+
+export async function fetchMyRecharge(): Promise<MyRechargeState> {
+  return req(`/api/recharge/mine`, { cache: "no-store" });
+}
+
+// ---- Admin: customer base ---------------------------------------------------------------
+export interface AdminCustomer {
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar_url: string | null;
+  coins: number;
+  created_at: string;
+  admin_id: string | null;
+  admin_username: string | null;
+  assigned_at: string | null;
+  recharge_count: number;
+  outstanding_usd: number;
+  open_requests: number;
+  in_grace: boolean;
+}
+
+export async function listAdminCustomers(
+  scope: "mine" | "all" | "unassigned" = "mine"
+): Promise<{ ok: boolean; scope: string; customers: AdminCustomer[]; policy: { grace_recharges: number; outstanding_cap_usd: number } }> {
+  return req(`/api/admin/customers?scope=${encodeURIComponent(scope)}`, { cache: "no-store" });
+}
+
+export async function claimCustomer(user_id: string): Promise<{ ok: boolean; user_id: string }> {
+  return req(`/api/admin/customers/claim`, { method: "POST", body: JSON.stringify({ user_id }) });
+}
+
+export async function releaseCustomer(user_id: string): Promise<{ ok: boolean; user_id: string }> {
+  return req(`/api/admin/customers/release`, { method: "POST", body: JSON.stringify({ user_id }) });
+}
+
+export async function assignCustomer(user_id: string, admin_id: string): Promise<{ ok: boolean; user_id: string; admin_id: string }> {
+  return req(`/api/admin/customers/assign`, { method: "POST", body: JSON.stringify({ user_id, admin_id }) });
+}
+
+export interface AdminRechargeRequest {
+  id: string;
+  user_id: string;
+  package_id: string;
+  coins: number;
+  status: "open" | "fulfilled" | "declined";
+  created_at: string;
+  username: string;
+  display_name: string;
+  avatar_url: string | null;
+  user_coins: number;
+  recharge_count: number;
+  outstanding_usd: number;
+}
+
+export async function listRechargeRequests(status: "open" | "fulfilled" | "declined" = "open"): Promise<{ ok: boolean; requests: AdminRechargeRequest[] }> {
+  return req(`/api/admin/recharge/requests?status=${encodeURIComponent(status)}`, { cache: "no-store" });
+}
+
+export interface FulfilResult {
+  ok: boolean;
+  credit_id?: string;
+  user_id?: string;
+  coins?: number;
+  balance?: number | null;
+  recharge_count?: number;
+  outstanding_usd?: number;
+  remaining_allowance_usd?: number;
+  in_grace?: boolean;
   error?: string;
   code?: string;
 }
 
-export async function createCheckout(packageId: string): Promise<CreateCheckoutResult> {
-  return req(`/api/recharge/create-checkout`, {
-    method: "POST",
-    body: JSON.stringify({ package_id: packageId }),
-  });
+export async function fulfilRecharge(input: { request_id?: string; user_id?: string; package_id?: string; note?: string }): Promise<FulfilResult> {
+  return req(`/api/admin/recharge/fulfil`, { method: "POST", body: JSON.stringify(input) });
+}
+
+/** Settle a credit the user has paid for — this frees their $100 allowance. */
+export async function markCreditPaid(credit_id: string, isVoid = false): Promise<{ ok: boolean; outstanding_usd: number; recharge_count: number }> {
+  return req(`/api/admin/recharge/mark-paid`, { method: "POST", body: JSON.stringify({ credit_id, void: isVoid }) });
 }
 
 // ---- Private-call heartbeat (Phase E2) -----------------------------------------

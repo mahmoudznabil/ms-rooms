@@ -11,6 +11,14 @@
 import { R2Bucket } from "@cloudflare/workers-types";
 import { requireUser, timingSafeEqual } from "./auth";
 import { isValidTriviaPack, parseTriviaPackReply } from "./trivia-validate";
+import {
+  RECHARGE_GRACE_RECHARGES,
+  RECHARGE_OUTSTANDING_CAP_USD,
+  checkAllowance,
+  outstandingCents,
+  pickAdminForAssignment,
+  successfulRecharges,
+} from "./recharge-policy";
 
 interface Env {
   // Typed as `any` to avoid requiring @cloudflare/workers-types.
@@ -40,15 +48,10 @@ interface Env {
   // callers degrade to static content instead of failing.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   AI?: any;
-  // Stripe (Phase D3). STRIPE_SECRET_KEY creates Payment Links;
-  // STRIPE_WEBHOOK_SECRET verifies webhook signatures. Both optional —
-  // when absent, /api/recharge/create-checkout returns 503 and the wallet
-  // UI shows a "top-up unavailable" notice instead of crashing.
-  STRIPE_SECRET_KEY?: string;
-  STRIPE_WEBHOOK_SECRET?: string;
-  // Public app URL for Stripe redirect after payment. Defaults to the
-  // production Pages URL when unset.
-  APP_URL?: string;
+  // Recharges are admin-managed (no card processor): the user asks for a
+  // package, an admin fulfils it, the user pays that admin offline. The
+  // allowance rule that bounds unpaid credit lives in
+  // `workers/recharge-policy.ts`; no payment-provider secrets are needed.
 }
 
 // Allowed origins. The API and the app are served from the same origin by
@@ -132,31 +135,9 @@ function newId(prefix: string): string {
   return `${prefix}-${r}`;
 }
 
-// ---- Stripe webhook signature verification (Phase D3) -------------------------------------------
-// Verifies the `stripe-signature` header against the raw request body using
-// HMAC-SHA256. Stripe signs each webhook with the webhook secret and includes
-// a timestamp + signature in the header. We accept events up to 5 minutes
-// old (standard tolerance) and reject anything else.
-async function verifyStripeSignature(
-  rawBody: string,
-  signature: string,
-  secret: string
-): Promise<Record<string, unknown>> {
-  const parts = signature.split(",").reduce<Record<string, string>>((acc, part) => {
-    const [k, v] = part.split("=");
-    if (k && v) acc[k.trim()] = v.trim();
-    return acc;
-  }, {});
-  const t = parts.t;
-  const v1 = parts.v1;
-  if (!t || !v1) throw new Error("Missing timestamp or signature");
-
-  const timestamp = Number(t);
-  if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error("Invalid timestamp");
-  const now = Math.floor(Date.now() / 1000);
-  if (Math.abs(now - timestamp) > 300) throw new Error("Timestamp too old");
-
-  const signedPayload = `${t}.${rawBody}`;
+// ---- HMAC-SHA256 (shared by admin-manifest signing) ----------------------------------
+// Returns the lowercase hex HMAC-SHA256 of `message` under `secret`.
+async function hmacSha256Hex(message: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -164,20 +145,18 @@ async function verifyStripeSignature(
     false,
     ["sign"]
   );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedPayload));
-  const expected = Array.from(new Uint8Array(sig))
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
 
-  // Constant-time comparison to avoid timing attacks.
-  if (expected.length !== v1.length) throw new Error("Signature mismatch");
+/** Constant-time string compare — never leak a match position by early exit. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < expected.length; i++) {
-    diff |= expected.charCodeAt(i) ^ v1.charCodeAt(i);
-  }
-  if (diff !== 0) throw new Error("Signature mismatch");
-
-  return JSON.parse(rawBody) as Record<string, unknown>;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 // ---- Workers AI (Phase B) ---------------------------------------------------
@@ -2087,14 +2066,14 @@ return j({ ok: true, ended: true });
         // Phase D: coin_packages table (migration 0016), fallback to hardcoded ladder.
         try {
           const rows = await env.DB.prepare(
-            `SELECT id, name, coins, bonus_coins, price_cents, stripe_price_id, display_order
+            `SELECT id, name, coins, bonus_coins, price_cents, display_order
              FROM coin_packages WHERE active = 1 ORDER BY display_order ASC`
           ).all();
           const pkgs = (rows.results ?? []) as Array<Record<string, unknown>>;
           if (pkgs.length > 0) {
 return j({
               ok: true,
-              note: "20% under competitors: ~$1.08/100 coins. Bought via Stripe Payment Links.",
+              note: "20% under competitors: ~$1.08/100 coins. Handled by our team — request a pack and your admin confirms payment.",
               market_baseline: "Chamet ~$0.01/coin, Tango ~$0.0083, Bigo ~$0.016-0.02, UpLive ~$0.017. Median ~$1.35/100.",
               packages: pkgs.map((p) => ({
                 id: p.id as string,
@@ -2104,7 +2083,6 @@ return j({
                 total_coins: ((p.coins as number) ?? 0) + ((p.bonus_coins as number) ?? 0),
                 price_cents: p.price_cents as number,
                 price: `$${((p.price_cents as number) / 100).toFixed(2)}`,
-                stripe_price_id: (p.stripe_price_id as string) || null,
                 value_note: `${((p.coins as number) + ((p.bonus_coins as number) ?? 0)).toLocaleString()} coins for $${((p.price_cents as number) / 100).toFixed(2)} ($${(((p.price_cents as number) / 100) / ((p.coins as number) + ((p.bonus_coins as number) ?? 0)) * 100).toFixed(2)}/100)`,
               })),
             });
@@ -2113,27 +2091,30 @@ return j({
         // Fallback: hardcoded Phase D ladder (same numbers as migration 0016).
         return j({
           ok: true,
-          note: "20% under competitors: ~$1.08/100 coins. Bought via Stripe Payment Links.",
+          note: "20% under competitors: ~$1.08/100 coins. Handled by our team — request a pack and your admin confirms payment.",
           market_baseline: "Chamet ~$0.01/coin, Tango ~$0.0083, Bigo ~$0.016-0.02, UpLive ~$0.017. Median ~$1.35/100.",
           packages: [
-            { id: "p92",   name: "Starter Pack",  coins: 92,    bonus_coins: 0,    price_cents: 99,   price: "$0.99",  stripe_price_id: null, value_note: "92 coins for $0.99 ($1.08/100)" },
-            { id: "p462",  name: "Popular Pack",  coins: 462,   bonus_coins: 0,    price_cents: 499,  price: "$4.99",  stripe_price_id: null, value_note: "462 coins for $4.99 ($1.08/100)" },
-            { id: "p925",  name: "Value Pack",    coins: 925,   bonus_coins: 0,    price_cents: 999,  price: "$9.99",  stripe_price_id: null, value_note: "925 coins for $9.99 ($1.08/100)" },
-            { id: "p2950", name: "Premium Pack",  coins: 2950,  bonus_coins: 177,  price_cents: 2999, price: "$29.99", stripe_price_id: null, value_note: "3,127 coins for $29.99 ($1.02/100, +6% bonus)" },
-            { id: "p10400",name: "Ultimate Pack", coins: 10400, bonus_coins: 1248, price_cents: 9999, price: "$99.99", stripe_price_id: null, value_note: "11,648 coins for $99.99 ($0.96/100, +12% bonus)" },
+            { id: "p92",   name: "Starter Pack",  coins: 92,    bonus_coins: 0,    price_cents: 99,   price: "$0.99",  value_note: "92 coins for $0.99 ($1.08/100)" },
+            { id: "p462",  name: "Popular Pack",  coins: 462,   bonus_coins: 0,    price_cents: 499,  price: "$4.99",  value_note: "462 coins for $4.99 ($1.08/100)" },
+            { id: "p925",  name: "Value Pack",    coins: 925,   bonus_coins: 0,    price_cents: 999,  price: "$9.99",  value_note: "925 coins for $9.99 ($1.08/100)" },
+            { id: "p2950", name: "Premium Pack",  coins: 2950,  bonus_coins: 177,  price_cents: 2999, price: "$29.99", value_note: "3,127 coins for $29.99 ($1.02/100, +6% bonus)" },
+            { id: "p10400",name: "Ultimate Pack", coins: 10400, bonus_coins: 1248, price_cents: 9999, price: "$99.99", value_note: "11,648 coins for $99.99 ($0.96/100, +12% bonus)" },
           ],
         });
       }
 
-      // ---- Stripe Payment Link creation (Phase D3) ------------------------------------------------------
-      // Creates a Stripe Payment Link for a coin package and returns the URL.
-      // The client redirects the user to Stripe; on success Stripe calls the
-      // webhook endpoint below, which credits coins idempotently.
+// ---- Recharge: admin-managed (no card processor) -------------------------------------
+      // Recharges are handled by admins: the user asks for a package, an admin
+      // fulfils it and the user pays that admin offline. The first time a user
+      // asks, the system assigns them to the least-loaded admin so the work
+      // splits without anyone having to claim them by hand.
       //
-      // Requires STRIPE_SECRET_KEY in the environment. When absent (local dev),
-      // returns 503 with a clear message — the wallet UI shows a "top-up
-      // unavailable" notice instead of crashing.
-      if (path === "/api/recharge/create-checkout" && request.method === "POST") {
+      // The allowance rule that keeps this honest lives in
+      // `workers/recharge-policy.ts` (pure, unit-tested): below
+      // RECHARGE_GRACE_RECHARGES (30) recharges an admin may credit freely;
+      // at or above it the user may carry at most $100 UNPAID credit until the
+      // admin marks earlier credit as paid.
+      if (path === "/api/recharge/request" && request.method === "POST") {
         const me = await requireUser(request, env);
         if (!me) return j({ ok: false, error: "Sign in required." }, 401);
         if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
@@ -2142,173 +2123,133 @@ return j({
         const packageId = typeof body?.package_id === "string" ? body.package_id : "";
         if (!packageId) return badRequest("package_id is required.");
 
-        const secretKey = (env as unknown as Record<string, unknown>).STRIPE_SECRET_KEY as string | undefined;
-        if (!secretKey) {
-          return j({ ok: false, error: "Stripe is not configured. Top-up is unavailable.", code: "stripe_unavailable" }, 503);
-        }
-
-        // Look up the package to get the Stripe Price ID (or create one on the fly).
         let pkg: Record<string, unknown> | null = null;
         try {
           const row = await env.DB.prepare(
-            `SELECT id, name, coins, bonus_coins, price_cents, stripe_price_id FROM coin_packages WHERE id = ? AND active = 1`
+            `SELECT id, name, coins, bonus_coins, price_cents FROM coin_packages WHERE id = ? AND active = 1`
           ).bind(packageId).first();
           if (row) pkg = row as Record<string, unknown>;
         } catch {}
         if (!pkg) return notFound("Package not found.");
 
-        const priceId = pkg.stripe_price_id as string | null;
-        const priceCents = pkg.price_cents as number;
-        const packageName = pkg.name as string;
+        const coins = ((pkg.coins as number) ?? 0) + ((pkg.bonus_coins as number) ?? 0);
 
-        // If no Stripe Price ID is stored, create one on the fly.
-        let finalPriceId = priceId;
-        if (!finalPriceId) {
-          const createPriceRes = await fetch("https://api.stripe.com/v1/prices", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${secretKey}`,
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: new URLSearchParams({
-              "unit_amount": String(priceCents),
-              "currency": "usd",
-              "product_data[name]": `MS-ROOMS ${packageName}`,
-            }),
-          });
-          if (!createPriceRes.ok) {
-            return j({ ok: false, error: "Failed to create Stripe price.", code: "stripe_error" }, 502);
+        // One open request at a time — otherwise a user can spam the queue and
+        // an admin fulfils the same top-up twice by accident.
+        const open = await env.DB.prepare(
+          `SELECT id FROM recharge_requests WHERE user_id = ? AND status = 'open' LIMIT 1`
+        ).bind(userId).first();
+        if (open) return conflict("You already have a top-up request waiting. An admin will be with you shortly.");
+
+        // Assign an admin on first contact (and keep the same one afterwards,
+        // so the relationship is stable rather than reshuffling per request).
+        let adminId: string | null = null;
+        let autoAssigned = false;
+        const existingOwner = await env.DB.prepare(
+          `SELECT admin_id FROM admin_customers WHERE user_id = ?`
+        ).bind(userId).first();
+        if (existingOwner) {
+          adminId = (existingOwner as Record<string, unknown>).admin_id as string;
+        } else {
+          const admins = await env.DB.prepare(`SELECT id FROM admin_users ORDER BY id ASC`).all();
+          const ids = ((admins.results ?? []) as Array<Record<string, unknown>>).map((a) => ({ id: a.id as string }));
+          const counts = await env.DB.prepare(
+            `SELECT admin_id, COUNT(*) AS customers FROM admin_customers GROUP BY admin_id`
+          ).all();
+          const openCounts = await env.DB.prepare(
+            `SELECT admin_id, COUNT(*) AS open_requests FROM recharge_requests WHERE status = 'open' GROUP BY admin_id`
+          ).all();
+          const load = new Map<string, { customers: number; openRequests: number }>();
+          for (const a of ids) load.set(a.id, { customers: 0, openRequests: 0 });
+          for (const r of (counts.results ?? []) as Array<Record<string, unknown>>) {
+            const k = r.admin_id as string;
+            if (load.has(k)) load.set(k, { ...load.get(k)!, customers: Number(r.customers ?? 0) });
           }
-          const priceData = (await createPriceRes.json()) as { id?: string };
-          finalPriceId = priceData.id ?? null;
-          if (!finalPriceId) {
-            return j({ ok: false, error: "Failed to create Stripe price.", code: "stripe_error" }, 502);
+          for (const r of (openCounts.results ?? []) as Array<Record<string, unknown>>) {
+            const k = r.admin_id as string;
+            if (load.has(k)) load.set(k, { ...load.get(k)!, openRequests: Number(r.open_requests ?? 0) });
           }
-          // Store it for next time.
-          try {
-            await env.DB.prepare(`UPDATE coin_packages SET stripe_price_id = ? WHERE id = ?`).bind(finalPriceId, packageId).run();
-          } catch {}
-        }
-
-        // Create the Payment Link.
-        const appUrl = (env as unknown as Record<string, unknown>).APP_URL as string | undefined || "https://ms-rooms.pages.dev";
-        const createLinkRes = await fetch("https://api.stripe.com/v1/payment_links", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${secretKey}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams({
-            "line_items[0][price]": finalPriceId,
-            "line_items[0][quantity]": "1",
-            "metadata[user_id]": userId,
-            "metadata[package_id]": packageId,
-            "after_completion[type]": "redirect",
-            "after_completion[redirect][url]": `${appUrl}/wallet?recharge=success`,
-          }),
-        });
-        if (!createLinkRes.ok) {
-          return j({ ok: false, error: "Failed to create checkout session.", code: "stripe_error" }, 502);
-        }
-        const linkData = (await createLinkRes.json()) as { url?: string };
-        if (!linkData.url) {
-          return j({ ok: false, error: "Failed to create checkout session.", code: "stripe_error" }, 502);
-        }
-        return j({ ok: true, checkout_url: linkData.url, package_id: packageId });
-      }
-
-      // ---- Stripe webhook (Phase D3) ----------------------------------------------------------------------
-      // Receives Stripe events, verifies the signature, and credits coins
-      // idempotently on `checkout.session.completed`. The `purchases` table
-      // (migration 0011) enforces idempotency via UNIQUE(provider, provider_transaction_id).
-      //
-      // Requires STRIPE_WEBHOOK_SECRET in the environment.
-      if (path === "/api/recharge/webhook" && request.method === "POST") {
-        const webhookSecret = (env as unknown as Record<string, unknown>).STRIPE_WEBHOOK_SECRET as string | undefined;
-        if (!webhookSecret) {
-          return j({ ok: false, error: "Webhook secret not configured." }, 500);
-        }
-        const signature = request.headers.get("stripe-signature") ?? "";
-        const rawBody = await request.text();
-
-        // Verify the Stripe signature.
-        let event: Record<string, unknown>;
-        try {
-          event = await verifyStripeSignature(rawBody, signature, webhookSecret);
-        } catch {
-          return j({ ok: false, error: "Invalid signature." }, 400);
-        }
-
-        const eventType = event.type as string;
-        if (eventType === "checkout.session.completed") {
-          const session = event.data as { object: Record<string, unknown> };
-          const sessionId = session.object.id as string;
-          const metadata = (session.object.metadata ?? {}) as Record<string, string>;
-          const userId = metadata.user_id;
-          const packageId = metadata.package_id;
-          if (!userId || !packageId) {
-            return j({ ok: false, error: "Missing metadata." }, 400);
-          }
-
-          // Look up the package.
-          let pkg: Record<string, unknown> | null = null;
-          try {
-            const row = await env.DB.prepare(
-              `SELECT id, coins, bonus_coins FROM coin_packages WHERE id = ?`
-            ).bind(packageId).first();
-            if (row) pkg = row as Record<string, unknown>;
-          } catch {}
-          if (!pkg) return j({ ok: false, error: "Package not found." }, 404);
-
-          const totalCoins = ((pkg.coins as number) ?? 0) + ((pkg.bonus_coins as number) ?? 0);
-
-          // Idempotent credit: check if this Stripe session was already processed.
-          try {
-            const existing = await env.DB.prepare(
-              `SELECT id, status FROM purchases WHERE provider = 'stripe' AND provider_transaction_id = ?`
-            ).bind(sessionId).first();
-            if (existing) {
-              const ex = existing as Record<string, unknown>;
-              if (ex.status === "credited") {
-                // Already credited — return 200 to stop Stripe retries.
-                return j({ ok: true, already_processed: true });
-              }
+          adminId = pickAdminForAssignment(ids, load, null);
+          if (adminId) {
+            try {
+              await env.DB.prepare(
+                `INSERT INTO admin_customers (user_id, admin_id, assigned_by) VALUES (?, ?, NULL)`
+              ).bind(userId, adminId).run();
+              autoAssigned = true;
+            } catch {
+              // Lost a race with a concurrent first request — fall back to
+              // whoever landed first.
+              const owner = await env.DB.prepare(`SELECT admin_id FROM admin_customers WHERE user_id = ?`).bind(userId).first();
+              if (owner) adminId = (owner as Record<string, unknown>).admin_id as string;
             }
-          } catch {}
-
-          // Credit coins atomically.
-          const credit = await env.DB.prepare(
-            `UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-          ).bind(totalCoins, userId).run();
-          if (((credit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0) !== 1) {
-            return j({ ok: false, error: "Failed to credit coins." }, 500);
           }
-
-          // Record the purchase (idempotent via UNIQUE constraint).
-          try {
-            await env.DB.prepare(
-              `INSERT INTO purchases (id, user_id, provider, provider_transaction_id, sku, amount, status, raw_receipt_ref)
-               VALUES (?, ?, 'stripe', ?, ?, ?, 'credited', ?)`
-            ).bind(newId("pur"), userId, sessionId, packageId, totalCoins, JSON.stringify(session.object)).run();
-          } catch {
-            // UNIQUE constraint violation = already recorded. Coins were still
-            // credited above (idempotent), so this is fine.
-          }
-
-          // Record the transaction.
-          try {
-            await env.DB.prepare(
-              `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, NULL, 'purchase', ?, ?)`
-            ).bind(newId("tx"), userId, totalCoins, `Coin purchase: ${packageId} via Stripe`).run();
-          } catch {}
-
-          return j({ ok: true, credited: totalCoins });
         }
 
-        // Acknowledge other events (Stripe expects 200 to stop retries).
-        return j({ ok: true, received: true });
+        const requestId = newId("rr");
+        await env.DB.prepare(
+          `INSERT INTO recharge_requests (id, user_id, package_id, coins, status, admin_id, created_at)
+           VALUES (?, ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP)`
+        ).bind(requestId, userId, packageId, coins, adminId).run();
+
+        return j({
+          ok: true,
+          request_id: requestId,
+          package_id: packageId,
+          coins,
+          auto_assigned: autoAssigned,
+          admin_id: adminId,
+          message: adminId
+            ? "Request received. Your admin will confirm and arrange payment."
+            : "Request received. An admin will pick this up shortly.",
+        }, 201);
       }
 
+      // The caller's own recharge state: who their admin is, what they have
+      // requested, and how much unpaid allowance they have left.
+      if (path === "/api/recharge/mine" && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const userId = me.id;
+
+        const credits = await env.DB.prepare(
+          `SELECT id, coins, usd_cents, status, note, created_at, settled_at FROM recharge_credits
+           WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`
+        ).bind(userId).all();
+        const records = ((credits.results ?? []) as Array<Record<string, unknown>>).map((c) => ({
+          id: c.id as string,
+          usdCents: Number(c.usd_cents ?? 0),
+          status: (c.status as "unpaid" | "paid" | "void") ?? "unpaid",
+        }));
+        const decision = checkAllowance(records, 0);
+
+        const requests = await env.DB.prepare(
+          `SELECT r.id, r.package_id, r.coins, r.status, r.created_at, r.resolved_at, a.username AS admin_username
+           FROM recharge_requests r LEFT JOIN admin_users a ON a.id = r.admin_id
+           WHERE r.user_id = ? ORDER BY r.created_at DESC LIMIT 20`
+        ).bind(userId).all();
+
+        const owner = await env.DB.prepare(
+          `SELECT a.username, a.display_name FROM admin_customers c
+           JOIN admin_users a ON a.id = c.admin_id WHERE c.user_id = ?`
+        ).bind(userId).first();
+
+        const balance = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
+
+        return j({
+          ok: true,
+          coins: (balance as Record<string, unknown> | null)?.coins ?? 0,
+          admin: owner
+            ? { username: (owner as Record<string, unknown>).username, display_name: (owner as Record<string, unknown>).display_name }
+            : null,
+          recharge_count: successfulRecharges(records),
+          grace_recharges: RECHARGE_GRACE_RECHARGES,
+          in_grace: decision.inGrace,
+          outstanding_usd: outstandingCents(records) / 100,
+          allowance_cap_usd: RECHARGE_OUTSTANDING_CAP_USD,
+          credits: (credits.results ?? []),
+          requests: requests.results ?? [],
+        });
+      }
       // NOTE: POST /api/recharge/buy was removed (Phase 1.5). It credited up to
       // 550,000 coins to any user_id with no payment and no authentication — an
       // anonymous coin mint reachable from the wallet UI. Coins are earned-only
@@ -2910,6 +2851,315 @@ return j({
         const like = `%${q}%`;
         const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone, provider, banned, ban_reason, firebase_uid, created_at FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ? OR email LIKE ? OR phone LIKE ? LIMIT 10`).bind(like, like, like, q, like, like).all() : await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone, provider, banned, ban_reason, firebase_uid, created_at FROM users ORDER BY updated_at DESC LIMIT 10`).all();
         return j({ ok: true, users: rows.results ?? [] });
+      }
+
+      // ---- Customer base (admin-managed recharges) -------------------------------------
+      // Recharges have no card processor: a user requests a pack, the admin who
+      // owns them fulfils it and collects payment offline. These endpoints are
+      // how an admin builds and works their customer base:
+      //   GET  /api/admin/customers            my customers + unassigned queue
+      //   POST /api/admin/customers/claim      take an unassigned user
+      //   POST /api/admin/customers/release    hand a user back to the pool
+      //   POST /api/admin/customers/assign     (master) move a user to an admin
+      //   GET  /api/admin/recharge/requests    the open queue for my customers
+      //   POST /api/admin/recharge/fulfil      credit a user (allowance-capped)
+      //   POST /api/admin/recharge/mark-paid   settle a credit, freeing allowance
+
+      /** Load a user's credit ledger for the allowance decision. */
+      async function loadCredits(userId: string) {
+        const rows = await env.DB.prepare(
+          `SELECT id, usd_cents, status FROM recharge_credits WHERE user_id = ?`
+        ).bind(userId).all();
+        return ((rows.results ?? []) as Array<Record<string, unknown>>).map((c) => ({
+          id: c.id as string,
+          usdCents: Number(c.usd_cents ?? 0),
+          status: (c.status as "unpaid" | "paid" | "void") ?? "unpaid",
+        }));
+      }
+
+      /** The admin who currently owns this user, or null. */
+      async function ownerOf(userId: string): Promise<string | null> {
+        const row = await env.DB.prepare(`SELECT admin_id FROM admin_customers WHERE user_id = ?`).bind(userId).first();
+        return row ? ((row as Record<string, unknown>).admin_id as string) : null;
+      }
+
+      if (path === "/api/admin/customers" && request.method === "GET") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const adminId = adm.id as string;
+        const isMaster = (adm.role as string) === "master_admin";
+        const scope = url.searchParams.get("scope") ?? "mine"; // mine | all | unassigned
+        const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") ?? 100) || 100));
+
+        const base = `
+          SELECT u.id, u.username, u.display_name, u.avatar_url, u.coins, u.created_at,
+                 c.admin_id, c.assigned_at, a.username AS admin_username,
+                 (SELECT COUNT(*) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status != 'void') AS recharge_count,
+                 (SELECT COALESCE(SUM(rc.usd_cents), 0) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status = 'unpaid') AS outstanding_cents,
+                 (SELECT COUNT(*) FROM recharge_requests rr WHERE rr.user_id = u.id AND rr.status = 'open') AS open_requests
+          FROM users u
+          LEFT JOIN admin_customers c ON c.user_id = u.id
+          LEFT JOIN admin_users a ON a.id = c.admin_id`;
+
+        const rows =
+          scope === "all" && isMaster
+            ? await env.DB.prepare(`${base} ORDER BY u.created_at DESC LIMIT ?`).bind(limit).all()
+            : scope === "unassigned"
+              ? await env.DB.prepare(`${base} WHERE c.user_id IS NULL ORDER BY u.created_at DESC LIMIT ?`).bind(limit).all()
+              : await env.DB.prepare(`${base} WHERE c.admin_id = ? ORDER BY c.assigned_at DESC LIMIT ?`).bind(adminId, limit).all();
+
+        const list = ((rows.results ?? []) as Array<Record<string, unknown>>).map((r) => ({
+          user_id: r.id as string,
+          username: r.username as string,
+          display_name: r.display_name as string,
+          avatar_url: r.avatar_url ?? null,
+          coins: Number(r.coins ?? 0),
+          created_at: r.created_at as string,
+          admin_id: (r.admin_id as string) ?? null,
+          admin_username: (r.admin_username as string) ?? null,
+          assigned_at: (r.assigned_at as string) ?? null,
+          recharge_count: Number(r.recharge_count ?? 0),
+          outstanding_usd: Number(r.outstanding_cents ?? 0) / 100,
+          open_requests: Number(r.open_requests ?? 0),
+          in_grace: Number(r.recharge_count ?? 0) < RECHARGE_GRACE_RECHARGES,
+        }));
+
+        return j({
+          ok: true,
+          scope,
+          customers: list,
+          policy: {
+            grace_recharges: RECHARGE_GRACE_RECHARGES,
+            outstanding_cap_usd: RECHARGE_OUTSTANDING_CAP_USD,
+          },
+        });
+      }
+
+      if (path === "/api/admin/customers/claim" && request.method === "POST") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const body = await readJson<{ user_id?: unknown }>(request);
+        const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+        if (!key) return badRequest("user_id is required.");
+        const target = await resolveUser(key);
+        if (!target) return notFound("User not found.");
+        const targetId = (target as Record<string, unknown>).id as string;
+
+        const existing = await ownerOf(targetId);
+        if (existing && existing !== (adm.id as string)) {
+          return conflict("That customer belongs to another admin.");
+        }
+        if (!existing) {
+          await env.DB.prepare(
+            `INSERT INTO admin_customers (user_id, admin_id, assigned_by) VALUES (?, ?, ?)`
+          ).bind(targetId, adm.id, adm.id).run();
+        }
+        // Adopt any open requests so they land in this admin's queue.
+        await env.DB.prepare(
+          `UPDATE recharge_requests SET admin_id = ? WHERE user_id = ? AND status = 'open'`
+        ).bind(adm.id, targetId).run();
+        return j({ ok: true, user_id: targetId, claimed: true });
+      }
+
+      if (path === "/api/admin/customers/release" && request.method === "POST") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const body = await readJson<{ user_id?: unknown }>(request);
+        const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+        if (!key) return badRequest("user_id is required.");
+        const target = await resolveUser(key);
+        if (!target) return notFound("User not found.");
+        const targetId = (target as Record<string, unknown>).id as string;
+        await env.DB.prepare(`DELETE FROM admin_customers WHERE user_id = ?`).bind(targetId).run();
+        return j({ ok: true, user_id: targetId, released: true });
+      }
+
+      if (path === "/api/admin/customers/assign" && request.method === "POST") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        if ((adm.role as string) !== "master_admin") return json({ ok: false, error: "Master Admin only." }, 403);
+        const body = await readJson<{ user_id?: unknown; admin_id?: unknown }>(request);
+        const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+        const adminId = typeof body?.admin_id === "string" ? body.admin_id.trim() : "";
+        if (!key || !adminId) return badRequest("user_id and admin_id are required.");
+        const target = await resolveUser(key);
+        if (!target) return notFound("User not found.");
+        const targetAdmin = await env.DB.prepare(`SELECT id FROM admin_users WHERE id = ?`).bind(adminId).first();
+        if (!targetAdmin) return notFound("Admin not found.");
+        const targetId = (target as Record<string, unknown>).id as string;
+        await env.DB.prepare(
+          `INSERT INTO admin_customers (user_id, admin_id, assigned_by) VALUES (?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET admin_id = excluded.admin_id, assigned_by = excluded.assigned_by, assigned_at = CURRENT_TIMESTAMP`
+        ).bind(targetId, adminId, adm.id).run();
+        await env.DB.prepare(
+          `UPDATE recharge_requests SET admin_id = ? WHERE user_id = ? AND status = 'open'`
+        ).bind(adminId, targetId).run();
+        return j({ ok: true, user_id: targetId, admin_id: adminId });
+      }
+
+      if (path === "/api/admin/recharge/requests" && request.method === "GET") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const adminId = adm.id as string;
+        const isMaster = (adm.role as string) === "master_admin";
+        const status = url.searchParams.get("status") ?? "open";
+        const rows = await env.DB.prepare(
+          `SELECT r.id, r.user_id, r.package_id, r.coins, r.status, r.created_at,
+                  u.username, u.display_name, u.avatar_url, u.coins AS user_coins,
+                  (SELECT COUNT(*) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status != 'void') AS recharge_count,
+                  (SELECT COALESCE(SUM(rc.usd_cents), 0) FROM recharge_credits rc WHERE rc.user_id = u.id AND rc.status = 'unpaid') AS outstanding_cents
+           FROM recharge_requests r
+           JOIN users u ON u.id = r.user_id
+           WHERE (? = 'open' AND r.status = 'open' OR r.status = ?)
+             AND (? = 1 OR r.admin_id = ?)
+           ORDER BY r.created_at ASC LIMIT 100`
+        ).bind(status, status, isMaster ? 1 : 0, adminId).all();
+        return j({
+          ok: true,
+          requests: ((rows.results ?? []) as Array<Record<string, unknown>>).map((r) => ({
+            ...r,
+            outstanding_usd: Number(r.outstanding_cents ?? 0) / 100,
+          })),
+        });
+      }
+
+      // Fulfil a request (or credit directly). The allowance rule is enforced
+      // here — this is the only place coins enter the system for a purchase.
+      if (path === "/api/admin/recharge/fulfil" && request.method === "POST") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "finance") return json({ ok: false, error: "Finance or Master Admin only." }, 403);
+        const adminId = adm.id as string;
+        const body = await readJson<{ user_id?: unknown; package_id?: unknown; request_id?: unknown; note?: unknown }>(request);
+        const key = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+        const packageId = typeof body?.package_id === "string" ? body.package_id : "";
+        const requestId = typeof body?.request_id === "string" ? body.request_id : "";
+        const note = typeof body?.note === "string" ? body.note.slice(0, 200) : "";
+        if (!key && !requestId) return badRequest("user_id or request_id is required.");
+
+        let userId = "";
+        let pkgId = packageId;
+        if (requestId) {
+          const reqRow = await env.DB.prepare(`SELECT user_id, package_id, status FROM recharge_requests WHERE id = ?`).bind(requestId).first();
+          if (!reqRow) return notFound("Request not found.");
+          const rr = reqRow as Record<string, unknown>;
+          if (rr.status === "fulfilled") return conflict("That request is already fulfilled.");
+          userId = rr.user_id as string;
+          pkgId = pkgId || (rr.package_id as string);
+        } else {
+          const target = await resolveUser(key);
+          if (!target) return notFound("User not found.");
+          userId = (target as Record<string, unknown>).id as string;
+        }
+
+        const pkg = await env.DB.prepare(
+          `SELECT id, name, coins, bonus_coins, price_cents FROM coin_packages WHERE id = ? AND active = 1`
+        ).bind(pkgId).first();
+        if (!pkg) return notFound("Package not found.");
+        const p = pkg as Record<string, unknown>;
+        const coins = Number(p.coins ?? 0) + Number(p.bonus_coins ?? 0);
+        const usdCents = Number(p.price_cents ?? 0);
+        if (coins <= 0 || usdCents <= 0) return badRequest("Package is misconfigured.");
+
+        // ---- Allowance gate (pure policy, unit-tested) ----
+        const credits = await loadCredits(userId);
+        const decision = checkAllowance(credits, usdCents);
+        if (!decision.allowed) {
+          return j(
+            {
+              ok: false,
+              error: decision.reason,
+              code: "allowance_cap",
+              outstanding_usd: outstandingCents(credits) / 100,
+              recharge_count: successfulRecharges(credits),
+              in_grace: decision.inGrace,
+            },
+            409
+          );
+        }
+
+        // Credit coins + write the ledger row. The ledger insert is the record
+        // the allowance reads, so it must land with the balance change.
+        const creditId = newId("rc");
+        await env.DB.prepare(
+          `INSERT INTO recharge_credits (id, user_id, admin_id, request_id, package_id, coins, usd_cents, status, note, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, CURRENT_TIMESTAMP)`
+        ).bind(creditId, userId, adminId, requestId || null, pkgId, coins, usdCents, note).run();
+        await env.DB.prepare(
+          `UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+        ).bind(coins, userId).run();
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, NULL, 'purchase', ?, ?)`
+        ).bind(newId("tx"), userId, coins, `Coin purchase: ${p.name} (via admin ${adm.username})`).run();
+
+        if (requestId) {
+          await env.DB.prepare(
+            `UPDATE recharge_requests SET status = 'fulfilled', admin_id = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?`
+          ).bind(adminId, requestId).run();
+        }
+
+        const after = await loadCredits(userId);
+        const balance = await env.DB.prepare(`SELECT coins FROM users WHERE id = ?`).bind(userId).first();
+        return j({
+          ok: true,
+          credit_id: creditId,
+          user_id: userId,
+          coins,
+          usd_cents: usdCents,
+          balance: (balance as Record<string, unknown> | null)?.coins ?? null,
+          recharge_count: successfulRecharges(after),
+          outstanding_usd: outstandingCents(after) / 100,
+          remaining_allowance_usd: (checkAllowance(after, 0).remainingUsd),
+          in_grace: checkAllowance(after, 0).inGrace,
+        }, 201);
+      }
+
+      // Per-customer ledger for the admin recharge desk: which credits are still
+      // unpaid, so the admin can settle them (which frees the allowance).
+      if (path === "/api/admin/recharge/ledger" && request.method === "GET") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const key = (url.searchParams.get("user_id") ?? "").trim();
+        if (!key) return badRequest("user_id is required.");
+        const target = await resolveUser(key);
+        if (!target) return notFound("User not found.");
+        const userId = (target as Record<string, unknown>).id as string;
+        const rows = await env.DB.prepare(
+          `SELECT rc.id, rc.coins, rc.usd_cents, rc.status, rc.note, rc.created_at, rc.settled_at,
+                  rc.package_id, au.username AS admin_username
+           FROM recharge_credits rc
+           LEFT JOIN admin_users au ON au.id = rc.admin_id
+           WHERE rc.user_id = ? ORDER BY rc.created_at DESC LIMIT 50`
+        ).bind(userId).all();
+        return j({ ok: true, user_id: userId, credits: rows.results ?? [] });
+      }
+
+      // Settle a credit: the user paid the admin. Frees their allowance.
+      if (path === "/api/admin/recharge/mark-paid" && request.method === "POST") {
+        const adm = await getAdminFromToken(readAdminToken(request));
+        if (!adm) return json({ ok: false, error: "Admin auth required." }, 401);
+        const role = adm.role as string;
+        if (role !== "master_admin" && role !== "finance") return json({ ok: false, error: "Finance or Master Admin only." }, 403);
+        const body = await readJson<{ credit_id?: unknown; void?: unknown }>(request);
+        const creditId = typeof body?.credit_id === "string" ? body.credit_id.trim() : "";
+        if (!creditId) return badRequest("credit_id is required.");
+        const makeVoid = body?.void === true;
+        const row = await env.DB.prepare(`SELECT id, user_id, status FROM recharge_credits WHERE id = ?`).bind(creditId).first();
+        if (!row) return notFound("Credit not found.");
+        const r = row as Record<string, unknown>;
+        if (r.status !== "unpaid") return conflict(`That credit is already ${r.status}.`);
+        await env.DB.prepare(
+          `UPDATE recharge_credits SET status = ?, settled_at = CURRENT_TIMESTAMP WHERE id = ?`
+        ).bind(makeVoid ? "void" : "paid", creditId).run();
+        const credits = await loadCredits(r.user_id as string);
+        return j({
+          ok: true,
+          credit_id: creditId,
+          status: makeVoid ? "void" : "paid",
+          outstanding_usd: outstandingCents(credits) / 100,
+          recharge_count: successfulRecharges(credits),
+        });
       }
 
       // ---- User moderation: ban / unban (master_admin only). Banning wipes

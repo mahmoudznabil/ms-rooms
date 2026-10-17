@@ -15,10 +15,11 @@ import {
 } from "@/lib/api";
 import { auth, googleProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "@/lib/firebase";
 import { Field, inputCls } from "@/components/bits";
+import RechargeTab from "@/app/admin/RechargeTab";
 
 const ADMIN_TOKEN_KEY = "admin_token";
 
-type Tab = "overview" | "users" | "rooms" | "reports" | "tickets" | "audit" | "errors" | "team";
+type Tab = "overview" | "users" | "recharge" | "rooms" | "reports" | "tickets" | "audit" | "errors" | "team";
 
 export default function AdminPage() {
   const [admin, setAdmin] = useState<AdminUser | null>(null);
@@ -208,6 +209,7 @@ export default function AdminPage() {
   const tabs: Array<{ id: Tab; label: string; show: boolean }> = [
     { id: "overview", label: "Overview", show: true },
     { id: "users", label: "Users", show: canMoney || isMaster },
+    { id: "recharge", label: "Recharge", show: true },
     { id: "rooms", label: "Rooms", show: canMod },
     { id: "reports", label: "Reports", show: canMod },
     { id: "tickets", label: "Tickets", show: canMod },
@@ -243,6 +245,7 @@ export default function AdminPage() {
 
       {tab === "overview" && <OverviewTab token={token} isMaster={isMaster} />}
       {tab === "users" && <UsersTab token={token} />}
+      {tab === "recharge" && <RechargeTab isMaster={isMaster} canMoney={canMoney} />}
       {tab === "rooms" && <RoomsTab token={token} />}
       {tab === "reports" && <ReportsTab token={token} />}
       {tab === "tickets" && <TicketsTab token={token} />}
