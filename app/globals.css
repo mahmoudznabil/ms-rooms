@@ -123,6 +123,19 @@ body {
   overflow-x: hidden;
   overflow-x: clip;
   margin: 0;
+  /* Reserve the cookie banner's height so it never covers page content.
+
+     The banner is `position: fixed`, so on a viewport shorter than the content
+     it sat on top of something — the landing hero's room mockup when it was a
+     right-hand card, the hero's "Create a free account" button once it became a
+     full-width strip. There is no position that avoids this; the only real fix
+     is for the notice to take up space instead of overlaying.
+
+     CookieConsentBanner publishes its measured height here via a ResizeObserver
+     (it grows when the third-party-cookie warning appears, and stacks on
+     mobile), and clears it to 0px on unmount. */
+  padding-bottom: var(--consent-banner-h, 0px);
+  transition: padding-bottom 0.2s ease;
   font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   /* No decorative glow behind the app.
      This used to be two large radial pink/violet blobs in the top corners. It

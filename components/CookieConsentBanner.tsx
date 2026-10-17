@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Cookie, X, Settings, AlertCircle } from "lucide-react";
 
 const CONSENT_KEY = "msrooms_cookie_consent";
@@ -11,6 +11,8 @@ type ConsentState = "granted" | "denied" | "pending";
 export default function CookieConsentBanner() {
   const [state, setState] = useState<ConsentState>("pending");
   const [showBanner, setShowBanner] = useState(false);
+  /** Observed by ResizeObserver so the reserved space tracks the real height. */
+  const measureRef = useRef<HTMLDivElement | null>(null);
   const [thirdPartyBlocked, setThirdPartyBlocked] = useState(false);
 
   useEffect(() => {
@@ -86,10 +88,50 @@ export default function CookieConsentBanner() {
     } catch {}
   };
 
-  if (!showBanner || state === "granted" || state === "denied") return null;
+  // Reserve the space the banner occupies.
+//
+// This is the fix for the banner covering page content. Every earlier attempt
+// was positional — move the card, shrink it, make it full width — and each one
+// just relocated the occlusion: the right-hand card covered the landing hero's
+// room mockup, and the full-width strip covered the hero's "Create a free
+// account" button instead. On a viewport shorter than the content, ANY
+// bottom-anchored overlay covers something. There is no position that avoids it.
+//
+// So the banner stops overlaying. It publishes its own height as a CSS custom
+// property and globals.css pads the body by exactly that much, which pushes the
+// page content above it at every viewport height. ResizeObserver rather than a
+// fixed number, because the banner changes height — it grows when the
+// third-party-cookie warning appears, and stacks to two rows on mobile.
+//
+// This sits ABOVE the early return on purpose. A hook after a conditional
+// return is a Rules-of-Hooks violation: on the render where the banner is
+// hidden the hook would not run, and on the render where it appears it would,
+// changing hook order between renders.
+//
+// Cleared on unmount so the padding does not outlive the banner.
+useEffect(() => {
+  const el = measureRef.current;
+  const root = document.documentElement;
+  if (!el) return;
+  const publish = () => {
+    const h = Math.ceil(el.getBoundingClientRect().height);
+    // +8px clears the banner's own bottom offset (1rem / md:bottom-4).
+    root.style.setProperty("--consent-banner-h", `${h + 8}px`);
+  };
+  publish();
+  const ro = new ResizeObserver(publish);
+  ro.observe(el);
+  return () => {
+    ro.disconnect();
+    root.style.setProperty("--consent-banner-h", "0px");
+  };
+}, []);
+
+if (!showBanner || state === "granted" || state === "denied") return null;
 
   return (
     <div
+      ref={measureRef}
       className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 z-50 animate-slide-up md:bottom-4 md:left-6 md:right-6"
       role="dialog"
       aria-label="Cookie consent"
