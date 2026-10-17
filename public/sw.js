@@ -7,16 +7,35 @@
 //     touching it here would only add a second, stale-prone cache layer.
 //
 // Navigations are network-first with a real cached shell fallback so the app
-// still opens offline. The shell is cached at install time; a failure to find
-// it falls through to the network instead of resolving to `undefined`, which
-// would surface as a blank page.
+// still opens offline.
+//
+// WHY THE BUILD ID MATTERS
+//
+// This file used to be byte-identical across deploys, so the browser never
+// re-installed it and the shell cached at install time stayed frozen at
+// whatever the user's first visit returned. The shell references
+// content-hASHED chunks, and Pages stops serving old chunks after a deploy --
+// so anyone who hit any navigation failure fell back to a shell pointing at
+// chunks that no longer existed, and got a stale UI or a blank page.
+//
+// That also explains a design change being deployed, verified in the build, and
+// still invisible to a returning user. A static service worker cannot know the
+// app changed; BUILD_ID below is substituted at build time so that it can.
+//
+// A failed navigation now falls back to a shell from the CURRENT build, because
+// the cache name changes whenever the app does and the install re-runs.
+
+// Substituted by scripts/stamp-sw.mjs after `next build`. Do not hardcode: a
+// literal here is what froze the cached shell in the first place.
+const BUILD_ID = "__BUILD_ID__";
+const CACHE = `msrooms-shell-${BUILD_ID}`;
 
 const SHELL = "/index.html";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
-      .open("msrooms-shell-v1")
+      .open(CACHE)
       .then((cache) => cache.addAll([SHELL, "/ms-rooms-logo.svg"]))
       .catch(() => undefined)
   );
@@ -27,7 +46,9 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== "msrooms-shell-v1").map((k) => caches.delete(k))))
+      // Every cache from a previous build is now dead weight: its shell points
+      // at chunks this deploy no longer serves.
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -50,7 +71,7 @@ self.addEventListener("fetch", (event) => {
           const copy = res.clone();
           // Cache under the request URL, not a fixed key: caching every page
           // under /index.html meant an offline /lobby could serve /wallet.
-          void caches.open("msrooms-shell-v1").then((c) => c.put(req, copy));
+          void caches.open(CACHE).then((c) => c.put(req, copy));
         }
         return res;
       })
