@@ -285,6 +285,45 @@ export async function fetchTriviaPack(): Promise<ServerTriviaPack | null> {
   if (clean.length === 0) return null;
   return { ...res.pack, questions: clean };
 }
+// ---- Coin packages & Stripe recharge (Phase D) -----------------------------------------
+export interface CoinPackage {
+  id: string;
+  name: string;
+  coins: number;
+  bonus_coins: number;
+  total_coins: number;
+  price_cents: number;
+  price: string;
+  stripe_price_id: string | null;
+  value_note: string;
+}
+
+export interface RechargePackagesResult {
+  ok: boolean;
+  note?: string;
+  market_baseline?: string;
+  packages: CoinPackage[];
+}
+
+export async function fetchCoinPackages(): Promise<RechargePackagesResult> {
+  return req(`/api/recharge/packages`, { cache: "no-store" });
+}
+
+export interface CreateCheckoutResult {
+  ok: boolean;
+  checkout_url?: string;
+  package_id?: string;
+  error?: string;
+  code?: string;
+}
+
+export async function createCheckout(packageId: string): Promise<CreateCheckoutResult> {
+  return req(`/api/recharge/create-checkout`, {
+    method: "POST",
+    body: JSON.stringify({ package_id: packageId }),
+  });
+}
+
 // ---- Voice heartbeat metering (Phase A4) ----------------------------------------
 // Posted by useRoomVoice every 60s while the mic is on. The host is exempt in
 // their own room and muted seats are not billed (the server decides both). A 402

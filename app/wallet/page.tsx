@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { CalendarCheck, Coins, Dices, History, Zap } from "lucide-react";
-import { checkin, fetchTransactions, type Txn } from "@/lib/api";
+import { checkin, createCheckout, fetchCoinPackages, fetchTransactions, type CoinPackage, type Txn } from "@/lib/api";
 import { levelProgress } from "@/lib/levels";
 import { useSession } from "@/stores/useSession";
 import { EmptyState, Spinner } from "@/components/bits";
@@ -16,6 +16,8 @@ export default function WalletPage() {
   const [spinOpen, setSpinOpen] = useState(false);
   const [checkinBusy, setCheckinBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [packages, setPackages] = useState<CoinPackage[]>([]);
+  const [buying, setBuying] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -28,10 +30,37 @@ export default function WalletPage() {
     }
   }, [user]);
 
+  const loadPackages = useCallback(async () => {
+    try {
+      const r = await fetchCoinPackages();
+      setPackages(r.packages ?? []);
+    } catch {
+      // packages are best-effort; the wallet still works without them
+    }
+  }, []);
+
+  const buyPackage = useCallback(async (pkg: CoinPackage) => {
+    setBuying(pkg.id);
+    setNotice(null);
+    try {
+      const r = await createCheckout(pkg.id);
+      if (r.ok && r.checkout_url) {
+        window.location.assign(r.checkout_url);
+      } else {
+        setNotice(r.error || "Checkout failed. Please try again.");
+      }
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Checkout failed.");
+    } finally {
+      setBuying(null);
+    }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
     void load();
-  }, [load]);
+    void loadPackages();
+  }, [load, loadPackages]);
 
   useEffect(() => {
     if (!notice) return;
@@ -102,9 +131,35 @@ export default function WalletPage() {
         </div>
       </div>
 
-      {/* Coin purchases removed (Phase 1.5): the sandbox top-up granted coins for
-          free with no payment. Coins are earned-only until the gated IAP workstream
-          (docs/PRODUCTION-PLAN.md Phase 6) adds a server-verified purchase path. */}
+      {/* Coin packages (Phase D): ~$1.08/100 coins, 20% under competitors.
+          Bought via Stripe Payment Links — the webhook credits coins
+          idempotently on checkout.session.completed. */}
+      {packages.length > 0 && (
+        <div className="mt-4">
+          <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Buy coins</h2>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {packages.map((pkg) => (
+              <button
+                key={pkg.id}
+                onClick={() => void buyPackage(pkg)}
+                disabled={buying === pkg.id}
+                className="flex min-h-[44px] items-center justify-between gap-3 rounded-2xl border border-amber-300/20 bg-gradient-to-br from-amber-400/10 to-orange-500/5 p-3 text-left transition hover:border-amber-300/40 hover:from-amber-400/20 disabled:opacity-50"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-bold text-amber-100">{pkg.name}</span>
+                  <span className="block truncate text-xs text-white/45">{pkg.value_note}</span>
+                </span>
+                <span className="shrink-0 rounded-full bg-amber-400 px-3 py-1 text-xs font-black text-black">
+                  {buying === pkg.id ? "…" : pkg.price}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-white/35">
+            Payments processed by Stripe. Coins are credited automatically after payment.
+          </p>
+        </div>
+      )}
 
       <h2 className="mt-6 flex items-center gap-1.5 text-sm font-bold uppercase tracking-widest text-white/50">
         <History size={14} /> Recent activity

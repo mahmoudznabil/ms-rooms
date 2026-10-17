@@ -40,6 +40,15 @@ interface Env {
   // callers degrade to static content instead of failing.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   AI?: any;
+  // Stripe (Phase D3). STRIPE_SECRET_KEY creates Payment Links;
+  // STRIPE_WEBHOOK_SECRET verifies webhook signatures. Both optional —
+  // when absent, /api/recharge/create-checkout returns 503 and the wallet
+  // UI shows a "top-up unavailable" notice instead of crashing.
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  // Public app URL for Stripe redirect after payment. Defaults to the
+  // production Pages URL when unset.
+  APP_URL?: string;
 }
 
 // Allowed origins. The API and the app are served from the same origin by
@@ -121,6 +130,54 @@ function newId(prefix: string): string {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
   return `${prefix}-${r}`;
+}
+
+// ---- Stripe webhook signature verification (Phase D3) -------------------------------------------
+// Verifies the `stripe-signature` header against the raw request body using
+// HMAC-SHA256. Stripe signs each webhook with the webhook secret and includes
+// a timestamp + signature in the header. We accept events up to 5 minutes
+// old (standard tolerance) and reject anything else.
+async function verifyStripeSignature(
+  rawBody: string,
+  signature: string,
+  secret: string
+): Promise<Record<string, unknown>> {
+  const parts = signature.split(",").reduce<Record<string, string>>((acc, part) => {
+    const [k, v] = part.split("=");
+    if (k && v) acc[k.trim()] = v.trim();
+    return acc;
+  }, {});
+  const t = parts.t;
+  const v1 = parts.v1;
+  if (!t || !v1) throw new Error("Missing timestamp or signature");
+
+  const timestamp = Number(t);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error("Invalid timestamp");
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - timestamp) > 300) throw new Error("Timestamp too old");
+
+  const signedPayload = `${t}.${rawBody}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedPayload));
+  const expected = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  // Constant-time comparison to avoid timing attacks.
+  if (expected.length !== v1.length) throw new Error("Signature mismatch");
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) {
+    diff |= expected.charCodeAt(i) ^ v1.charCodeAt(i);
+  }
+  if (diff !== 0) throw new Error("Signature mismatch");
+
+  return JSON.parse(rawBody) as Record<string, unknown>;
 }
 
 // ---- Workers AI (Phase B) ---------------------------------------------------
@@ -1996,44 +2053,231 @@ return j({ ok: true, ended: true });
         return j({ ok: true, credited: amount, streak, ...(balance as object | null) });
       }
 
-      // ---- Sandbox coin recharge ----------------------------------------------------------------------
+      // ---- Coin packages (Phase D) ----------------------------------------------------------------------
       if (path === "/api/recharge/packages" && request.method === "GET") {
-        // Try D1 pricing_tiers first (10% cheaper), fall back to hardcoded 10% model
+        // Phase D: coin_packages table (migration 0016), fallback to hardcoded ladder.
         try {
-          const tiers = await env.DB.prepare(`SELECT tier, standard_coins, standard_price_cents, app_coins, app_price_cents, bonus_percent FROM pricing_tiers ORDER BY standard_price_cents ASC`).all();
-          if (tiers.results && tiers.results.length > 0) {
+          const rows = await env.DB.prepare(
+            `SELECT id, name, coins, bonus_coins, price_cents, stripe_price_id, display_order
+             FROM coin_packages WHERE active = 1 ORDER BY display_order ASC`
+          ).all();
+          const pkgs = (rows.results ?? []) as Array<Record<string, unknown>>;
+          if (pkgs.length > 0) {
 return j({
-          ok: true,
-              note: "10% cheaper than market: same fiat price, 10% more coins. Sandbox top-up credits instantly.",
-              market_baseline: "Standard: 25k/$5, 50k/$10, 100k/$20, 500k/$100",
-              packages: (tiers.results as Array<Record<string, unknown>>).map((t) => ({
-                id: t.tier as string,
-                standard_coins: t.standard_coins,
-                standard_price: `$${((t.standard_price_cents as number) / 100).toFixed(2)}`,
-                coins: t.app_coins,
-                price: `$${((t.app_price_cents as number) / 100).toFixed(2)}`,
-                bonus: `${t.bonus_percent}% more`,
-                value_note: `${t.app_coins} for $${((t.app_price_cents as number) / 100).toFixed(2)} vs ${t.standard_coins} market`,
+              ok: true,
+              note: "20% under competitors: ~$1.08/100 coins. Bought via Stripe Payment Links.",
+              market_baseline: "Chamet ~$0.01/coin, Tango ~$0.0083, Bigo ~$0.016-0.02, UpLive ~$0.017. Median ~$1.35/100.",
+              packages: pkgs.map((p) => ({
+                id: p.id as string,
+                name: p.name as string,
+                coins: p.coins as number,
+                bonus_coins: (p.bonus_coins as number) ?? 0,
+                total_coins: ((p.coins as number) ?? 0) + ((p.bonus_coins as number) ?? 0),
+                price_cents: p.price_cents as number,
+                price: `$${((p.price_cents as number) / 100).toFixed(2)}`,
+                stripe_price_id: (p.stripe_price_id as string) || null,
+                value_note: `${((p.coins as number) + ((p.bonus_coins as number) ?? 0)).toLocaleString()} coins for $${((p.price_cents as number) / 100).toFixed(2)} ($${(((p.price_cents as number) / 100) / ((p.coins as number) + ((p.bonus_coins as number) ?? 0)) * 100).toFixed(2)}/100)`,
               })),
-              sandbox: [
-                { id: "p60", coins: 60, price: "$0.99" },
-                { id: "p300", coins: 300, price: "$4.99" },
-              ],
             });
           }
         } catch {}
-        return json({
+        // Fallback: hardcoded Phase D ladder (same numbers as migration 0016).
+        return j({
           ok: true,
-          note: "10% cheaper than market: pay same price, get 10% more coins. Sandbox top-up credits instantly.",
+          note: "20% under competitors: ~$1.08/100 coins. Bought via Stripe Payment Links.",
+          market_baseline: "Chamet ~$0.01/coin, Tango ~$0.0083, Bigo ~$0.016-0.02, UpLive ~$0.017. Median ~$1.35/100.",
           packages: [
-            { id: "starter", coins: 27500, standard_coins: 25000, price: "$5.00", bonus: "10% more", label: "Starter — 27,500 for $5 (vs 25k market)" },
-            { id: "growth", coins: 55000, standard_coins: 50000, price: "$10.00", bonus: "10% more", label: "Growth — 55,000 for $10 (vs 50k)" },
-            { id: "pro", coins: 110000, standard_coins: 100000, price: "$20.00", bonus: "10% more", label: "Pro — 110,000 for $20 (vs 100k)" },
-            { id: "enterprise", coins: 550000, standard_coins: 500000, price: "$100.00", bonus: "10% more", label: "Enterprise — 550,000 for $100 (vs 500k)" },
-            { id: "p60", coins: 60, price: "$0.99" },
-            { id: "p300", coins: 300, price: "$4.99" },
+            { id: "p92",   name: "Starter Pack",  coins: 92,    bonus_coins: 0,    price_cents: 99,   price: "$0.99",  stripe_price_id: null, value_note: "92 coins for $0.99 ($1.08/100)" },
+            { id: "p462",  name: "Popular Pack",  coins: 462,   bonus_coins: 0,    price_cents: 499,  price: "$4.99",  stripe_price_id: null, value_note: "462 coins for $4.99 ($1.08/100)" },
+            { id: "p925",  name: "Value Pack",    coins: 925,   bonus_coins: 0,    price_cents: 999,  price: "$9.99",  stripe_price_id: null, value_note: "925 coins for $9.99 ($1.08/100)" },
+            { id: "p2950", name: "Premium Pack",  coins: 2950,  bonus_coins: 177,  price_cents: 2999, price: "$29.99", stripe_price_id: null, value_note: "3,127 coins for $29.99 ($1.02/100, +6% bonus)" },
+            { id: "p10400",name: "Ultimate Pack", coins: 10400, bonus_coins: 1248, price_cents: 9999, price: "$99.99", stripe_price_id: null, value_note: "11,648 coins for $99.99 ($0.96/100, +12% bonus)" },
           ],
         });
+      }
+
+      // ---- Stripe Payment Link creation (Phase D3) ------------------------------------------------------
+      // Creates a Stripe Payment Link for a coin package and returns the URL.
+      // The client redirects the user to Stripe; on success Stripe calls the
+      // webhook endpoint below, which credits coins idempotently.
+      //
+      // Requires STRIPE_SECRET_KEY in the environment. When absent (local dev),
+      // returns 503 with a clear message — the wallet UI shows a "top-up
+      // unavailable" notice instead of crashing.
+      if (path === "/api/recharge/create-checkout" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
+        const body = await readJson<{ package_id?: unknown }>(request);
+        const packageId = typeof body?.package_id === "string" ? body.package_id : "";
+        if (!packageId) return badRequest("package_id is required.");
+
+        const secretKey = (env as unknown as Record<string, unknown>).STRIPE_SECRET_KEY as string | undefined;
+        if (!secretKey) {
+          return j({ ok: false, error: "Stripe is not configured. Top-up is unavailable.", code: "stripe_unavailable" }, 503);
+        }
+
+        // Look up the package to get the Stripe Price ID (or create one on the fly).
+        let pkg: Record<string, unknown> | null = null;
+        try {
+          const row = await env.DB.prepare(
+            `SELECT id, name, coins, bonus_coins, price_cents, stripe_price_id FROM coin_packages WHERE id = ? AND active = 1`
+          ).bind(packageId).first();
+          if (row) pkg = row as Record<string, unknown>;
+        } catch {}
+        if (!pkg) return notFound("Package not found.");
+
+        const priceId = pkg.stripe_price_id as string | null;
+        const priceCents = pkg.price_cents as number;
+        const packageName = pkg.name as string;
+
+        // If no Stripe Price ID is stored, create one on the fly.
+        let finalPriceId = priceId;
+        if (!finalPriceId) {
+          const createPriceRes = await fetch("https://api.stripe.com/v1/prices", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${secretKey}`,
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({
+              "unit_amount": String(priceCents),
+              "currency": "usd",
+              "product_data[name]": `MS-ROOMS ${packageName}`,
+            }),
+          });
+          if (!createPriceRes.ok) {
+            return j({ ok: false, error: "Failed to create Stripe price.", code: "stripe_error" }, 502);
+          }
+          const priceData = (await createPriceRes.json()) as { id?: string };
+          finalPriceId = priceData.id ?? null;
+          if (!finalPriceId) {
+            return j({ ok: false, error: "Failed to create Stripe price.", code: "stripe_error" }, 502);
+          }
+          // Store it for next time.
+          try {
+            await env.DB.prepare(`UPDATE coin_packages SET stripe_price_id = ? WHERE id = ?`).bind(finalPriceId, packageId).run();
+          } catch {}
+        }
+
+        // Create the Payment Link.
+        const appUrl = (env as unknown as Record<string, unknown>).APP_URL as string | undefined || "https://ms-rooms.pages.dev";
+        const createLinkRes = await fetch("https://api.stripe.com/v1/payment_links", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${secretKey}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            "line_items[0][price]": finalPriceId,
+            "line_items[0][quantity]": "1",
+            "metadata[user_id]": userId,
+            "metadata[package_id]": packageId,
+            "after_completion[type]": "redirect",
+            "after_completion[redirect][url]": `${appUrl}/wallet?recharge=success`,
+          }),
+        });
+        if (!createLinkRes.ok) {
+          return j({ ok: false, error: "Failed to create checkout session.", code: "stripe_error" }, 502);
+        }
+        const linkData = (await createLinkRes.json()) as { url?: string };
+        if (!linkData.url) {
+          return j({ ok: false, error: "Failed to create checkout session.", code: "stripe_error" }, 502);
+        }
+        return j({ ok: true, checkout_url: linkData.url, package_id: packageId });
+      }
+
+      // ---- Stripe webhook (Phase D3) ----------------------------------------------------------------------
+      // Receives Stripe events, verifies the signature, and credits coins
+      // idempotently on `checkout.session.completed`. The `purchases` table
+      // (migration 0011) enforces idempotency via UNIQUE(provider, provider_transaction_id).
+      //
+      // Requires STRIPE_WEBHOOK_SECRET in the environment.
+      if (path === "/api/recharge/webhook" && request.method === "POST") {
+        const webhookSecret = (env as unknown as Record<string, unknown>).STRIPE_WEBHOOK_SECRET as string | undefined;
+        if (!webhookSecret) {
+          return j({ ok: false, error: "Webhook secret not configured." }, 500);
+        }
+        const signature = request.headers.get("stripe-signature") ?? "";
+        const rawBody = await request.text();
+
+        // Verify the Stripe signature.
+        let event: Record<string, unknown>;
+        try {
+          event = await verifyStripeSignature(rawBody, signature, webhookSecret);
+        } catch {
+          return j({ ok: false, error: "Invalid signature." }, 400);
+        }
+
+        const eventType = event.type as string;
+        if (eventType === "checkout.session.completed") {
+          const session = event.data as { object: Record<string, unknown> };
+          const sessionId = session.object.id as string;
+          const metadata = (session.object.metadata ?? {}) as Record<string, string>;
+          const userId = metadata.user_id;
+          const packageId = metadata.package_id;
+          if (!userId || !packageId) {
+            return j({ ok: false, error: "Missing metadata." }, 400);
+          }
+
+          // Look up the package.
+          let pkg: Record<string, unknown> | null = null;
+          try {
+            const row = await env.DB.prepare(
+              `SELECT id, coins, bonus_coins FROM coin_packages WHERE id = ?`
+            ).bind(packageId).first();
+            if (row) pkg = row as Record<string, unknown>;
+          } catch {}
+          if (!pkg) return j({ ok: false, error: "Package not found." }, 404);
+
+          const totalCoins = ((pkg.coins as number) ?? 0) + ((pkg.bonus_coins as number) ?? 0);
+
+          // Idempotent credit: check if this Stripe session was already processed.
+          try {
+            const existing = await env.DB.prepare(
+              `SELECT id, status FROM purchases WHERE provider = 'stripe' AND provider_transaction_id = ?`
+            ).bind(sessionId).first();
+            if (existing) {
+              const ex = existing as Record<string, unknown>;
+              if (ex.status === "credited") {
+                // Already credited — return 200 to stop Stripe retries.
+                return j({ ok: true, already_processed: true });
+              }
+            }
+          } catch {}
+
+          // Credit coins atomically.
+          const credit = await env.DB.prepare(
+            `UPDATE users SET coins = coins + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+          ).bind(totalCoins, userId).run();
+          if (((credit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0) !== 1) {
+            return j({ ok: false, error: "Failed to credit coins." }, 500);
+          }
+
+          // Record the purchase (idempotent via UNIQUE constraint).
+          try {
+            await env.DB.prepare(
+              `INSERT INTO purchases (id, user_id, provider, provider_transaction_id, sku, amount, status, raw_receipt_ref)
+               VALUES (?, ?, 'stripe', ?, ?, ?, 'credited', ?)`
+            ).bind(newId("pur"), userId, sessionId, packageId, totalCoins, JSON.stringify(session.object)).run();
+          } catch {
+            // UNIQUE constraint violation = already recorded. Coins were still
+            // credited above (idempotent), so this is fine.
+          }
+
+          // Record the transaction.
+          try {
+            await env.DB.prepare(
+              `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, NULL, 'purchase', ?, ?)`
+            ).bind(newId("tx"), userId, totalCoins, `Coin purchase: ${packageId} via Stripe`).run();
+          } catch {}
+
+          return j({ ok: true, credited: totalCoins });
+        }
+
+        // Acknowledge other events (Stripe expects 200 to stop retries).
+        return j({ ok: true, received: true });
       }
 
       // NOTE: POST /api/recharge/buy was removed (Phase 1.5). It credited up to

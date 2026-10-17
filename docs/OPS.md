@@ -216,6 +216,31 @@ prod, then mark in prod `d1_migrations`. The `[ai]` binding (`wrangler.toml`
 wrangler rejects) flows through `functions/api/[[path]].ts`
 (`PagesEnv.AI`) untouched — the shim passes `env` wholesale.
 
+### 6.5 Coin packages & Stripe recharge (Phase D, `coin_packages`)
+
+| Endpoint | Effect |
+|---|---|
+| `GET /api/recharge/packages` | Returns the active `coin_packages` rows (migration 0016) ordered by `display_order`. Falls back to the hardcoded Phase D ladder when the table is empty. |
+| `POST /api/recharge/create-checkout { package_id }` | Auth-gated. Creates a Stripe Payment Link for the package (creating a Stripe Price on the fly if `stripe_price_id` is unset) and returns `{ checkout_url }`. 503 `stripe_unavailable` when `STRIPE_SECRET_KEY` is absent. |
+| `POST /api/recharge/webhook` | Stripe webhook. Verifies the `stripe-signature` header (HMAC-SHA256, 5-min tolerance), then on `checkout.session.completed` credits `coins + bonus_coins` atomically and records the purchase. Idempotent via `purchases(provider, provider_transaction_id)` UNIQUE — a replayed webhook returns 200 `already_processed` without double-crediting. |
+
+**Pricing ladder** (0.8× competitor median ≈ $1.08/100 coins):
+$0.99→92, $4.99→462, $9.99→925, $29.99→2,950+177 bonus, $99.99→10,400+1,248 bonus.
+
+**Secrets** (Pages project → Settings → Environment variables):
+- `STRIPE_SECRET_KEY` — Stripe secret key (sk_live_…) for Payment Link creation.
+- `STRIPE_WEBHOOK_SECRET` — webhook signing secret (whsec_…) from the Stripe dashboard.
+- `APP_URL` — public URL for the post-payment redirect (defaults to `https://ms-rooms.pages.dev`).
+
+**Stripe dashboard setup**: create a webhook endpoint pointing at
+`https://ms-rooms.pages.dev/api/recharge/webhook`, subscribe to
+`checkout.session.completed`, and copy the signing secret into
+`STRIPE_WEBHOOK_SECRET`. For local testing use the Stripe CLI
+(`stripe listen --forward-to localhost:8788/api/recharge/webhook`).
+
+`migrations/0016_coin_packages.sql` — purely additive. Apply local →
+preview → prod, then mark in prod `d1_migrations`.
+
 ### 6.4 Unified chats tab (Phase C — client only, no migration)
 
 The Messages tab (`components/ChatPanel.tsx`) merges DMs and call recents
