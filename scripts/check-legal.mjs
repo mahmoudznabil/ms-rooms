@@ -44,12 +44,27 @@ const raw = readFileSync(SRC, "utf8");
 const STRICT = process.argv.includes("--strict");
 
 /**
- * Latin runs that legitimately appear inside Arabic text: brand and standard
- * names, and the word "version" in the versioned document heading. Anything
- * else in an `ar` string is a generation artefact.
+ * Latin runs that legitimately appear inside Arabic text.
+ *
+ * Three categories, each deliberate:
+ *
+ *   - Brand and technical names: MS-ROOMS, GDPR, CSRF, Google, Cloudflare.
+ *   - Ms-Rooms and USD: the operator's legal name and a currency code, which are
+ *     Latin in every language.
+ *   - The support email and the registered address. A registered address must
+ *     stay in the script it appears in on official documents — transliterating
+ *     it would create a second, non-matching form of a legal address. An email
+ *     address is Latin by definition.
+ *
+ * Anything else in an `ar` string is a generation artefact. Note that an English
+ * SENTENCE leaking into Arabic is caught here, which is the case that actually
+ * matters: a customer reading the Arabic limitation-of-liability clause must not
+ * find an English sentence waiting for them.
  */
 const ALLOWED_LATIN_IN_ARABIC = new Set([
   "MS-ROOMS",
+  "Ms-Rooms",
+  "USD",
   "GDPR",
   "CSRF",
   "IP",
@@ -57,6 +72,17 @@ const ALLOWED_LATIN_IN_ARABIC = new Set([
   "Cloudflare",
   "cookies",
   "v",
+  // Support contact.
+  "msroomsprod",
+  "protonmail.com",
+  // Registered address of the operator.
+  "Bait",
+  "Al",
+  "Masria",
+  "October",
+  "Gardens",
+  "Giza",
+  "Egypt",
 ]);
 
 const CJK = /[\u3000-\u9fff\uff00-\uffef]/;

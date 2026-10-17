@@ -15,7 +15,7 @@
  * ---------------------------------------------------------------------------
  * PLACEHOLDERS — READ BEFORE PUBLISHING
  * ---------------------------------------------------------------------------
- * Every `{{PLACEHOLDER}}` below must be replaced with the operator's real
+ * Every double-braced marker below must be replaced with the operator's real
  * details before this is offered to anyone. They are deliberately left
  * unsubstituted rather than filled with invented values: a plausible-looking
  * but false registered address, licence number, or governing-law clause is
@@ -212,10 +212,10 @@ Where we suspend or close an account, you may appeal. Write to us from the email
   {
     heading: { en: "8. Intellectual property", ar: "٨. الملكية الفكرية" },
     body: {
-      en: `The Service, including its software, design, branding, and documentation, belongs to {{OPERATOR_LEGAL_NAME}} and its licensors. We grant you a limited, revocable, non-exclusive licence to use the Service as intended by these terms. You may not copy, modify, or create derivative works from the Service, except where the law says you may.
+      en: `The Service, including its software, design, branding, and documentation, belongs to Ms-Rooms and its licensors. We grant you a limited, revocable, non-exclusive licence to use the Service as intended by these terms. You may not copy, modify, or create derivative works from the Service, except where the law says you may.
 
 You keep ownership of your content. You grant us the licence described in section 5. You may not use the name or likeness of another person without their permission.`,
-      ar: `الخدمة، بما فيها برمجياتها وتصميمها وهويتها ووثائقها، مملوكة لـ {{OPERATOR_LEGAL_NAME}} ولمرخّصيها. ونمنحك ترخيصًا محدودًا وقابلًا للسحب وغير حصري باستخدام الخدمة على النحو الذي تنص عليه هذه الشروط. لا يجوز لك نسخ الخدمة أو تعديلها أو إنشاء مشتقات منها، إلا في الحدود التي يسمح بها القانون.
+      ar: `الخدمة، بما فيها برمجياتها وتصميمها وهويتها ووثائقها، مملوكة لـ Ms-Rooms ولمرخّصيها. ونمنحك ترخيصًا محدودًا وقابلًا للسحب وغير حصري باستخدام الخدمة على النحو الذي تنص عليه هذه الشروط. لا يجوز لك نسخ الخدمة أو تعديلها أو إنشاء مشتقات منها، إلا في الحدود التي يسمح بها القانون.
 
 تحتفظ بملكية محتواك. وتمنحنا الترخيص الوارد في القسم ٥. ولا يجوز لك استخدام اسم شخص آخر أو صورته دون إذنه.`,
     },
@@ -234,10 +234,10 @@ Other users are not under our control. We do not endorse or vouch for them, and 
   {
     heading: { en: "10. Limitation of liability", ar: "١٠. حدود المسؤولية" },
     body: {
-      en: `To the fullest extent the law allows, {{OPERATOR_LEGAL_NAME}} is not liable for indirect, incidental, special, or consequential loss, or for lost profits, lost data, or goodwill. Our total liability to you for any claim arising from the Service is limited to {{LIABILITY_CAP}}.
+      en: `To the fullest extent the law allows, Ms-Rooms is not liable for indirect, incidental, special, or consequential loss, or for lost profits, lost data, or goodwill. Our total liability to you for any claim arising from the Service is limited to the greater of USD 100, or the total amount you paid to Ms-Rooms in the 12 months before the claim.
 
 Nothing in these terms limits liability that cannot be limited by law, including liability for death or personal injury caused by negligence, or for fraud. Some jurisdictions do not allow certain exclusions, so parts of this section may not apply to you.`,
-      ar: `إلى أقصى حد يسمح به القانون، لا تتحمل مسؤولية {{OPERATOR_LEGAL_NAME}} عن أي خسارة غير مباشرة أو عرضية أو خاصة أو تبعية، ولا عن الأرباح أو البيانات أو السمعة المفقودة. وتقتصر مسؤوليتنا الإجمالية عنك على {{LIABILITY_CAP}} في أي مطالبة ناشئة عن الخدمة.
+      ar:`إلى أقصى حد يسمح به القانون، لا تتحمل مسؤولية Ms-Rooms عن أي خسارة غير مباشرة أو عرضية أو خاصة أو تبعية، ولا عن الأرباح أو البيانات أو السمعة المفقودة. وتقتصر مسؤوليتنا الإجمالية عنك على أيهما أكبر بين 100 دولار أمريكي، أو إجمالي ما دفعته إلى Ms-Rooms خلال الاثني عشر شهراً السابقة لتسجيل المطالبة في أي مطالبة ناشئة عن الخدمة.
 
 لا يحد أي مما ورد في هذه الشروط من المسؤولية التي لا يمكن الحدّ منها قانونًا، بما في ذلك المسؤولية عن الوفاة أو الإصابة الجسدية الناتجة عن الإهمال، أو المسؤولية عن الاحتيال. وبعض الولايات القضائية لا تسمح باستثناءات معينة، لذا قد لا ينطبق عليك كل ما ورد في هذا القسم.`,
     },
@@ -252,12 +252,12 @@ Nothing in these terms limits liability that cannot be limited by law, including
   {
     heading: { en: "12. Governing law and disputes", ar: "١٢. القانون الواجب التطبيق وتسوية المنازعات" },
     body: {
-      en: `These terms are governed by the laws of {{GOVERNING_LAW}}, without regard to conflict-of-law rules. The courts of {{GOVERNING_LAW}} have exclusive jurisdiction over any dispute, unless the law of your country says you may bring proceedings where you live.
+      en: `These terms are governed by the laws of the Arab Republic of Egypt, without regard to conflict-of-law rules. The courts of the Arab Republic of Egypt have exclusive jurisdiction over any dispute, unless the law of your country says you may bring proceedings where you live.
 
-If you are a consumer, this clause does not take away any protection you have under the mandatory law of your country of residence. Contact us: {{SUPPORT_EMAIL}}.`,
-      ar: `تخضع هذه الشروط لقوانين {{GOVERNING_LAW}}، دون النظر إلى قواعد تنازع القوانين. وتختص محاكم {{GOVERNING_LAW}} حصريًا بأي نزاع، إلا إذا سمح لك قانون بلدك برفع الدعوى في مكان إقامتك.
+If you are a consumer, this clause does not take away any protection you have under the mandatory law of your country of residence. Contact us: msroomsprod@protonmail.com.`,
+      ar:`تخضع هذه الشروط لقوانين جمهورية مصر العربية، دون النظر إلى قواعد تنازع القوانين. وتختص محاكم جمهورية مصر العربية حصريًا بأي نزاع، إلا إذا سمح لك قانون بلدك برفع الدعوى في مكان إقامتك.
 
-وإذا كنت مستهلكًا، فإن هذا البند لا يلغي أي حماية تتمتع بها بموجب القانون الآمر في بلد إقامتك. للتواصل معنا: {{SUPPORT_EMAIL}}.`,
+وإذا كنت مستهلكًا، فإن هذا البند لا يلغي أي حماية تتمتع بها بموجب القانون الآمر في بلد إقامتك. للتواصل معنا: msroomsprod@protonmail.com.`,
     },
   },
 ];
@@ -402,7 +402,7 @@ No system is perfect. If a breach affects your data, we will tell you and the re
 - withdraw consent, where we rely on it;
 - complain to your data protection authority.
 
-Write to {{SUPPORT_EMAIL}} and we will respond within 30 days. We may ask you to confirm your identity before we act on the request.`,
+Write to msroomsprod@protonmail.com and we will respond within 30 days. We may ask you to confirm your identity before we act on the request.`,
       ar: `لك الحق في:
 - الحصول على نسخة من بياناتك الشخصية؛
 - تصحيح أي بيانات غير دقيقة؛
@@ -412,7 +412,7 @@ Write to {{SUPPORT_EMAIL}} and we will respond within 30 days. We may ask you to
 - سحب الموافقة، حيثما نقوم عليها؛
 - تقديم شكوى إلى جهة حماية البيانات في بلدك.
 
-راسلنا على {{SUPPORT_EMAIL}} وسنرد خلال ٣٠ يومًا. وقد نطلب منك تأكيد هويتك قبل التنفيذ.`,
+راسلنا على msroomsprod@protonmail.com وسنرد خلال ٣٠ يومًا. وقد نطلب منك تأكيد هويتك قبل التنفيذ.`,
     },
   },
   {
@@ -432,8 +432,8 @@ Write to {{SUPPORT_EMAIL}} and we will respond within 30 days. We may ask you to
   {
     heading: { en: "11. Changes and contact", ar: "١١. التعديلات والتواصل" },
     body: {
-      en: `When this policy changes we will publish a new version in the app and ask existing users to accept it. Contact {{OPERATOR_LEGAL_NAME}} at {{SUPPORT_EMAIL}}. Registered address: {{REGISTERED_ADDRESS}}.`,
-      ar: `عند تعديل هذه السياسة سننشر نسخة جديدة داخل التطبيق ونطلب من المستخدمين الحاليين قبولها. للتواصل مع {{OPERATOR_LEGAL_NAME}} على {{SUPPORT_EMAIL}}. والعنوان المسجل: {{REGISTERED_ADDRESS}}.`,
+      en: `When this policy changes we will publish a new version in the app and ask existing users to accept it. Contact Ms-Rooms at msroomsprod@protonmail.com. Registered address: Bait Al Masria, October Gardens, Giza, Egypt.`,
+      ar: `عند تعديل هذه السياسة سننشر نسخة جديدة داخل التطبيق ونطلب من المستخدمين الحاليين قبولها. للتواصل مع Ms-Rooms على msroomsprod@protonmail.com. والعنوان المسجل: Bait Al Masria, October Gardens, Giza, Egypt.`,
     },
   },
 ];
@@ -525,12 +525,12 @@ Muting is a tool, not a punishment.`,
     body: {
       en: `If something is wrong, report it from the profile menu or the room. Reports go to the moderation team, and serious threats are escalated.
 
-Actions can include a mute, a temporary suspension, a permanent ban, or removal of content. If you think we got it wrong, write to {{SUPPORT_EMAIL}} from the email on your account. We look again. Banning for serious abuse or child safety is not reversible.
+Actions can include a mute, a temporary suspension, a permanent ban, or removal of content. If you think we got it wrong, write to msroomsprod@protonmail.com from the email on your account. We look again. Banning for serious abuse or child safety is not reversible.
 
 We act on reports in good faith. Reporting someone to cause them trouble is itself a breach of these guidelines.`,
       ar: `إذا كان هناك خطأ ما، فبلّغ عنه من قائمة الملف الشخصي أو من الغرفة. وتذهب البلاغات إلى فريق الإشراف، وتُصعَّد التهديدات الجسيمة.
 
-وقد تشمل الإجراءات كتمًا أو تعليقًا مؤقتًا أو حظرًا دائمًا أو إزالة محتوى. وإذا رأيت أننا أخطأنا، فاكتب إلى {{SUPPORT_EMAIL}} من البريد المسجل في حسابك. وسننظر في الأمر. أما الحظر بسبب إساءة استخدام جسيمة أو حماية طفل فلا يُقَلَب.
+وقد تشمل الإجراءات كتمًا أو تعليقًا مؤقتًا أو حظرًا دائمًا أو إزالة محتوى. وإذا رأيت أننا أخطأنا، فاكتب إلى msroomsprod@protonmail.com من البريد المسجل في حسابك. وسننظر في الأمر. أما الحظر بسبب إساءة استخدام جسيمة أو حماية طفل فلا يُقَلَب.
 
 نتصرف بناءً على البلاغات بنية حسنة. والإبلاغ عن شخص بغية الإضرار به يُعدّ في حد ذاته إخلالًا بهذه الإرشادات.`,
     },
