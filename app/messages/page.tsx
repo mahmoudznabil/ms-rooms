@@ -7,7 +7,7 @@ import ChatPanel from "@/components/ChatPanel";
 function MessagesInner() {
   const params = useSearchParams();
   return (
-    <div className="h-[calc(100dvh-220px)] min-h-[320px] overflow-hidden rounded-3xl border border-white/10 bg-[#0d0d12] sm:h-[calc(100dvh-160px)]">
+    <div className="h-[calc(100dvh-220px)] min-h-[320px] overflow-hidden rounded-3xl border border-white/10 bg-ink-sunken border-line sm:h-[calc(100dvh-160px)]">
       <ChatPanel
         userId={params.get("userId") ?? undefined}
         conversationId={params.get("conversationId") ?? undefined}

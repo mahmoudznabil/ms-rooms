@@ -44,6 +44,7 @@ import {
   type ApiSeat,
   type GiftCatalogItem,
 } from "@/lib/api";
+import { roomSeatPolicy } from "@/workers/room-policy";
 import { ENTRY_EFFECT_LEVEL, levelForXp } from "@/lib/levels";
 import { useRoomVoice } from "@/lib/realtime";
 import { useSession } from "@/stores/useSession";
@@ -108,6 +109,11 @@ function RoomViewInner() {
   const fxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fxIdRef = useRef(0);
 
+  // Room policy decides how many seats exist. Same rule the server enforces
+  // (workers/room-policy.ts), so the grid can never offer a seat the API
+  // would refuse, nor hide one it would accept.
+  const seatPolicy = useMemo(() => roomSeatPolicy(room), [room]);
+  const seatCapacity = seatPolicy.capacity;
   const voice = useRoomVoice(room?.id ?? "", user?.id ?? null);
   const isHost = !!user && !!room && room.host_user_id === user.id;
   const mySeat = useMemo(
@@ -700,15 +706,15 @@ function RoomViewInner() {
       {/* Seats */}
       <section aria-label="Speaker seats" className="mt-3">
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-xs font-bold uppercase tracking-widest text-white/50">Speakers · 8 seats</h2>
-          <span className="text-xs text-white/40">{seats.filter((s) => s.user_id).length}/8 on mic</span>
+          <h2 className="text-xs font-bold uppercase tracking-widest text-white/50">Speakers · {seatCapacity} seats</h2>
+          <span className="text-xs text-white/40">{seats.filter((s) => s.user_id).length}/{seatCapacity} on mic</span>
         </div>
         <div className="grid grid-cols-4 gap-2.5">
-          {Array.from({ length: 8 }, (_, i) => {
+          {Array.from({ length: seatCapacity }, (_, i) => {
             const seat = seatAt(seats, i);
             if (!seat) {
               return (
-                <div key={i} className="flex flex-col items-center rounded-2xl border border-white/10 bg-[#15151d] p-2.5">
+                <div key={i} className="flex flex-col items-center rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-2.5">
                   <button onClick={() => void handleSeat(i)} aria-label={`Take seat ${i + 1}`}
                     className="flex h-12 w-12 items-center justify-center rounded-full border border-dashed border-white/20 bg-white/5 text-white/50 transition hover:border-violet-400/60 hover:text-white">
                     <Plus size={18} />
@@ -722,7 +728,7 @@ function RoomViewInner() {
             const muted = seat.is_muted === 1;
             const speaking = !!seat.user_id && voice.speakingUserIds.includes(seat.user_id);
             return (
-              <div key={i} className="flex flex-col items-center rounded-2xl border border-white/10 bg-[#15151d] p-2.5">
+              <div key={i} className="flex flex-col items-center rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-2.5">
                 <div
                   className={`relative flex h-12 w-12 items-center justify-center rounded-full text-sm font-extrabold transition-shadow ${
                     speaking ? "ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#15151d]" : ""
@@ -761,7 +767,7 @@ function RoomViewInner() {
       </section>
 
       {/* Host row */}
-      <div className="mt-3 flex items-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+      <div className="mt-3 flex items-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.025] p-3">
         <UserAvatar name={room.host_name} size={36} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold">{room.host_name}</p>
@@ -806,7 +812,7 @@ function RoomViewInner() {
       </div>
 
       {/* Chat */}
-      <section aria-label="Live chat" className="mt-3 overflow-hidden rounded-3xl border border-white/10 bg-[#121218]">
+      <section aria-label="Live chat" className="mt-3 overflow-hidden rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong">
         <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
           <span className="text-xs font-bold uppercase tracking-widest text-white/50">Live chat</span>
           <span className="flex items-center gap-1 text-xs text-white/40"><Users size={12} /> {formatCount(room.listener_count)}</span>
@@ -838,7 +844,7 @@ function RoomViewInner() {
       </section>
 
       {/* Controls */}
-      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 mt-3 rounded-3xl border border-white/10 bg-[#0d0d12]/95 p-2.5 backdrop-blur md:bottom-0">
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 mt-3 rounded-3xl border border-white/10 bg-ink-sunken border-line/95 p-2.5 backdrop-blur md:bottom-0">
         {notice && <p className="mx-1 mb-2 rounded-xl bg-white/10 px-3 py-2 text-center text-xs font-semibold text-amber-200">{notice}</p>}
         {giftOpen && (
           <div className="mx-1 mb-2 grid max-h-[40dvh] grid-cols-4 gap-2 overflow-y-auto rounded-2xl border border-white/10 bg-[#17171f] p-2.5">
@@ -904,7 +910,7 @@ function RoomViewInner() {
       {spinOpen && <SpinModal onClose={() => setSpinOpen(false)} />}
       {showChat && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setShowChat(false)}>
-          <div className="h-[82dvh] w-full overflow-hidden rounded-t-3xl border border-white/10 bg-[#0d0d12] sm:h-[640px] sm:max-w-md sm:rounded-3xl" onClick={(e) => e.stopPropagation()}>
+          <div className="h-[82dvh] w-full overflow-hidden rounded-t-3xl border border-white/10 bg-ink-sunken border-line sm:h-[640px] sm:max-w-md sm:rounded-3xl" onClick={(e) => e.stopPropagation()}>
             <ChatPanel onClose={() => setShowChat(false)} />
           </div>
         </div>

@@ -37,7 +37,7 @@ export default function SupportPage() {
       <h1 className="text-2xl font-black tracking-tight">Support Desk</h1>
       <p className="text-xs text-white/50">Recharge issues, blocked accounts, technical — quick replies + transaction lookup embedded.</p>
 
-      <div className="mt-4 rounded-3xl border border-white/10 bg-[#15151d] p-5">
+      <div className="mt-4 rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-5">
         <h2 className="text-sm font-bold">New ticket</h2>
         <div className="mt-3 space-y-3">
           <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject (e.g. Missing 27,500 coins)" maxLength={80} className="w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-base text-white placeholder:text-white/30 focus:outline-none" />
@@ -57,7 +57,7 @@ export default function SupportPage() {
       <h2 className="mt-6 text-sm font-bold uppercase tracking-widest text-white/50">My tickets</h2>
       <ul className="mt-2 space-y-2">
         {tickets.length === 0 ? <p className="text-xs text-white/40">No tickets yet.</p> : tickets.map((t) => (
-          <li key={String(t.id)} className="rounded-2xl bg-white/[0.04] p-3">
+          <li key={String(t.id)} className="rounded-2xl bg-white/[0.035] p-3">
             <p className="text-sm font-bold">{String(t.subject)} <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/60">{String(t.status)}</span></p>
             <details>
               <summary className="cursor-pointer py-2 min-h-[44px] text-xs text-white/50">{String(t.category)} — {String(t.message).slice(0, 120)}{String(t.message).length > 120 ? "… (tap to expand)" : ""}</summary>

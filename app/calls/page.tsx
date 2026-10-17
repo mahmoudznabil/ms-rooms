@@ -159,7 +159,7 @@ export default function CallsPage() {
       ) : (
         <ul className="mt-4 space-y-2">
           {filtered.map((c) => (
-            <li key={c.id} className="rounded-2xl border border-white/10 bg-[#15151d] p-3">
+            <li key={c.id} className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-3">
               <div className="flex items-center gap-2.5">
                 <Link prefetch={false} href={`/profile?u=${encodeURIComponent(c.peer.username)}`} aria-label={`View ${c.peer.display_name}`}>
                   <UserAvatar name={c.peer.display_name} avatarUrl={c.peer.avatar_url} size={44} />

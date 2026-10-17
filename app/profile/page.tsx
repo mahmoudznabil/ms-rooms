@@ -250,7 +250,7 @@ function OwnProfile() {
 
   return (
     <div>
-      <div className="rounded-3xl border border-white/10 bg-[#15151d] p-5">
+      <div className="rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-5">
         <div className="flex items-center gap-3.5">
           <UserAvatar name={user.display_name} avatarUrl={user.avatar_url} xp={user.xp} size={64} />
           <div className="min-w-0 flex-1">
@@ -413,7 +413,7 @@ function OwnProfile() {
 
       <div className="mt-3 grid grid-cols-3 gap-2">
         {cards.map((c) => (
-          <div key={c.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+          <div key={c.label} className="rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-center">
             <p className="flex items-center justify-center gap-1 text-lg font-black">
               <c.icon size={14} className="text-violet-300" /> {c.value.toLocaleString()}
             </p>
@@ -427,7 +427,7 @@ function OwnProfile() {
       </Link>
 
       {/* ---- Phase E1/E2/E3: gender + host call settings ---- */}
-      <section className="mt-4 rounded-3xl border border-white/10 bg-[#15151d] p-4">
+      <section className="mt-4 rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-4">
         <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Identity &amp; hosting</h2>
 
         {/* E1: gender — opt-in, no existing feature is gated by it. */}
@@ -534,7 +534,7 @@ function OwnProfile() {
           <h2 className="mt-5 text-sm font-bold uppercase tracking-widest text-white/50">Followers</h2>
           <ul className="mt-2 space-y-1.5">
             {social.followers_list.map((f) => (
-              <li key={f.id} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.04] px-3 py-2">
+              <li key={f.id} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.035] px-3 py-2">
                 <UserAvatar name={f.display_name} avatarUrl={f.avatar_url} size={30} showFrame={false} />
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">{f.display_name}</span>
                 <span className="text-xs text-white/35">@{f.username}</span>
@@ -705,7 +705,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
   return (
     <div>
       {notice && <p className="mb-3 rounded-xl bg-white/10 px-3 py-2 text-center text-xs font-semibold text-amber-200">{notice}</p>}
-      <div className="rounded-3xl border border-white/10 bg-[#15151d] p-5">
+      <div className="rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-5">
         <div className="flex items-center gap-3.5">
           <UserAvatar name={profileUser.display_name} avatarUrl={profileUser.avatar_url} xp={profileUser.xp} size={64} />
           <div className="min-w-0 flex-1">
@@ -767,7 +767,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
 
       <div className="mt-3 grid grid-cols-3 gap-2">
         {cards.map((c) => (
-          <div key={c.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+          <div key={c.label} className="rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-center">
             <p className="flex items-center justify-center gap-1 text-lg font-black">
               <c.icon size={14} className="text-violet-300" /> {c.value.toLocaleString()}
             </p>
@@ -782,7 +782,7 @@ function FriendProfile({ userKey }: { userKey: string }) {
           <ul className="mt-2 space-y-1.5">
             {social.followers_list.map((f) => (
               <li key={f.id}>
-                <Link prefetch={false} href={`/profile?u=${encodeURIComponent(f.username)}`} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.04] px-3 py-2 transition hover:bg-white/[0.08]">
+                <Link prefetch={false} href={`/profile?u=${encodeURIComponent(f.username)}`} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.035] px-3 py-2 transition hover:bg-white/[0.08]">
                   <UserAvatar name={f.display_name} avatarUrl={f.avatar_url} size={30} showFrame={false} />
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{f.display_name}</span>
                   <span className="text-xs text-white/35">@{f.username}</span>

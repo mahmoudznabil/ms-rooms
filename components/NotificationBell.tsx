@@ -147,7 +147,7 @@ export default function NotificationBell() {
                     prefetch={false}
                     href={n.link || "/lobby"}
                     onClick={() => void openItem(n)}
-                    className={`flex gap-2.5 rounded-2xl p-3 transition hover:bg-white/[0.07] ${n.read_at ? "opacity-60" : "bg-white/[0.04]"}`}
+                    className={`flex gap-2.5 rounded-2xl p-3 transition hover:bg-white/[0.07] ${n.read_at ? "opacity-60" : "bg-white/[0.035]"}`}
                   >
                     <span className="mt-0.5 shrink-0">{iconFor(n.type)}</span>
                     <span className="min-w-0">

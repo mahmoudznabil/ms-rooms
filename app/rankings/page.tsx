@@ -76,7 +76,7 @@ export default function RankingsPage() {
       ) : (
         <ul className="mt-4 space-y-2">
           {rows.map((r, i) => (
-            <li key={String(r.id ?? r.slug ?? i)} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#15151d] p-3">
+            <li key={String(r.id ?? r.slug ?? i)} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-3">
               <span className="w-7 text-center text-lg font-black">
                 {i < 3 ? MEDALS[i] : <span className="text-sm text-white/40">{i + 1}</span>}
               </span>

@@ -100,7 +100,7 @@ export default function SearchPage() {
               <ul className="mt-2 space-y-2">
                 {rooms.map((r) => (
                   <li key={r.id}>
-                    <Link prefetch={false} href={`/room?slug=${r.slug}`} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#15151d] p-3 transition hover:border-violet-400/40">
+                    <Link prefetch={false} href={`/room?slug=${r.slug}`} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-3 transition hover:border-violet-400/40">
                       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ backgroundColor: r.cover_color }}>
                         <Mic size={18} className="text-white/85" />
                       </span>
@@ -123,7 +123,7 @@ export default function SearchPage() {
             ) : (
               <ul className="mt-2 space-y-2">
                 {users.map((u) => (
-                  <li key={u.id} className="rounded-2xl border border-white/10 bg-[#15151d] p-3">
+                  <li key={u.id} className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-3">
                     <div className="flex items-center gap-2.5">
                       <Link prefetch={false} href={`/profile?u=${encodeURIComponent(u.username)}`} aria-label={`View ${u.display_name}`}>
                         <UserAvatar name={u.display_name} avatarUrl={u.avatar_url} xp={u.xp} size={40} />

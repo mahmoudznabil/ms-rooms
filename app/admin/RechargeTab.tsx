@@ -42,7 +42,7 @@ interface LedgerCredit {
 }
 
 function Card({ children }: { children: React.ReactNode }) {
-  return <div className="mt-3 rounded-3xl border border-white/10 bg-[#15151d] p-4">{children}</div>;
+  return <div className="mt-3 rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-4">{children}</div>;
 }
 
 export default function RechargeTab({
@@ -150,7 +150,7 @@ export default function RechargeTab({
                 ? r.outstanding_usd >= policy.outstanding_cap_usd
                 : false;
               return (
-                <li key={r.id} className="rounded-2xl bg-white/[0.04] p-3">
+                <li key={r.id} className="rounded-2xl bg-white/[0.035] p-3">
                   <div className="flex items-center gap-2.5">
                     <UserAvatar name={r.display_name} avatarUrl={r.avatar_url} size={34} showFrame={false} />
                     <div className="min-w-0 flex-1">
@@ -210,7 +210,7 @@ export default function RechargeTab({
         ) : (
           <ul className="mt-2 space-y-2">
             {customers.map((c) => (
-              <li key={c.user_id} className="rounded-2xl bg-white/[0.04] p-3">
+              <li key={c.user_id} className="rounded-2xl bg-white/[0.035] p-3">
                 <div className="flex items-center gap-2.5">
                   <UserAvatar name={c.display_name} avatarUrl={c.avatar_url} size={34} showFrame={false} />
                   <div className="min-w-0 flex-1">

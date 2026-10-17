@@ -150,7 +150,7 @@ export default function AdminPage() {
   if (!admin || !token) {
     return (
       <div className="mx-auto w-full max-w-md">
-        <div className="rounded-3xl border border-white/10 bg-[#15151d] p-6">
+        <div className="rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-6">
           <h1 className="flex items-center gap-2 text-xl font-black">
             <Shield size={20} className="text-violet-300" /> Game Admin
           </h1>
@@ -257,7 +257,7 @@ export default function AdminPage() {
 }
 
 function Card({ children }: { children: React.ReactNode }) {
-  return <div className="mt-4 rounded-3xl border border-white/10 bg-[#15151d] p-5">{children}</div>;
+  return <div className="mt-4 rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-5">{children}</div>;
 }
 
 function Err({ msg }: { msg: string | null }) {
@@ -279,7 +279,7 @@ function OverviewTab({ token, isMaster }: { token: string; isMaster: boolean }) 
       <h2 className="flex items-center gap-1.5 text-sm font-bold"><BarChart3 size={14} /> Game at a glance</h2>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {Object.entries(stats).map(([k, v]) => (
-          <div key={k} className="rounded-2xl bg-white/[0.04] p-3">
+          <div key={k} className="rounded-2xl bg-white/[0.035] p-3">
             <p className="text-[11px] font-bold uppercase tracking-wide text-white/40">{k.replace(/_/g, " ")}</p>
             <p className="text-lg font-black">{String(v)}</p>
           </div>
@@ -392,7 +392,7 @@ function UsersTab({ token }: { token: string }) {
           {found.map((u) => {
             const isBanned = Number(u.banned ?? 0) === 1;
             return (
-              <li key={u.id} className={`rounded-2xl px-3 py-2 text-sm ${target === u.id ? "bg-violet-500/20" : "bg-white/[0.04]"} ${isBanned ? "ring-1 ring-red-500/40" : ""}`}>
+              <li key={u.id} className={`rounded-2xl px-3 py-2 text-sm ${target === u.id ? "bg-violet-500/20" : "bg-white/[0.035]"} ${isBanned ? "ring-1 ring-red-500/40" : ""}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="min-w-0 truncate">
                     {u.display_name} <span className="text-white/40">@{u.username}</span>
@@ -414,7 +414,7 @@ function UsersTab({ token }: { token: string }) {
                     {modBusy === u.id + (isBanned ? ":unban" : ":ban") ? "…" : isBanned ? "Unban" : "Ban"}
                   </button>
                   <select value={promoteRole} onChange={(e) => setPromoteRole(e.target.value as "support" | "finance")}
-                    className="shrink-0 rounded-full border border-white/10 bg-[#15151d] px-2 py-1 min-h-[44px] text-xs text-white/70 focus:outline-none">
+                    className="shrink-0 rounded-full border border-white/10 bg-ink-raised shadow-raised border-line-strong px-2 py-1 min-h-[44px] text-xs text-white/70 focus:outline-none">
                     <option value="support">support</option>
                     <option value="finance">finance</option>
                   </select>
@@ -437,7 +437,7 @@ function UsersTab({ token }: { token: string }) {
         </label>
         <label className="block">
           <span className="text-xs font-bold text-white/50">Action</span>
-          <select value={action} onChange={(e) => setAction(e.target.value)} className="mt-1 w-full rounded-2xl border border-white/10 bg-[#15151d] px-3.5 py-2.5 text-base text-white focus:outline-none">
+          <select value={action} onChange={(e) => setAction(e.target.value)} className="mt-1 w-full rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong px-3.5 py-2.5 text-base text-white focus:outline-none">
             {["ADD_COINS", "DEDUCT_COINS", "ADD_GEMS", "DEDUCT_GEMS", "ADD_XP", "DEDUCT_XP"].map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
@@ -501,7 +501,7 @@ function RoomsTab({ token }: { token: string }) {
       <ul className="mt-3 space-y-2">
         {rooms.length === 0 && <p className="text-xs text-white/40">No live rooms right now.</p>}
         {rooms.map((r) => (
-          <li key={r.slug} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.04] p-3">
+          <li key={r.slug} className="flex items-center gap-2.5 rounded-2xl bg-white/[0.035] p-3">
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-bold">{r.title}</span>
               <span className="block text-xs text-white/45">{r.hostName} · {r.listenerCount} listening</span>
@@ -560,7 +560,7 @@ function ReportsTab({ token }: { token: string }) {
       <ul className="mt-3 space-y-2">
         {reports.length === 0 && <p className="text-xs text-white/40">No reports in this view. Clean community!</p>}
         {reports.map((r) => (
-          <li key={String(r.id)} className="rounded-2xl bg-white/[0.04] p-3">
+          <li key={String(r.id)} className="rounded-2xl bg-white/[0.035] p-3">
             <p className="text-sm">
               <span className="font-bold">{String(r.target_name ?? r.target_id)}</span>
               <span className="text-white/45"> reported by {String(r.reporter_name ?? r.reporter_id)}</span>
@@ -614,7 +614,7 @@ function ErrorsTab({ token }: { token: string }) {
       <ul className="mt-3 space-y-2">
         {errors.length === 0 && <p className="text-xs text-white/40">No errors recorded. Quiet clients!</p>}
         {errors.map((e) => (
-          <li key={e.id} className="rounded-2xl bg-white/[0.04] p-3">
+          <li key={e.id} className="rounded-2xl bg-white/[0.035] p-3">
             <p className="text-sm">
               <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-bold text-white/60">{e.kind}</span>
               <span className="ml-2 font-semibold">{e.message}</span>
@@ -690,7 +690,7 @@ function TicketsTab({ token }: { token: string }) {
         {tickets.length === 0 && <p className="text-xs text-white/40">No tickets.</p>}
         {tickets.map((t) => (
           <li key={String(t.id)}>
-            <button onClick={() => void open(String(t.id))} className="w-full rounded-2xl bg-white/[0.04] p-3 text-left hover:bg-white/[0.07]">
+            <button onClick={() => void open(String(t.id))} className="w-full rounded-2xl bg-white/[0.035] p-3 text-left hover:bg-white/[0.07]">
               <p className="text-sm font-bold">{String(t.subject)} <span className="ml-1 rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/60">{String(t.status)}</span></p>
               <p className="text-xs text-white/50">{String(t.category)} — {String(t.message).slice(0, 90)}</p>
             </button>
@@ -716,7 +716,7 @@ function TicketsTab({ token }: { token: string }) {
                 placeholder="Write an official reply…"
                 className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none" />
               <div className="mt-2 flex gap-2">
-                <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-2xl border border-white/10 bg-[#15151d] px-3 py-2 text-xs font-bold text-white">
+                <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong px-3 py-2 text-xs font-bold text-white">
                   {(["pending", "resolved", "closed"] as const).map((s) => (
                     <option key={s} value={s}>{s}</option>
                   ))}
@@ -745,7 +745,7 @@ function AuditTab({ token }: { token: string }) {
       <ul className="mt-3 space-y-1.5">
         {rows.length === 0 && <p className="text-xs text-white/40">No adjustments yet.</p>}
         {rows.map((a) => (
-          <li key={String(a.id)} className="rounded-2xl bg-white/[0.04] px-3 py-2 text-xs">
+          <li key={String(a.id)} className="rounded-2xl bg-white/[0.035] px-3 py-2 text-xs">
             <span className="font-bold text-violet-200">{String(a.admin_username ?? a.admin_id)}</span> →{" "}
             <span className="font-bold">{String(a.target_username ?? a.target_user_id)}</span> : {String(a.action_type)}{" "}
             {String(a.amount)} <span className="text-white/40">{String(a.notes ?? "")}</span>
@@ -814,7 +814,7 @@ function TeamTab({ token }: { token: string }) {
       <h2 className="flex items-center gap-1.5 text-sm font-bold"><UsersIcon size={14} /> Admin team — only you manage this</h2>
       <ul className="mt-3 space-y-1.5">
         {team.map((m) => (
-          <li key={m.id} className="flex items-center justify-between gap-2 rounded-2xl bg-white/[0.04] px-3 py-2 text-sm">
+          <li key={m.id} className="flex items-center justify-between gap-2 rounded-2xl bg-white/[0.035] px-3 py-2 text-sm">
             <span className="min-w-0">
               <span className="font-bold">{m.display_name}</span> <span className="text-white/40">@{m.username}</span>
               <span className="ml-2 rounded-full bg-violet-500/20 px-2 py-0.5 text-[11px] text-violet-200">{m.role}</span>
@@ -833,7 +833,7 @@ function TeamTab({ token }: { token: string }) {
           <div className="grid grid-cols-2 gap-2">
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="username" className={inputCls} />
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" className={inputCls} />
-            <select value={role} onChange={(e) => setRole(e.target.value as "finance" | "support")} className={`${inputCls} bg-[#15151d]`}>
+            <select value={role} onChange={(e) => setRole(e.target.value as "finance" | "support")} className={`${inputCls} bg-ink-raised shadow-raised border-line-strong`}>
               <option value="support">support</option>
               <option value="finance">finance</option>
             </select>

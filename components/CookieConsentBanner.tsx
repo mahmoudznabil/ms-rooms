@@ -94,7 +94,7 @@ export default function CookieConsentBanner() {
       role="dialog"
       aria-label="Cookie consent"
     >
-      <div className="rounded-2xl border border-white/10 bg-[#15151d]/95 backdrop-blur-sm p-4 shadow-2xl">
+      <div className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong/95 backdrop-blur-sm p-4 shadow-2xl">
         <div className="flex items-start gap-3">
           <div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-xl bg-violet-500/20 text-violet-300">
             <Cookie size={20} />

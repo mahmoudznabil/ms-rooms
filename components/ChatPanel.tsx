@@ -461,7 +461,7 @@ export default function ChatPanel({ userId, conversationId: initialId, onClose }
           </div>
         )}
         {peerCalls.length > 0 && (
-          <div aria-label="Recent calls" className="rounded-2xl bg-white/[0.03] p-2">
+          <div aria-label="Recent calls" className="rounded-2xl bg-white/[0.025] p-2">
             {peerCalls.map((call) => {
               const sub = formatCallSubtitle(call);
               const when = new Date(call.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });

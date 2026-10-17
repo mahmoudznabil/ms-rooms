@@ -21,6 +21,19 @@ import {
   pickAdminForAssignment,
   successfulRecharges,
 } from "./recharge-policy";
+import { roomSeatPolicy, seatExists, seatRefusalReason } from "./room-policy";
+import {
+  LEGAL_DOCUMENTS,
+  LEGAL_LANGS,
+  LEGAL_VERSION,
+  MINIMUM_AGE,
+  REQUIRED_LEGAL_DOCS,
+  isLegalLang,
+  legalDocSummaries,
+  missingLegalDocs,
+  type AcceptedRecord,
+  type LegalDocKey,
+} from "../lib/legal-documents";
 
 interface Env {
   // Typed as `any` to avoid requiring @cloudflare/workers-types.
@@ -45,6 +58,9 @@ interface Env {
   FIREBASE_PROJECT_ID?: string;
   RECAPTCHA_SITE_KEY?: string;
   RECAPTCHA_SECRET_KEY?: string;
+  // Optional salt for the consent record's client-address correlation hash.
+  // When absent, no address is recorded at all — see `consentIpHash`.
+  CONSENT_HASH_SECRET?: string;
   // Workers AI binding (see [[ai]] in wrangler.toml). Optional: when absent
   // (local dev, or a deployment without the binding) `runAi` returns null and
   // callers degrade to static content instead of failing.
@@ -137,6 +153,97 @@ function newId(prefix: string): string {
   return `${prefix}-${r}`;
 }
 
+/**
+ * Move consent recorded against the provider id onto the real account row.
+ *
+ * At signup the browser has a Firebase token but no app session, so there is
+ * no `users` row to attach a consent record to. The record therefore lands
+ * keyed on `firebase_uid` with a NULL `user_id`, and this attaches it once the
+ * account exists. Keeping the same row (rather than re-inserting) preserves the
+ * original `accepted_at`, which is the timestamp that actually matters.
+ */
+async function claimPendingConsent(
+  env: Env,
+  firebaseUid: string,
+  userId: string
+): Promise<void> {
+  if (!userId) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE legal_consent SET user_id = ? WHERE firebase_uid = ? AND user_id IS NULL`
+    )
+      .bind(userId, firebaseUid)
+      .run();
+  } catch {
+    // Migration 0019 not applied yet — the gate stays closed rather than
+    // silently recording nothing. Failing quietly here would let signups
+    // through unrecorded, which is worse than a visible error.
+  }
+}
+
+/**
+ * Mark an account as cleared at the current document version.
+ *
+ * Only called once `missingLegalDocs` reports nothing outstanding, so there is
+ * no path that sets this column without every required document having been
+ * accepted. Idempotent: re-running it leaves the original timestamp alone.
+ */
+async function markLegalCleared(
+  env: Env,
+  userId: string,
+  firebaseUid: string,
+  request: Request
+): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `UPDATE users
+          SET legal_consent_version = ?,
+              legal_accepted_at = COALESCE(legal_accepted_at, CURRENT_TIMESTAMP)
+        WHERE id = ? AND (legal_consent_version IS NULL OR legal_consent_version != ?)`
+    )
+      .bind(LEGAL_VERSION, userId, LEGAL_VERSION)
+      .run();
+  } catch {
+    /* see claimPendingConsent */
+  }
+  void firebaseUid;
+  void request;
+}
+
+/**
+ * Best-effort client-address correlation for the consent record.
+ *
+ * Deliberately returns "" unless a secret is configured. A hash salted with
+ * anything the operator can read is not anonymisation — IP space is small
+ * enough to reverse with a wordlist — so the default is to record nothing
+ * rather than to store a value that looks protective and is not. Set
+ * `CONSENT_HASH_SECRET` to enable it.
+ */
+async function consentIpHash(request: Request, env: Env): Promise<string> {
+  const secret = env.CONSENT_HASH_SECRET;
+  if (!secret) return "";
+  const ip =
+    request.headers.get("CF-Connecting-IP") ??
+    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ??
+    "";
+  if (!ip) return "";
+  return (await hmacSha256Hex(ip, secret)).slice(0, 32);
+}
+
+/**
+ * The room's own capacity, coerced to a legal seat count.
+ *
+ * ROOM POLICY IS THE SINGLE SOURCE OF TRUTH for how many seats a room has.
+ * Seat endpoints used to hardcode `seatIndex > 7`, which meant a room created
+ * with capacity 12 could never seat more than 8 people — the UI drew twelve
+ * seats and the last four were unreachable. Worse, the two disagreed silently
+ * rather than loudly.
+ *
+ * The rule itself now lives in `workers/room-policy.ts`, unit-tested, so the
+ * private-call invariant (a paid 1-on-1 seats exactly two, regardless of the
+ * stored capacity) cannot be quietly dropped from a request handler again.
+ */
+
 // ---- HMAC-SHA256 (shared by admin-manifest signing) ----------------------------------
 // Returns the lowercase hex HMAC-SHA256 of `message` under `secret`.
 async function hmacSha256Hex(message: string, secret: string): Promise<string> {
@@ -201,7 +308,11 @@ function isRateLimited(key: string, path: string, method: string): boolean {
   else if (path.startsWith("/api/signal/")) limit = 120;
   else if (path === "/api/spin") limit = 10;
   else if (path === "/api/client-errors") limit = 30;
-    else if (path === "/api/csp-report") limit = 60;
+  else if (path === "/api/csp-report") limit = 60;
+  // Consent is written once per account per document version, so the honest
+  // rate is low. Generous enough for a retry after a dropped connection,
+  // tight enough that the consent table cannot be bulk-filled from one address.
+  else if (path === "/api/legal/accept") limit = 12;
   else if (path === "/api/attachments/upload") limit = 20;
   else if (method !== "GET") limit = 100;
   else return false;
@@ -456,6 +567,19 @@ if (request.method === "OPTIONS") {
     if (path.startsWith("/api/auth/firebase")) return true;
     if (path.startsWith("/api/admin/")) return true;
     if (path.startsWith("/api/recaptcha/")) return true;
+    // Any explicitly-authorised request is exempt, not just the named routes.
+    // CSRF exists to stop a third-party site making the browser send state-
+    // changing requests with the user's cookies attached without their intent.
+    // An Authorization header cannot be attached that way: it is a non-simple
+    // header, so setting it cross-origin requires a CORS preflight that our
+    // response will not approve for a foreign origin. If the caller can attach
+    // a bearer token, they are not riding an ambient cookie.
+    //
+    // This is what lets /api/legal/accept serve both callers: a signup-time
+    // acceptance (Firebase token, no session yet) and a re-prompt for an
+    // existing user (session cookie, which still goes through the double-submit
+    // check below because it sends no Authorization header).
+    if (request.headers.get("Authorization")) return true;
     // The error beacon must accept sendBeacon/fetch-without-preflight posts:
     // neither can carry the custom header, and there is nothing to forge —
     // the endpoint takes no privileged action (append-only log, capped fields,
@@ -676,6 +800,9 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
             "PATCH /api/rooms/:slug/seats/:index",
             "GET /api/users/:id",
             "PATCH /api/users/:id",
+            "GET /api/legal/documents",
+            "POST /api/legal/accept",
+            "GET /api/legal/status",
             "GET /api/users/:id/profile",
             "GET /api/users/:id/social",
             "GET /api/users/:id/transactions",
@@ -822,14 +949,24 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           if (typeof body?.user_id === "string" && body.user_id !== userId) {
             return j({ ok: false, error: "user_id must match the signed-in user." }, 403);
           }
-          if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 7) {
-            return badRequest("seat_index must be an integer between 0 and 7.");
+          if (!Number.isInteger(seatIndex) || seatIndex < 0) {
+            return badRequest("seat_index must be a non-negative integer.");
           }
           const user = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(userId).first();
           if (!user) return notFound("User not found.");
-          // Host/lock state drives the guards below.
-          const roomRow = (await env.DB.prepare(`SELECT host_user_id, locked FROM rooms WHERE id = ?`).bind(roomId).first()) as Record<string, unknown> | null;
+          // Host/lock/capacity state drives the guards below.
+          //
+          // Capacity comes from the ROOM, not from a constant here. This used to
+          // reject anything above index 7, so a room created with capacity 12
+          // silently capped at 8 people and the UI drew seats that could never
+          // be taken. The room's own policy is the single source of truth.
+          const roomRow = (await env.DB.prepare(`SELECT host_user_id, locked, capacity, is_private FROM rooms WHERE id = ?`).bind(roomId).first()) as Record<string, unknown> | null;
           const hostUserId = roomRow?.host_user_id as string | null;
+          // Room policy decides how many seats exist. See workers/room-policy.ts.
+          const seatPolicy = roomSeatPolicy(roomRow);
+          if (!seatExists(seatPolicy, seatIndex)) {
+            return j({ ok: false, error: seatRefusalReason(seatPolicy) }, 400);
+          }
           if (Number(roomRow?.locked ?? 0) === 1 && userId !== hostUserId) {
             return j({ ok: false, error: "This room is locked." }, 403);
           }
@@ -877,13 +1014,17 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
       if (seatOneMatch) {
         const slug = decodeURIComponent(seatOneMatch[1]);
         const seatIndex = Number(seatOneMatch[2]);
-        if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 7) {
-          return badRequest("Seat index must be between 0 and 7.");
+        if (!Number.isInteger(seatIndex) || seatIndex < 0) {
+          return badRequest("Seat index must be a non-negative integer.");
         }
-        const room = await env.DB.prepare(`SELECT id, host_user_id FROM rooms WHERE slug = ? OR id = ?`)
+        const room = await env.DB.prepare(`SELECT id, host_user_id, capacity FROM rooms WHERE slug = ? OR id = ?`)
           .bind(slug, slug)
           .first();
         if (!room) return notFound("Room not found.");
+        // No capacity guard here on purpose: this endpoint only frees (DELETE)
+        // or mutes (PATCH) a seat that already exists. If a room's capacity was
+        // lowered under an occupied room, those stale seats must stay
+        // freeable — refusing the DELETE would strand the occupant.
         const roomId = (room as Record<string, unknown>).id as string;
         const hostId = (room as Record<string, unknown>).host_user_id as string;
 
@@ -1169,6 +1310,182 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         });
       }
 
+      // ---- Legal documents + consent (Phase F3) ----------------------------------
+      // These sit deliberately BEFORE the Firebase exchange: the consent flow has
+      // to work before a session exists, and the documents have to be readable
+      // by someone who has not signed up yet.
+      if (path === "/api/legal/documents" && request.method === "GET") {
+        // Public and unauthenticated on purpose. Someone deciding whether to
+        // create an account must be able to read what they would be agreeing to
+        // before they commit to anything — a consent prompt that hides the text
+        // is not consent.
+        const q = url.searchParams.get("lang");
+        const lang = isLegalLang(q) ? q : LEGAL_LANGS[0];
+        const wantFull = url.searchParams.get("full") !== "0";
+        return j({
+          ok: true,
+          version: LEGAL_VERSION,
+          min_age: MINIMUM_AGE,
+          lang,
+          langs: LEGAL_LANGS,
+          required: REQUIRED_LEGAL_DOCS,
+          documents: LEGAL_DOCUMENTS.map((d) => ({
+            key: d.key,
+            version: d.version,
+            title: d.title[lang],
+            summary: d.summary[lang],
+            dir: lang === "ar" ? "rtl" : "ltr",
+            // Full bodies by default; the summary-only form is what the consent
+            // list uses before the reader has opened anything.
+            sections: wantFull
+              ? d.sections.map((s) => ({ heading: s.heading[lang], body: s.body[lang] }))
+              : [],
+          })),
+        });
+      }
+
+      if (path === "/api/legal/accept" && request.method === "POST") {
+        // Two ways to prove who you are, because acceptance is recorded at two
+        // different moments in the funnel:
+        //   - a Firebase bearer token, at signup, before any account row exists;
+        //   - an app session, later, for a returning user being re-prompted.
+        const bearer = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+        let userId: string | null = null;
+        let firebaseUid = "";
+        if (bearer) {
+          const verified = await verifyFirebaseIdToken(bearer, firebaseProjectId(env));
+          if (!verified) return j({ ok: false, error: "Invalid or expired Firebase ID token." }, 401);
+          firebaseUid = verified.uid;
+        } else {
+          const me = await requireUser(request, env);
+          if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+          userId = me.id;
+          firebaseUid = "";
+        }
+
+        const body = await readJson<{
+          lang?: unknown;
+          docs?: unknown;
+          age_confirmed?: unknown;
+        }>(request);
+        const lang = isLegalLang(body?.lang) ? body.lang : LEGAL_LANGS[0];
+
+        // Age attestation is recorded but never inferred. An under-18 signup is
+        // refused outright rather than flagged for later review, because there
+        // is no version of this product that is safe to hand to a child.
+        if (body?.age_confirmed !== true) {
+          return j(
+            {
+              ok: false,
+              error: `You must confirm that you are at least ${MINIMUM_AGE} years old.`,
+              code: "age_confirmation_required",
+              min_age: MINIMUM_AGE,
+            },
+            400
+          );
+        }
+
+        const asked = Array.isArray(body?.docs) ? (body.docs as unknown[]) : [];
+        const keys = new Set<LegalDocKey>();
+        for (const d of asked) {
+          const key = (d as Record<string, unknown>)?.key;
+          const version = (d as Record<string, unknown>)?.version;
+          // Only current-version documents count. Accepting a stale version
+          // would create a record that looks like consent but is not, which is
+          // worse than no record at all.
+          if (
+            typeof key === "string" &&
+            (REQUIRED_LEGAL_DOCS as readonly string[]).includes(key) &&
+            version === LEGAL_VERSION
+          ) {
+            keys.add(key as LegalDocKey);
+          }
+        }
+        if (keys.size === 0) {
+          return j(
+            {
+              ok: false,
+              error: "No valid documents were accepted.",
+              code: "nothing_accepted",
+              version: LEGAL_VERSION,
+              required: REQUIRED_LEGAL_DOCS,
+            },
+            400
+          );
+        }
+
+        const ipHash = await consentIpHash(request, env);
+        const ua = (request.headers.get("User-Agent") ?? "").slice(0, 200);
+        for (const key of keys) {
+          // INSERT OR IGNORE against the unique (user, doc, version) index, so
+          // a double-tap on a flaky connection is a no-op rather than a second
+          // record implying a second agreement.
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO legal_consent
+               (id, firebase_uid, user_id, doc_key, doc_version, lang, ip_hash, user_agent)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+            .bind(
+              newId("lc"),
+              firebaseUid || null,
+              userId,
+              key,
+              LEGAL_VERSION,
+              lang,
+              ipHash || null,
+              ua || null
+            )
+            .run();
+        }
+
+        const settled = (await env.DB.prepare(
+          `SELECT doc_key, doc_version FROM legal_consent
+            WHERE user_id = ? OR (firebase_uid = ? AND user_id IS NULL)`
+        )
+          .bind(userId ?? "", firebaseUid)
+          .all()) as { results?: Array<{ doc_key: string; doc_version: string }> } | undefined;
+        const outstanding = missingLegalDocs(settled?.results ?? [], LEGAL_VERSION);
+
+        if (userId && outstanding.length === 0) {
+          await markLegalCleared(env, userId, firebaseUid, request);
+        }
+
+        return j({
+          ok: true,
+          version: LEGAL_VERSION,
+          lang,
+          accepted: [...keys],
+          outstanding,
+          cleared: outstanding.length === 0,
+          // For a signup-time acceptance the account does not exist yet, so the
+          // client must retry the Firebase exchange. This flag says which.
+          account_created: !userId,
+        });
+      }
+
+      if (path === "/api/legal/status" && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const rows = (await env.DB.prepare(
+          `SELECT doc_key, doc_version, lang, accepted_at FROM legal_consent
+            WHERE user_id = ? ORDER BY accepted_at DESC`
+        )
+          .bind(me.id)
+          .all()) as { results?: Array<AcceptedRecord> } | undefined;
+        const outstanding = missingLegalDocs(
+          rows?.results ?? [],
+          LEGAL_VERSION
+        );
+        return j({
+          ok: true,
+          version: LEGAL_VERSION,
+          min_age: MINIMUM_AGE,
+          cleared: outstanding.length === 0,
+          outstanding,
+          accepted: rows?.results ?? [],
+        });
+      }
+
       // ---- Firebase Auth (phone, email/password, email link, Google)  ----
       // Security layer: Firebase is the identity provider, D1 is the source of truth.
       // The client signs in with Firebase, gets an ID token, then POSTs it here.
@@ -1219,6 +1536,41 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         let isNew = false;
         if (!user) {
           isNew = true;
+          // ---- Legal consent gate (NEW accounts) --------------------------------
+          // Checked BEFORE the insert, not after. A brand-new account may not be
+          // created until the person has accepted every required document
+          // (Terms, Privacy, Community Guidelines) at the CURRENT version, in
+          // one of the languages we ship.
+          //
+          // Acceptance is recorded against the provider's user id before any
+          // account exists, because at signup the browser holds only a Firebase
+          // token — there is no app session yet and so no user row to attach a
+          // consent record to. See /api/legal/accept and migration 0019.
+          //
+          // The order matters: doing this after the INSERT would leave an
+          // orphaned user row behind for someone who was refused, which would
+          // then appear in member lists and admin customer desks for an account
+          // that was never actually set up.
+          const pending = (await env.DB.prepare(
+            `SELECT doc_key, doc_version FROM legal_consent
+              WHERE firebase_uid = ? AND user_id IS NULL`
+          )
+            .bind(firebaseUid)
+            .all()) as { results?: Array<{ doc_key: string; doc_version: string }> } | undefined;
+          const missingForNew = missingLegalDocs(pending?.results ?? [], LEGAL_VERSION);
+          if (missingForNew.length > 0) {
+            return j(
+              {
+                ok: false,
+                error:
+                  "You must accept the Terms of Service, Privacy Policy and Community Guidelines before creating an account.",
+                code: "legal_consent_required",
+                version: LEGAL_VERSION,
+                outstanding: missingForNew,
+              },
+              428 // Precondition Required: retry after accepting
+            );
+          }
           const base = (displayName || email?.split("@")[0] || phone || "user").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 12) || "user";
           const id = `user-${base}-${Math.floor(Math.random() * 1e6)}`;
           const username = `${base}_${Math.random().toString(36).slice(2, 6)}`.slice(0, 20);
@@ -1229,6 +1581,10 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           )
             .bind(id, username, displayName || base, avatarUrl, idTag, email, phone, firebaseUid, provider)
             .run();
+          // The account exists now, so the pending consent can finally be
+          // attributed to it rather than sitting against the provider id alone.
+          await claimPendingConsent(env, firebaseUid, id);
+          await markLegalCleared(env, id, firebaseUid, request);
           user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(id).first();
         } else {
           const row = user as Record<string, unknown>;
@@ -1244,6 +1600,25 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           user = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(row.id).first();
         }
         const userId = (user as Record<string, unknown>).id as string;
+        // ---- Legal consent gate (RETURNING users) ---------------------------------
+        // A returning user is re-gated only when the version they accepted is
+        // older than the one live now, which is what makes a terms revision
+        // actually take effect.
+        //
+        // This deliberately does NOT refuse the session. An existing customer
+        // keeps their account, coins and history and is prompted to accept,
+        // rather than being thrown out of a product they already paid for. The
+        // client shows that prompt off /api/legal/status; a deliberate bypass
+        // of it is visible to us as an outstanding consent on the account.
+        const acceptedRows = (await env.DB.prepare(
+          `SELECT doc_key, doc_version FROM legal_consent WHERE user_id = ?`
+        )
+          .bind(userId)
+          .all()) as { results?: Array<{ doc_key: string; doc_version: string }> } | undefined;
+        if (missingLegalDocs(acceptedRows?.results ?? [], LEGAL_VERSION).length === 0) {
+          await markLegalCleared(env, userId, firebaseUid, request);
+        }
+
         // Banned users never get a fresh session (also enforced in /api/auth/me).
         if (Number((user as Record<string, unknown>).banned ?? 0) === 1) {
           const reason = ((user as Record<string, unknown>).ban_reason as string) || "";
@@ -1603,7 +1978,9 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         const description = typeof body?.description === "string" ? body.description.trim().slice(0, 200) : "";
         const category = typeof body?.category === "string" ? body.category : "Chat";
         const cover = typeof body?.cover_color === "string" ? body.cover_color.slice(0, 16) : "#2c3140";
-        const capacity = body?.capacity === 4 || body?.capacity === 12 ? (body.capacity as number) : 8;
+        // New rooms get the default; `capacity` on the create form is a fixed ladder
+// and anything else a client sends is normalised to the documented bounds.
+const capacity = roomSeatPolicy({ capacity: body?.capacity }).capacity;
         const locked = body?.locked === 1 || body?.locked === true ? 1 : 0;
         if (title.length < 2 || title.length > 40) return badRequest("title must be 2-40 characters.");
         const allowedCats = ["Chill", "Music", "Community", "Chat", "Karaoke", "Games"];

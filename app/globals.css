@@ -16,11 +16,29 @@
 :root {
   color-scheme: dark;
 
-  --ink: #07070b;
-  --ink-raised: #101017;
-  --ink-overlay: #16161f;
-  --ink-line: rgba(255, 255, 255, 0.09);
-  --ink-line-strong: rgba(255, 255, 255, 0.16);
+  /* Surfaces.
+     These were four near-identical near-blacks (an 0x0a apart), so cards and
+     panels had no depth — everything read as one flat sheet and the only
+     apparent structure came from the neon glow behind it. Real elevation needs
+     a visible step between levels plus a border that carries the edge.
+     Values are a cool near-black with a blue cast, stepping ~6% lighter per
+     level: enough to see, not enough to look like grey cards. */
+  --ink: #08080c;
+  --ink-raised: #101016;
+  --ink-overlay: #17171f;
+  --ink-sunken: #050508;
+
+  /* Hairlines. Two weights only — a soft one for internal edges, a stronger
+     one for the boundary of a raised surface. */
+  --ink-line: rgba(255, 255, 255, 0.07);
+  --ink-line-strong: rgba(255, 255, 255, 0.13);
+
+  /* Elevation shadows. On a near-black background a shadow is nearly
+     invisible, so these lean on a soft light top-edge instead — that is what
+     actually separates a raised panel from the one below it. */
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --shadow-overlay: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 48px -16px rgba(0, 0, 0, 0.8);
+  --edge-top: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
   --paper: #f4f2f8;
   --paper-dim: rgba(244, 242, 248, 0.72);
@@ -55,6 +73,9 @@
   --color-ink: var(--ink);
   --color-ink-raised: var(--ink-raised);
   --color-ink-overlay: var(--ink-overlay);
+  --color-ink-sunken: var(--ink-sunken);
+  --color-shadow-raised: var(--shadow-raised);
+  --color-shadow-overlay: var(--shadow-overlay);
   --color-line: var(--ink-line);
   --color-line-strong: var(--ink-line-strong);
   --color-paper: var(--paper);
@@ -103,10 +124,13 @@ body {
   overflow-x: clip;
   margin: 0;
   font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background:
-    radial-gradient(760px 420px at 12% -8%, rgba(255, 45, 120, 0.16), transparent 62%),
-    radial-gradient(620px 380px at 92% 2%, rgba(139, 92, 246, 0.15), transparent 62%),
-    var(--ink);
+  /* No decorative glow behind the app.
+     This used to be two large radial pink/violet blobs in the top corners. It
+     is the single loudest "AI template" signal there is — a gradient behind
+     content that has nothing to do with the content. Structure now comes from
+     real elevation (see the surface tokens), so the background is just the
+     base colour. */
+  background: var(--ink);
   color: var(--paper);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -519,8 +543,11 @@ select:focus {
   margin-top: -26px;
   border-radius: 999px;
   color: #fff;
-  background: linear-gradient(135deg, #8b5cf6, #d946ef);
-  box-shadow: 0 8px 24px rgba(217, 70, 239, 0.45);
+  /* Solid brand + a real overlay shadow, instead of the old violet→pink
+     gradient with a coloured glow. A glowing gradient CTA is the template tell;
+     depth comes from the shadow doing actual work. */
+  background: var(--arc);
+  box-shadow: var(--shadow-overlay);
   transition: transform 0.15s ease;
 }
 

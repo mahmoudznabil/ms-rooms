@@ -14,7 +14,12 @@ import {
   getRedirectResult,
   getAppCheckInitError,
 } from "@/lib/firebase";
-import { syncFirebaseUser } from "@/lib/firebase-sync";
+import {
+  LegalConsentRequiredError,
+  recordLegalConsent,
+  syncFirebaseUser,
+} from "@/lib/firebase-sync";
+import LegalConsentGate from "@/components/LegalConsentGate";
 import { useSession } from "@/stores/useSession";
 import { logAuthEvent } from "@/lib/metrics";
 
@@ -77,7 +82,7 @@ function formatAuthError(e: unknown): string {
 }
 
 const inputCls =
-  "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-base text-white placeholder:text-white/25 focus:border-violet-400/60 focus:outline-none focus:ring-1 focus:ring-violet-400/30";
+  "w-full rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-base text-white placeholder:text-white/25 focus:border-violet-400/60 focus:outline-none focus:ring-1 focus:ring-violet-400/30";
 const labelCls = "mb-1.5 block text-sm font-semibold text-white/85";
 const primaryBtn =
   "w-full rounded-lg bg-white py-2 min-h-[44px] text-sm font-semibold text-black transition hover:bg-white/85 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40";
@@ -86,6 +91,9 @@ const secondaryBtn =
 
 export default function FirebaseAuthPanel() {
   const [mode, setMode] = useState<Mode>("signin");
+  // Held while the legal consent gate is open at signup: the Firebase user
+  // whose token the acceptance has to be recorded against.
+  const [consentUser, setConsentUser] = useState<import("firebase/auth").User | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
@@ -109,7 +117,7 @@ export default function FirebaseAuthPanel() {
   // applies its own rate limiting and abuse protection to email sign-up, and
   // phone sign-in keeps its mandatory App Check challenge regardless.
 
-  const afterFirebase = async (fbUser: import("firebase/auth").User) => {
+  const establishSession = async (fbUser: import("firebase/auth").User) => {
     const { user, isNew } = await syncFirebaseUser(fbUser);
     useSession.setState({ user, ready: true, authError: null });
     // First-run onboarding tour (AppShell picks this up after redirect).
@@ -118,6 +126,43 @@ export default function FirebaseAuthPanel() {
         sessionStorage.setItem("msrooms_new_signup", "1");
       } catch {}
     }
+  };
+
+  const afterFirebase = async (fbUser: import("firebase/auth").User) => {
+    try {
+      await establishSession(fbUser);
+    } catch (e) {
+      // ---- Legal consent gate --------------------------------------------------
+      // The server refuses to create an account (HTTP 428) until the Terms,
+      // Privacy Policy and Community Guidelines have been accepted. That refusal
+      // is EXPECTED on a first signup, so it opens the gate rather than
+      // surfacing as an error the user cannot act on.
+      //
+      // The Firebase user is held in state because acceptance has to be recorded
+      // against its ID token — at this point there is no app session and no
+      // account row, so there is nothing else to key the consent on. Holding it
+      // also means they are not asked to sign in again after reading.
+      if (e instanceof LegalConsentRequiredError) {
+        setConsentUser(fbUser);
+        setMsg(null);
+        return;
+      }
+      throw e;
+    }
+  };
+
+  /** Record consent against the Firebase token, then retry the account creation. */
+  const acceptAtSignup = async (payload: {
+    lang: "en" | "ar";
+    docs: Array<{ key: string; version: string }>;
+    ageConfirmed: boolean;
+  }) => {
+    const fbUser = consentUser;
+    if (!fbUser) throw new Error("Your sign-in expired — please try again.");
+    const idToken = await fbUser.getIdToken(true);
+    await recordLegalConsent(idToken, payload);
+    await establishSession(fbUser);
+    setConsentUser(null);
   };
 
   // Completes signInWithRedirect fallback (popup blocked / internal-error path).
@@ -303,7 +348,7 @@ export default function FirebaseAuthPanel() {
       )}
 
       {mode !== "phone" ? (
-        <div className="mt-4 rounded-lg border border-white/10 bg-[#15151d] p-4">
+        <div className="mt-4 rounded-lg border border-white/10 bg-ink-raised shadow-raised border-line-strong p-4">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -343,7 +388,7 @@ export default function FirebaseAuthPanel() {
           </form>
         </div>
       ) : (
-        <div className="mt-4 rounded-lg border border-white/10 bg-[#15151d] p-4">
+        <div className="mt-4 rounded-lg border border-white/10 bg-ink-raised shadow-raised border-line-strong p-4">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -413,6 +458,14 @@ export default function FirebaseAuthPanel() {
           </>
         )}
       </div>
+
+      {/* Legal consent gate (Phase F3).
+          Opens in response to the server's 428 on a first signup, and is not
+          dismissable: there is no account behind it yet, so there is nothing to
+          return to. */}
+      {consentUser && (
+        <LegalConsentGate mode="signup" dismissable={false} onSubmit={acceptAtSignup} />
+      )}
     </div>
   );
 }

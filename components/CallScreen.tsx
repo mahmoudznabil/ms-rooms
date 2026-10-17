@@ -602,7 +602,7 @@ const remoteAudioRef = useRef<HTMLAudioElement>(null);
   if (session.phase === "error") {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-black/90 z-50">
-        <div className="mx-auto max-w-md py-10 px-6 text-center bg-[#15151d] rounded-3xl border border-white/10 shadow-2xl">
+        <div className="mx-auto max-w-md py-10 px-6 text-center bg-ink-raised shadow-raised border-line-strong rounded-3xl border border-white/10 shadow-2xl">
           <p className="text-5xl">🎙️</p>
           <h1 className="mt-4 text-2xl font-black">Couldn&apos;t start media</h1>
           <p className="mt-2 text-sm text-white/50">{session.error ?? "Check permissions and try again."}</p>

@@ -314,7 +314,7 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
   };
 
   return (
-    <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#121218]">
+    <div className="overflow-hidden rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong">
       <div className="flex items-center gap-2 overflow-x-auto border-b border-white/5 px-3 py-2.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           onClick={() => enterGame("ludo")}
@@ -350,7 +350,7 @@ export default function MiniGamePanel({ roomId }: MiniGamePanelProps) {
         )}
         {game === "ludo" && (
           <div>
-            <div className="mx-auto w-fit rounded-2xl bg-white/[0.04] p-2">
+            <div className="mx-auto w-fit rounded-2xl bg-white/[0.035] p-2">
               <div
                 className="grid gap-1"
                 style={{ gridTemplateColumns: `repeat(${GRID}, 1.35rem)` }}

@@ -12,6 +12,7 @@ import ServerCheckinModal from "@/components/ServerCheckinModal";
 import NotificationBell from "@/components/NotificationBell";
 import OnboardingTour from "@/components/OnboardingTour";
 import IncomingCallGate from "@/components/IncomingCallGate";
+import LegalConsentGate from "@/components/LegalConsentGate";
 import { UserAvatar } from "@/components/bits";
 import { getUnreadCount } from "@/lib/api";
 
@@ -100,6 +101,58 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [showTour, setShowTour] = useState(false);
+
+  // ---- Legal consent prompt (Phase F3) --------------------------------------
+  // A NEW account cannot be created without accepting the documents — that is
+  // enforced server-side at /api/auth/firebase and needs no prompt here.
+  //
+  // A RETURNING user is a different case. On the first rollout every existing
+  // account has no recorded consent, because nobody accepted text that did not
+  // exist when they joined. Blocking them would lock out customers who have
+  // paid and would assert a consent that never happened. So they get a
+  // persistent prompt they can defer, until LEGAL_ENFORCE_RETURNS is turned on
+  // alongside a real revision of the text.
+  const [consentPromptOpen, setConsentPromptOpen] = useState(false);
+  const [consentDeferred, setConsentDeferred] = useState(false);
+  const [consentVersion, setConsentVersion] = useState("");
+
+  useEffect(() => {
+    if (!user) {
+      setConsentPromptOpen(false);
+      setConsentDeferred(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { fetchLegalStatus } = await import("@/lib/api");
+        const status = await fetchLegalStatus();
+        if (cancelled) return;
+        if (!status.cleared) {
+          // Deferring is remembered, but only for the current version — bump the
+          // version and the prompt comes back, which is what makes a revision
+          // actually reach people who dismissed the last one.
+          const key = `msrooms_legal_deferred_${status.version}`;
+          let deferred = false;
+          try {
+            deferred = localStorage.getItem(key) === "1";
+          } catch {}
+          setConsentVersion(status.version);
+          setConsentDeferred(deferred);
+          setConsentPromptOpen(!deferred);
+        } else {
+          setConsentPromptOpen(false);
+          setConsentDeferred(false);
+        }
+      } catch {
+        // A failed status check must never block the app; the hard gate at
+        // signup is what actually protects the consent requirement.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     const check = async () => {
@@ -340,6 +393,36 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         <ServerCheckinModal />
         {showTour && user && <OnboardingTour user={user} onDone={finishTour} />}
+
+        {/* Legal consent prompt for a returning user (Phase F3). Deliberately
+            not blocking: the server only hard-blocks at signup, and until the
+            text is genuinely revised this must not lock out someone who has
+            already paid. Deferred, it collapses to a one-line reminder that
+            stays reachable. */}
+        {consentPromptOpen && (
+          <LegalConsentGate
+            mode="session"
+            dismissable
+            onCancel={() => {
+              try {
+                localStorage.setItem(`msrooms_legal_deferred_${consentVersion}`, "1");
+              } catch {}
+              setConsentPromptOpen(false);
+              setConsentDeferred(true);
+            }}
+            onAccepted={() => setConsentPromptOpen(false)}
+          />
+        )}
+        {consentDeferred && (
+          <button
+            type="button"
+            onClick={() => setConsentPromptOpen(true)}
+            className="border-t border-amber-400/20 bg-amber-400/10 px-4 py-2 text-center text-xs font-bold text-amber-200 transition hover:bg-amber-400/15"
+          >
+            Review the updated Terms, Privacy Policy and Community Guidelines →
+          </button>
+        )}
+
         <Suspense fallback={null}>
           <IncomingCallGate />
         </Suspense>

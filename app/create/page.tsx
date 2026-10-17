@@ -56,7 +56,7 @@ export default function CreateRoomPage() {
       <h1 className="mt-2 text-2xl font-black tracking-tight">Go live</h1>
       <p className="mt-0.5 text-sm text-white/50">Open your room — you take the host seat automatically.</p>
 
-      <div className="mt-4 space-y-4 rounded-3xl border border-white/10 bg-[#15151d] p-5">
+      <div className="mt-4 space-y-4 rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong p-5">
         <Field label="Room title">
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Midnight Karaoke" maxLength={40} className={inputCls} />
         </Field>

@@ -129,6 +129,12 @@ export interface ApiRoomRow {
   speaker_count: number;
   cover_color: string;
   status?: string;
+  /**
+   * How many seats this room has. Room policy is the single source of truth —
+   * the UI must draw from this, never from its own constant, or it offers
+   * seats the server will refuse. See `workers/room-policy.ts`.
+   */
+  capacity?: number;
   is_private?: number;
   call_participant_user_id?: string | null;
   call_price_per_minute?: number;
@@ -143,6 +149,57 @@ export interface ApiSeat {
   display_name: string | null;
   username: string | null;
   avatar_url: string | undefined;
+}
+
+/* ---------------------------------------------------------------------------
+ * Legal documents + consent (Phase F3)
+ * ------------------------------------------------------------------------- */
+
+export type LegalLang = "en" | "ar";
+
+export interface LegalDocumentSection {
+  heading: string;
+  body: string;
+}
+
+export interface ApiLegalDocument {
+  key: "terms" | "privacy" | "guidelines";
+  version: string;
+  title: string;
+  summary: string;
+  /** "rtl" for Arabic, so the reader can set direction on the container. */
+  dir: "ltr" | "rtl";
+  sections: LegalDocumentSection[];
+}
+
+export interface ApiLegalDocuments {
+  ok: boolean;
+  version: string;
+  min_age: number;
+  lang: LegalLang;
+  langs: LegalLang[];
+  required: ApiLegalDocument["key"][];
+  documents: ApiLegalDocument[];
+}
+
+export interface ApiLegalAccept {
+  ok: boolean;
+  version: string;
+  lang: LegalLang;
+  accepted: ApiLegalDocument["key"][];
+  outstanding: ApiLegalDocument["key"][];
+  cleared: boolean;
+  /** True when this acceptance happened before any account existed. */
+  account_created: boolean;
+}
+
+export interface ApiLegalStatus {
+  ok: boolean;
+  version: string;
+  min_age: number;
+  cleared: boolean;
+  outstanding: ApiLegalDocument["key"][];
+  accepted: Array<{ doc_key: string; doc_version: string; lang: string; accepted_at: string }>;
 }
 
 export interface GiftCatalogItem {
@@ -563,6 +620,45 @@ export async function muteSeat(slug: string, index: number, is_muted: boolean): 
 
 export async function me(): Promise<{ user: ApiUser }> {
   return req(`/api/auth/me`, { cache: "no-store" });
+}
+
+/**
+ * Fetch the legal documents in one language.
+ *
+ * Unauthenticated on purpose: someone deciding whether to sign up has to be
+ * able to read what they would be agreeing to before they commit. `lang=full`
+ * is the default — a consent prompt that hides the text behind a link is not
+ * consent.
+ */
+export async function fetchLegalDocuments(lang: LegalLang = "en"): Promise<ApiLegalDocuments> {
+  return req<ApiLegalDocuments>(`/api/legal/documents?lang=${lang}`, { cache: "no-store" });
+}
+
+/** Which required documents this signed-in user still has to accept. */
+export async function fetchLegalStatus(): Promise<ApiLegalStatus> {
+  return req<ApiLegalStatus>(`/api/legal/status`, { cache: "no-store" });
+}
+
+/**
+ * Record acceptance for an already-signed-in user.
+ *
+ * The signup path does NOT use this: at signup there is no session yet, so it
+ * goes through `recordLegalConsent` in lib/firebase-sync.ts with a Firebase
+ * bearer token instead.
+ */
+export async function acceptLegalDocuments(input: {
+  lang: LegalLang;
+  docs: Array<{ key: string; version: string }>;
+  ageConfirmed: boolean;
+}): Promise<ApiLegalAccept> {
+  return req<ApiLegalAccept>("/api/legal/accept", {
+    method: "POST",
+    body: JSON.stringify({
+      lang: input.lang,
+      age_confirmed: input.ageConfirmed,
+      docs: input.docs,
+    }),
+  });
 }
 
 export async function fetchUser(id: string): Promise<{ user: ApiUser }> {

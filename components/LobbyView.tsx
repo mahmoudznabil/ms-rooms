@@ -120,7 +120,7 @@ export default function LobbyView() {
             <Link prefetch={false}
               key={room.id}
               href={`/room?slug=${room.slug}`}
-              className="group overflow-hidden rounded-3xl border border-white/10 bg-[#15151d] transition hover:border-violet-400/40 active:scale-[0.99]"
+              className="group overflow-hidden rounded-3xl border border-white/10 bg-ink-raised shadow-raised border-line-strong transition hover:border-violet-400/40 active:scale-[0.99]"
             >
               <div className="relative flex h-24 items-center justify-center overflow-hidden" style={{ background: `linear-gradient(135deg, ${room.coverColor}, #15151d)` }}>
                 <Mic size={30} className="text-white/80 transition group-hover:scale-110" />

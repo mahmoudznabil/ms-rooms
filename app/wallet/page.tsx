@@ -219,7 +219,7 @@ export default function WalletPage() {
                   className={`rounded-2xl border px-3 py-2.5 ${
                     recharge.overdue
                       ? "border-red-400/30 bg-red-500/10"
-                      : "border-white/10 bg-white/[0.03]"
+                      : "border-white/10 bg-white/[0.025]"
                   }`}
                 >
                   <div className="flex items-center justify-between text-xs font-bold">
@@ -267,7 +267,7 @@ export default function WalletPage() {
       ) : (
         <ul className="mt-2 space-y-1.5">
           {txns.map((t) => (
-            <li key={t.id} className="rounded-2xl bg-white/[0.04] px-3.5 py-2.5 text-sm">
+            <li key={t.id} className="rounded-2xl bg-white/[0.035] px-3.5 py-2.5 text-sm">
               <details>
                 <summary className="flex cursor-pointer items-center justify-between gap-2">
                   <span className="min-w-0 flex-1 truncate text-white/75">{t.description || t.type}</span>
