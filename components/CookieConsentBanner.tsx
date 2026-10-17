@@ -94,7 +94,7 @@ export default function CookieConsentBanner() {
       role="dialog"
       aria-label="Cookie consent"
     >
-      <div className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong/95 backdrop-blur-sm p-4 shadow-2xl">
+      <div className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong/95 backdrop-blur-sm px-4 py-3 shadow-2xl">
         {/* Three siblings: icon, copy, actions.
 
             The actions used to be NESTED INSIDE the copy column, which kept the
@@ -112,8 +112,11 @@ export default function CookieConsentBanner() {
           </div>
 
           <div className="min-w-0 flex-1 basis-full md:basis-auto">
-            <h3 className="text-sm font-bold text-white">Cookies & Sign-In</h3>
-            <p className="mt-1 text-xs text-white/60 leading-relaxed">
+            {/* Title and body on one line from md up. They were stacked, which
+                put the strip at three rows and pushed its top edge over the
+                landing hero's content on short viewports. */}
+            <h3 className="text-sm font-bold text-white md:inline mr-2">Cookies &amp; Sign-In</h3>
+            <p className="text-xs text-white/60 leading-relaxed md:inline">
               This site uses cookies for authentication. Google sign-in requires{" "}
               <strong className="text-white">third-party cookies</strong> to complete the redirect flow.
             </p>
