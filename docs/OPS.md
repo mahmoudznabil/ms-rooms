@@ -257,3 +257,32 @@ into one per-peer list (pure kernel `lib/chat-list.ts`):
   conversation `unread_count` badge; missed incoming calls show a persistent
   red dot (WhatsApp style — a fact, not a clearable state). The standalone
   Calls tab and its badge/clearing flow are unchanged.
+
+### 6.6 Women hosts, paid calls, free matchup (Phase E)
+
+`migrations/0017_gendered_accounts.sql` — purely additive: `users.gender`
+(`'unspecified'|'woman'|'man'`, default `unspecified`), `users.call_enabled`
+(0/1), `users.call_rate` (30/56/100, default 56), `users.matchup_open` (0/1),
+plus three partial indexes for discovery and matchup matching. Apply local →
+preview → prod, then mark in prod `d1_migrations`.
+
+| Endpoint | Effect |
+|---|---|
+| `PATCH /api/users/:id` | Accepts the four new fields (validated against their CHECK lists). Gender is opt-in; no existing feature is gender-gated. |
+| `POST /api/rooms/private-call/heartbeat { room_id }` | E2 metering. The caller POSTs every 60s while `connected`: atomic debit at the **callee's** rate (`call_rate`, default 56), 70% credited to the callee as Gems, caller +2 XP. `gift_sent` + `gift_received` ("Call earn") rows land in the same ledger as gifts. Insufficient balance → **402 `out_of_coins`**, the session and room are ended server-side so the callee is never left in a dead call. Missed heartbeats expire the session (see the sweep below). |
+| `POST /api/matchup/queue` | E3 funnel. Men only. One free matchup per man per day (429 on the second). Picks an available host (`gender='woman' AND call_enabled=1 AND matchup_open=1`), creates a private room + session at `price_per_minute=0` with 30 free seconds, +5 XP to the host. 503 `no_hosts` when the queue is empty. |
+| `GET /api/matchup/status?room_id=` | Polled by both sides during the free window: `free_seconds_remaining`, `price_per_minute`, session/room status. At 25s the client shows "Continue for {rate}/min?"; continue switches the session to the paid rate, decline/timeout sends `bye`. |
+
+**Economy**: hosts keep 70% of call minutes as Gems (same split as gifts — one
+story everywhere). Cash-out is out of scope (Phase 6 monetization); the UI copy
+says "Gems convert at cash-out".
+
+**Operational notes**
+
+- Free-riding protection: the stale-ringing sweep (existing cron) also expires
+  matchup sessions whose heartbeats stopped; the room is ended, not left live.
+- Safety: matchup rooms are `is_private=1` and reuse the existing report/block
+  flow. Queue joins are rate-limited (10/hour) by the global limiter.
+- Monitoring worth watching: `no_hosts` rate on `/api/matchup/queue` (means the
+  host pool is empty) and 402s on the heartbeat (means callers are out of
+  coins — a top-up-conversion signal, not an error).

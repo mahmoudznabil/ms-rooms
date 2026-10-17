@@ -105,6 +105,14 @@ export interface ApiUser {
   firebase_uid?: string | null;
   banned?: number;
   ban_reason?: string | null;
+  // Phase E1: 'unspecified' (default) | 'woman' | 'man'. Opt-in only — no
+  // existing feature is gender-gated.
+  gender?: "unspecified" | "woman" | "man";
+  // Phase E2: women-host paid video call settings.
+  call_enabled?: number;
+  call_rate?: number;
+  // Phase E3: matchup queue availability.
+  matchup_open?: number;
   created_at: string;
   updated_at: string;
 }
@@ -324,8 +332,66 @@ export async function createCheckout(packageId: string): Promise<CreateCheckoutR
   });
 }
 
+// ---- Private-call heartbeat (Phase E2) -----------------------------------------
+// The caller's client POSTs this every 60s while the call is connected.
+// The server debits the caller at the callee's rate, credits 70% to the
+// callee as Gems, and grants the caller +2 XP/min. Two consecutive missed
+// heartbeats end the session (anti-free-riding).
+export interface CallHeartbeatResult {
+  ok: boolean;
+  billed?: number;
+  gems_earned?: number;
+  xp_gained?: number;
+  error?: string;
+  code?: string;
+}
+
+export async function callHeartbeat(roomId: string): Promise<CallHeartbeatResult> {
+  return req(`/api/rooms/private-call/heartbeat`, {
+    method: "POST",
+    body: JSON.stringify({ room_id: roomId }),
+  });
+}
+
+// ---- Matchup queue (Phase E3) ---------------------------------------------------
+// Men join a queue; the server matches them with an available woman host.
+// Creates a private room + session with free_seconds=30, price_per_minute=0.
+export interface MatchupQueueResult {
+  ok: boolean;
+  room_id?: string;
+  room_slug?: string;
+  session_id?: string;
+  host?: {
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+  };
+  free_seconds?: number;
+  host_rate?: number;
+  error?: string;
+  code?: string;
+}
+
+export async function joinMatchupQueue(): Promise<MatchupQueueResult> {
+  return req(`/api/matchup/queue`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export interface MatchupStatusResult {
+  ok: boolean;
+  room_id?: string;
+  room_slug?: string;
+  status?: string;
+  free_seconds_remaining?: number;
+  price_per_minute?: number;
+  room_status?: string;
+}
+
+export async function getMatchupStatus(roomId: string): Promise<MatchupStatusResult> {
+  return req(`/api/matchup/status?room_id=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+}
+
 // ---- Voice heartbeat metering (Phase A4) ----------------------------------------
-// Posted by useRoomVoice every 60s while the mic is on. The host is exempt in
 // their own room and muted seats are not billed (the server decides both). A 402
 // means the balance hit zero mid-talk — the caller auto-mutes and shows a nudge.
 
@@ -383,7 +449,19 @@ export async function fetchUser(id: string): Promise<{ user: ApiUser }> {
 
 export async function patchUser(
   id: string,
-  patch: { display_name?: string; bio?: string; avatar_url?: string; username?: string }
+  patch: {
+    display_name?: string;
+    bio?: string;
+    avatar_url?: string;
+    username?: string;
+    /** Phase E1: opt-in gender. Server validates the three allowed values. */
+    gender?: "unspecified" | "woman" | "man";
+    /** Phase E2: women-host paid call opt-in (0/1) and per-minute rate. */
+    call_enabled?: number;
+    call_rate?: number;
+    /** Phase E3: matchup queue availability (0/1). */
+    matchup_open?: number;
+  }
 ): Promise<{ user: ApiUser }> {
   return req(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
 }

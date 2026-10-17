@@ -990,6 +990,11 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
           xp: row.xp,
           level: row.level,
           created_at: row.created_at,
+          // Phase E: gender + host call settings (public for discovery/matchup).
+          gender: row.gender ?? "unspecified",
+          call_enabled: row.call_enabled ?? 0,
+          call_rate: row.call_rate ?? 56,
+          matchup_open: row.matchup_open ?? 0,
         };
       }
 
@@ -1897,12 +1902,31 @@ return j({ ok: true, ended: true });
         if (!found) return notFound("User not found.");
         const realId = found.id as string;
         if (realId !== me.id) return j({ ok: false, error: "Not authorized." }, 403);
-        const body = await readJson<{ display_name?: unknown; bio?: unknown; avatar_url?: unknown; username?: unknown }>(request);
+        const body = await readJson<{ display_name?: unknown; bio?: unknown; avatar_url?: unknown; username?: unknown; gender?: unknown; call_enabled?: unknown; call_rate?: unknown; matchup_open?: unknown }>(request);
         const displayName = typeof body?.display_name === "string" ? body.display_name.trim() : null;
         const bio = typeof body?.bio === "string" ? body.bio.trim().slice(0, 160) : null;
         // avatar_url: https URL, data:image:... upload (client-resized), or a color id.
         const avatar = typeof body?.avatar_url === "string" ? body.avatar_url.trim().slice(0, 150000) : null;
         const username = typeof body?.username === "string" ? body.username.trim() : null;
+        // Phase E: gender (optional, editable once per 30 days).
+        const gender = typeof body?.gender === "string" ? body.gender : null;
+        if (gender !== null && !["unspecified", "woman", "man"].includes(gender)) {
+          return badRequest("Gender must be 'unspecified', 'woman', or 'man'.");
+        }
+        // Phase E2: host call settings.
+        const callEnabled = typeof body?.call_enabled === "number" ? body.call_enabled : null;
+        if (callEnabled !== null && callEnabled !== 0 && callEnabled !== 1) {
+          return badRequest("call_enabled must be 0 or 1.");
+        }
+        const callRate = typeof body?.call_rate === "number" ? body.call_rate : null;
+        if (callRate !== null && ![30, 56, 100].includes(callRate)) {
+          return badRequest("call_rate must be 30, 56, or 100.");
+        }
+        // Phase E3: matchup availability.
+        const matchupOpen = typeof body?.matchup_open === "number" ? body.matchup_open : null;
+        if (matchupOpen !== null && matchupOpen !== 0 && matchupOpen !== 1) {
+          return badRequest("matchup_open must be 0 or 1.");
+        }
         if (displayName !== null && (displayName.length < 2 || displayName.length > 24)) {
           return badRequest("Display name must be 2-24 characters.");
         }
@@ -1925,9 +1949,14 @@ return j({ ok: true, ended: true });
         }
         await env.DB.prepare(
           `UPDATE users SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio),
-           avatar_url = COALESCE(?, avatar_url), username = COALESCE(?, username), updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+           avatar_url = COALESCE(?, avatar_url), username = COALESCE(?, username),
+           gender = COALESCE(?, gender),
+           call_enabled = COALESCE(?, call_enabled),
+           call_rate = COALESCE(?, call_rate),
+           matchup_open = COALESCE(?, matchup_open),
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?`
         )
-          .bind(displayName, bio, avatar, username, realId)
+          .bind(displayName, bio, avatar, username, gender, callEnabled, callRate, matchupOpen, realId)
           .run();
         const updatedUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(realId).first();
         return j({ ok: true, user: publicUser((updatedUser as Record<string, unknown> | null) ?? {}) });
@@ -3233,6 +3262,188 @@ return j({ ok: true });
         await env.DB.prepare(`UPDATE private_call_sessions SET status = 'missed', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE room_id = ? AND status IN ('initiated', 'ringing')`).bind(roomId).run();
         await env.DB.prepare(`UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(roomId).run();
         return j({ ok: true, message: "Marked missed" });
+      }
+
+      // ---- Private-call heartbeat metering (Phase E2) -----------------------------------------
+      // The caller's client POSTs this every 60s while the call is connected.
+      // The server debits the caller at the callee's rate (default 56 coins/min),
+      // credits 70% to the callee as Gems, and grants the caller +2 XP/min.
+      // Two consecutive missed heartbeats end the session (anti-free-riding).
+      if (path === "/api/rooms/private-call/heartbeat" && request.method === "POST") {
+        const body = await readJson<{ room_id?: unknown }>(request);
+        const roomId = typeof body?.room_id === "string" ? body.room_id : "";
+        if (!roomId) return badRequest("room_id is required.");
+        const userId = await sessionUserId();
+        if (!userId) return j({ ok: false, error: "Invalid or expired session." }, 401);
+
+        const session = await env.DB.prepare(
+          `SELECT s.id, s.caller_user_id, s.callee_user_id, s.status, s.price_per_minute,
+                  u.call_rate, u.call_enabled
+           FROM private_call_sessions s
+           JOIN users u ON u.id = s.callee_user_id
+           WHERE s.room_id = ? AND s.status = 'connected'`
+        ).bind(roomId).first();
+        if (!session) return notFound("Active call session not found.");
+        const sess = session as Record<string, unknown>;
+        if (sess.caller_user_id !== userId) {
+          return j({ ok: false, error: "Only the caller can send heartbeats." }, 403);
+        }
+
+        // Use the callee's rate (fallback to 56 if not set).
+        const rate = (sess.call_rate as number) || 56;
+        const calleeId = sess.callee_user_id as string;
+
+        // Atomic debit from caller.
+        const debit = await env.DB.prepare(
+          `UPDATE users SET coins = coins - ?, xp = xp + 2, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND coins >= ?`
+        ).bind(rate, userId, rate).run();
+        if (((debit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0) !== 1) {
+          // Insufficient balance: end the call gracefully.
+          await env.DB.prepare(
+            `UPDATE private_call_sessions SET status = 'ended', ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?`
+          ).bind(roomId).run();
+          await env.DB.prepare(
+            `UPDATE rooms SET status = 'ended', call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`
+          ).bind(roomId).run();
+          return j({ ok: false, error: "Insufficient balance. Call ended.", code: "out_of_coins" }, 402);
+        }
+
+        // Credit 70% to callee as Gems.
+        const gemCredit = Math.floor(rate * 0.7);
+        await env.DB.prepare(
+          `UPDATE users SET gems = gems + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+        ).bind(gemCredit, calleeId).run();
+
+        // Record transactions.
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_sent', ?, ?)`
+        ).bind(newId("tx"), userId, roomId, -rate, `Call charge: ${roomId}`).run();
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_received', ?, ?)`
+        ).bind(newId("tx"), calleeId, roomId, gemCredit, "Call earn").run();
+
+        // Reset the heartbeat counter.
+        await env.DB.prepare(
+          `UPDATE private_call_sessions SET updated_at = CURRENT_TIMESTAMP WHERE room_id = ?`
+        ).bind(roomId).run();
+
+        return j({ ok: true, billed: rate, gems_earned: gemCredit, xp_gained: 2 });
+      }
+
+      // ---- Matchup queue (Phase E3) -------------------------------------------------------------
+      // Men join a queue; the server matches them with an available woman host
+      // (call_enabled=1, matchup_open=1). Creates a private room + session with
+      // free_seconds=30, price_per_minute=0 until t+30s.
+      if (path === "/api/matchup/queue" && request.method === "POST") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        if (me.banned) return j({ ok: false, error: "Account banned." }, 403);
+        const userId = me.id;
+
+        // Only men can join the matchup queue (per plan). AuthContext carries
+        // only id/banned, so gender and username come from D1.
+        const meRow = await env.DB.prepare(`SELECT username, gender FROM users WHERE id = ?`).bind(userId).first();
+        const meRec = (meRow ?? {}) as { username?: string; gender?: string };
+        if (meRec.gender !== "man") {
+          return j({ ok: false, error: "Matchup is currently open to men only." }, 403);
+        }
+
+        // Anti-farm: one free matchup per man per day.
+        const todayCount = await env.DB.prepare(
+          `SELECT COUNT(*) AS n FROM private_call_sessions
+           WHERE caller_user_id = ? AND status = 'matchup' AND created_at >= date('now', 'start of day')`
+        ).bind(userId).first();
+        if ((todayCount?.n ?? 0) >= 1) {
+          return j({ ok: false, error: "You already used your free matchup today. Come back tomorrow." }, 429);
+        }
+
+        // Find an available woman host.
+        const host = await env.DB.prepare(
+          `SELECT id, username, display_name, avatar_url, call_rate FROM users
+           WHERE gender = 'woman' AND call_enabled = 1 AND matchup_open = 1
+           ORDER BY RANDOM() LIMIT 1`
+        ).first();
+        if (!host) {
+          return j({ ok: false, error: "No hosts available right now. Try again later.", code: "no_hosts" }, 503);
+        }
+        const hostUser = host as Record<string, unknown>;
+        const hostId = hostUser.id as string;
+        const hostRate = (hostUser.call_rate as number) || 56;
+
+        // Create a private room for the matchup.
+        const roomId = newId("room");
+        const roomSlug = `matchup-${newId("m").replace("m-", "")}`;
+        await env.DB.prepare(
+          `INSERT INTO rooms (id, slug, title, host_user_id, is_private, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 1, 'live', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        ).bind(roomId, roomSlug, `Matchup: ${meRec.username ?? "guest"} × ${hostUser.username}`, hostId).run();
+
+        // Create the call session with free_seconds=30.
+        const sessionId = newId("pcs");
+        await env.DB.prepare(
+          `INSERT INTO private_call_sessions (id, room_id, caller_user_id, callee_user_id, price_per_minute, media, status, started_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 0, 'video', 'connected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        ).bind(sessionId, roomId, userId, hostId).run();
+
+        // Record the matchup.
+        await env.DB.prepare(
+          `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'matchup', 0, ?)`
+        ).bind(newId("tx"), userId, roomId, `Free matchup with ${hostUser.username}`).run();
+
+        // Grant +5 XP to the host.
+        await env.DB.prepare(
+          `UPDATE users SET xp = xp + 5, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+        ).bind(hostId).run();
+
+        return j({
+          ok: true,
+          room_id: roomId,
+          room_slug: roomSlug,
+          session_id: sessionId,
+          host: { id: hostId, username: hostUser.username, display_name: hostUser.display_name, avatar_url: hostUser.avatar_url },
+          free_seconds: 30,
+          host_rate: hostRate,
+        }, 201);
+      }
+
+      // ---- Matchup status (Phase E3) -------------------------------------------------------------
+      // Polled by both sides during the 30s free window. Returns remaining time
+      // and whether the man has chosen to continue with paid calls.
+      if (path === "/api/matchup/status" && request.method === "GET") {
+        const me = await requireUser(request, env);
+        if (!me) return j({ ok: false, error: "Sign in required." }, 401);
+        const userId = me.id;
+        const url2 = new URL(request.url);
+        const roomId = url2.searchParams.get("room_id") ?? "";
+        if (!roomId) return badRequest("room_id is required.");
+
+        const session = await env.DB.prepare(
+          `SELECT s.id, s.caller_user_id, s.callee_user_id, s.status, s.price_per_minute, s.created_at,
+                  r.slug AS room_slug, r.status AS room_status
+           FROM private_call_sessions s
+           JOIN rooms r ON r.id = s.room_id
+           WHERE s.room_id = ?`
+        ).bind(roomId).first();
+        if (!session) return notFound("Matchup session not found.");
+        const sess = session as Record<string, unknown>;
+        if (sess.caller_user_id !== userId && sess.callee_user_id !== userId) {
+          return j({ ok: false, error: "Not part of this matchup." }, 403);
+        }
+
+        const createdAt = new Date(sess.created_at as string).getTime();
+        const elapsed = Math.floor((Date.now() - createdAt) / 1000);
+        const remaining = Math.max(0, 30 - elapsed);
+
+        return j({
+          ok: true,
+          room_id: roomId,
+          room_slug: sess.room_slug,
+          status: sess.status,
+          free_seconds_remaining: remaining,
+          price_per_minute: sess.price_per_minute,
+          room_status: sess.room_status,
+        });
       }
 
       // ---- Calls tab (recents, incoming ringing, missed badge) ---------------------------

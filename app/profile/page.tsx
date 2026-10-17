@@ -29,6 +29,13 @@ function OwnProfile() {
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Phase E1/E2/E3: gender + host call settings. Gender defaults to
+  // 'unspecified' (opt-in only) so no existing feature is gender-gated.
+  const [gender, setGender] = useState<"unspecified" | "woman" | "man">("unspecified");
+  const [callEnabled, setCallEnabled] = useState(0);
+  const [callRate, setCallRate] = useState(56);
+  const [matchupOpen, setMatchupOpen] = useState(0);
+  const [hostBusy, setHostBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -44,6 +51,17 @@ function OwnProfile() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Phase E: keep the host-settings form in sync with the server-side values.
+  // Gender defaults to 'unspecified' when the column is absent (e.g. a session
+  // cached from before migration 0017).
+  useEffect(() => {
+    if (!user) return;
+    setGender((user.gender ?? "unspecified") as "unspecified" | "woman" | "man");
+    setCallEnabled(user.call_enabled ?? 0);
+    setCallRate(user.call_rate ?? 56);
+    setMatchupOpen(user.matchup_open ?? 0);
+  }, [user]);
 
   useEffect(() => {
     if (user && editing && name === "" && bio === "") {
@@ -195,6 +213,30 @@ function OwnProfile() {
       setError(e instanceof Error ? e.message : "Save failed. Try again.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Phase E1/E2/E3: save gender + host call settings. Kept separate from
+  // `save` (which handles the name/bio/avatar form) because the server
+  // enforces its own rules (e.g. gender edits throttled to once per 30 days)
+  // and these are toggles, not a text form — no re-entering a draft to flip
+  // the matchup queue open.
+  const saveHostSettings = async (patch: {
+    gender?: "unspecified" | "woman" | "man";
+    call_enabled?: number;
+    call_rate?: number;
+    matchup_open?: number;
+  }) => {
+    if (hostBusy || !user) return;
+    setHostBusy(true);
+    setError(null);
+    try {
+      await patchUser(user.id, patch);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save that setting.");
+    } finally {
+      setHostBusy(false);
     }
   };
 
@@ -383,6 +425,109 @@ function OwnProfile() {
       <Link prefetch={false} href="/rankings" className="mt-3 flex items-center justify-center gap-1.5 rounded-2xl border border-amber-300/20 bg-amber-300/10 py-3 text-sm font-bold text-amber-200 transition hover:bg-amber-300/20">
         <Trophy size={15} /> Leaderboards
       </Link>
+
+      {/* ---- Phase E1/E2/E3: gender + host call settings ---- */}
+      <section className="mt-4 rounded-3xl border border-white/10 bg-[#15151d] p-4">
+        <h2 className="text-sm font-bold uppercase tracking-widest text-white/50">Identity &amp; hosting</h2>
+
+        {/* E1: gender — opt-in, no existing feature is gated by it. */}
+        <div className="mt-3">
+          <p className="text-sm font-bold">I am a</p>
+          <p className="text-xs text-white/45">
+            Optional. Used only for the &ldquo;women hosts&rdquo; filter and paid-call discovery. Editable once every 30 days.
+          </p>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {(["unspecified", "woman", "man"] as const).map((g) => (
+              <button
+                key={g}
+                type="button"
+                disabled={hostBusy}
+                onClick={() => void saveHostSettings({ gender: g })}
+                className={`min-h-[44px] rounded-2xl px-2 py-2 text-xs font-bold transition disabled:opacity-40 ${
+                  gender === g ? "bg-white text-black" : "bg-white/10 text-white/75 hover:bg-white/15"
+                }`}
+              >
+                {g === "unspecified" ? "Prefer not to say" : g === "woman" ? "Woman" : "Man"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* E2 + E3: only relevant once a host has opted in as a woman. */}
+        {gender === "woman" && (
+          <div className="mt-4 space-y-3 border-t border-white/10 pt-4">
+            <button
+              type="button"
+              disabled={hostBusy}
+              onClick={() => void saveHostSettings({ call_enabled: callEnabled ? 0 : 1 })}
+              className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white/5 px-3 py-3 text-left transition hover:bg-white/10 disabled:opacity-40"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-bold">Accept paid video calls</span>
+                <span className="block text-xs text-white/45">
+                  {callEnabled ? "You appear in the hosts list." : "You are hidden from paid-call discovery."}
+                </span>
+              </span>
+              <span
+                className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-black ${
+                  callEnabled ? "bg-emerald-500 text-black" : "bg-white/10 text-white/50"
+                }`}
+              >
+                {callEnabled ? "On" : "Off"}
+              </span>
+            </button>
+
+            {callEnabled === 1 && (
+              <div>
+                <p className="text-sm font-bold">Your rate (coins/min)</p>
+                <p className="text-xs text-white/45">You keep 70% of every minute as Gems. Gems convert at cash-out.</p>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {[
+                    { rate: 30, label: "Budget", sub: "30" },
+                    { rate: 56, label: "Standard", sub: "56" },
+                    { rate: 100, label: "Premium", sub: "100" },
+                  ].map((o) => (
+                    <button
+                      key={o.rate}
+                      type="button"
+                      disabled={hostBusy}
+                      onClick={() => void saveHostSettings({ call_rate: o.rate })}
+                      className={`min-h-[44px] rounded-2xl px-2 py-2 text-xs font-bold transition disabled:opacity-40 ${
+                        callRate === o.rate ? "bg-violet-500 text-white" : "bg-white/10 text-white/75 hover:bg-white/15"
+                      }`}
+                    >
+                      {o.label}
+                      <span className="mt-0.5 block text-[10px] font-semibold opacity-80">{o.sub} coins/min</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* E3: matchup queue. */}
+            <button
+              type="button"
+              disabled={hostBusy}
+              onClick={() => void saveHostSettings({ matchup_open: matchupOpen ? 0 : 1 })}
+              className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white/5 px-3 py-3 text-left transition hover:bg-white/10 disabled:opacity-40"
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-bold">Free 30-second matchups</span>
+                <span className="block text-xs text-white/45">
+                  {matchupOpen ? "You are in the matchup queue." : "Not currently accepting matchups."}
+                </span>
+              </span>
+              <span
+                className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-black ${
+                  matchupOpen ? "bg-emerald-500 text-black" : "bg-white/10 text-white/50"
+                }`}
+              >
+                {matchupOpen ? "Open" : "Closed"}
+              </span>
+            </button>
+          </div>
+        )}
+      </section>
 
       {social && social.followers_list.length > 0 && (
         <>
