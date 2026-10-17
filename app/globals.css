@@ -582,8 +582,23 @@ select:focus {
   .hero-title {
     font-size: 1.875rem;
   }
+  /* The lede is NOT hidden at any height.
+
+     An earlier draft used `display: none` here, to reclaim the last ~50px. That
+     is the one change in this file that can lose content rather than just
+     tighten it, and I could not verify the height queries behave correctly: in
+     the browser tooling available here `window.innerHeight` and the CSS
+     `max-height` queries disagree (a reported 800px viewport was served the
+     720px rules), so I have no way to rule out the query matching on a screen
+     where it should not.
+
+     Losing a paragraph of copy is a far worse failure than 40px of overlap on a
+     short window, and the overlap is dismissable while missing copy is not.
+     Size and padding reductions degrade gracefully if the query misfires;
+     hiding content does not. */
   .hero-lede {
-    display: none;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
   }
 }
 
