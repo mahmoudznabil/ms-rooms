@@ -7,6 +7,50 @@ cannot be done from the repository.
 
 ---
 
+## 0. Local development & debugging
+
+```
+npm run dev:seed          # seed a local account, prints a session cookie
+npm run dev:seed -- --admin   # ...with an admin identity as well
+npm run dev:serve         # wrangler pages dev on :8788 (separate shell)
+npm run dev:smoke         # 31 authenticated end-to-end checks
+```
+
+**Why the seed script exists.** Identity runs through Firebase, so there is no
+offline signup path — the signup endpoint requires a real Firebase ID token.
+That left everything behind authentication untestable outside a browser.
+
+`dev:seed` writes directly into the `sessions` table. That is the same lookup
+`requireUser` performs on a real login, so **no auth code is bypassed or forked**
+— it lands on the same path a genuine sign-in does. It refuses `--remote`: a
+synthetic identity in production would enter the member list and the admin
+customer desk, and would assert an age in a system that now records that
+assertion legally, on behalf of nobody.
+
+Two details that cost time to find, both now handled:
+
+- `users.id_tag` is UNIQUE, so it cannot be a fixed literal — it carries a
+  per-run suffix, like the random digits the real signup path appends.
+- Admin session tokens **must** begin with `admin_`. `getAdminFromToken` rejects
+  anything else before it even queries, so a conventionally-named token
+  silently fails to authenticate.
+
+**Why the smoke test is separate from the unit tests.** The unit tests cover the
+pure policy functions. They cannot catch a handler reading the wrong bound —
+which is exactly where the seat bug lived (`seatIndex > 7` in the route, while
+the policy function was correct). `dev:smoke` drives the real HTTP surface the
+browser uses: same endpoints, same CSRF double-submit, same cookies.
+
+Current coverage, all passing:
+
+| Area | Checks |
+|---|---|
+| Seat capacity (F4 regression) | seat 11 taken on a 12-seat room; seat 12 refused with the room's real capacity; negative and non-integer refused |
+| Legal consent (F3) | partial acceptance does not clear; age confirmation required; full acceptance clears; Arabic recorded as the language read; evidence retrievable |
+| Wallet / recharge | $100 cap and 7-day window exposed; package ladder readable; request accepted |
+| Auth | seeded session authenticates; anonymous refused |
+| Public surface | CSP report-only header present; PNG icon served |
+
 ## 1. Deploy & rollback rehearsal
 
 The app is a single Cloudflare Pages project (`ms-rooms`): the Next.js static
