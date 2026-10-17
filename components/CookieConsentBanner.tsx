@@ -90,7 +90,7 @@ export default function CookieConsentBanner() {
 
   return (
     <div
-      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-6 md:left-auto md:right-6 md:w-96 z-50 animate-slide-up"
+      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-5 md:left-auto md:right-5 md:w-96 z-50 animate-slide-up"
       role="dialog"
       aria-label="Cookie consent"
     >

@@ -87,8 +87,14 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3">
           <span className="flex shrink-0 items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/ms-rooms-logo.svg" alt="MS-ROOMS" className="h-8 w-8 rounded-lg object-contain ring-1 ring-line-strong" />
-            <span className="font-display text-base font-extrabold tracking-tight">MS-ROOMS</span>
+            <img
+                    src="/ms-rooms-logo.svg"
+                    alt="MS-ROOMS"
+                    className="h-9 w-9 rounded-xl object-contain ring-1 ring-line-strong"
+                  />
+            <span className="font-display text-lg font-extrabold tracking-tight text-white">
+                  MS-ROOMS
+                </span>
           </span>
           <nav className="ml-auto flex items-center gap-1 text-sm font-semibold">
             <a href="#how" className="hidden rounded-full px-3 py-1.5 text-paper-dim transition hover:bg-white/5 hover:text-paper sm:block">
@@ -118,7 +124,7 @@ export default function Home() {
               <Radio size={13} /> Live rooms, right now
             </span>
 
-            <h1 className="mt-5 text-4xl font-extrabold leading-[1.05] sm:text-5xl lg:text-6xl">
+            <h1 className="mt-5 text-4xl font-extrabold leading-[1.1] sm:text-5xl lg:text-6xl">
               Grab a mic.
               <br />
               Join a room.
