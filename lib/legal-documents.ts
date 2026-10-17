@@ -432,8 +432,30 @@ Write to msroomsprod@protonmail.com and we will respond within 30 days. We may a
   {
     heading: { en: "11. Changes and contact", ar: "١١. التعديلات والتواصل" },
     body: {
-      en: `When this policy changes we will publish a new version in the app and ask existing users to accept it. Contact Ms-Rooms at msroomsprod@protonmail.com. Registered address: Bait Al Masria, October Gardens, Giza, Egypt.`,
-      ar: `عند تعديل هذه السياسة سننشر نسخة جديدة داخل التطبيق ونطلب من المستخدمين الحاليين قبولها. للتواصل مع Ms-Rooms على msroomsprod@protonmail.com. والعنوان المسجل: Bait Al Masria, October Gardens, Giza, Egypt.`,
+      en: `When this policy changes we will publish a new version in the app and ask existing users to accept it.
+
+Contact and registration details
+
+  Legal name .................. Ms-Rooms
+  Registered address .......... Bait Al Masria, October Gardens, Giza, Egypt
+  Email ....................... msroomsprod@protonmail.com
+  Phone ....................... {{OPERATOR_PHONE}}
+  Commercial registration no. .. {{COMMERCIAL_REGISTRATION}}
+  Tax registration no. ......... {{TAX_REGISTRATION}}
+
+To reach us about this policy, your data, or a complaint, use the email above. You also have the right to complain to the Egyptian Consumer Protection Agency.`,
+      ar: `عند تعديل هذه السياسة سننشر نسخة جديدة داخل التطبيق ونطلب من المستخدمين الحاليين قبولها.
+
+بيانات التواصل والتسجيل
+
+  الاسم القانوني .................. Ms-Rooms
+  العنوان المسجل .................. Bait Al Masria, October Gardens, Giza, Egypt
+  البريد الإلكتروني ............... msroomsprod@protonmail.com
+  الهاتف ......................... {{OPERATOR_PHONE}}
+  رقم السجل التجاري ................ {{COMMERCIAL_REGISTRATION}}
+  رقم التسجيل الضريبي ............. {{TAX_REGISTRATION}}
+
+للتواصل معنا بشأن هذه السياسة أو بياناتك أو تقديم شكوى، استخدم البريد الإلكتروني أعلاه. ولك أيضًا حق التقدم بشكوى إلى جهاز حماية المستهلك المصري.`,
     },
   },
 ];

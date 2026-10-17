@@ -471,3 +471,24 @@ D1_REMOTE=0 node scripts/verify-seat-capacity.mjs   # local
 this is defence-in-depth only. Not rebuilt in place — a SQLite table rebuild on
 a live table with seat rows is not worth the risk for a constraint the
 application already guarantees.
+
+### 6.10 Egyptian regulatory watch-list (open items)
+
+Not legal advice — flagging obligations that the code does **not** yet satisfy,
+so they are decisions rather than surprises. Sources are secondary (law-firm and
+CMS summaries); confirm each with an Egyptian lawyer before relying on it.
+
+| Item | Status | Notes |
+|---|---|---|
+| **PDPL compliance deadline 1 Nov 2026** | 🔴 **~2 weeks** | Personal Data Protection Law 151/2020 executive regulations (issued Nov 2025) start a one-year compliance period ending **1 November 2026**. Arabic privacy notice ✅ and explicit consent ✅ are done. **72-hour breach notification to the regulator is NOT implemented** — see below. |
+| **Commercial registration + tax number** | 🔴 missing | Consumer Protection Law 181/2018 requires seller identity — legal name, address, **commercial registration no.**, **tax number**, phone, email — disclosed *before* a distance contract. Name/address/email are filled; the other three are unfilled placeholders in §11 and fail `check:legal:strict`. Get these from your commercial/tax registration. |
+| **72-hour breach notification** | 🔴 not implemented | No code path notifies a regulator of a data breach. `/api/client-errors` and `/api/csp-report` log events but nothing escalates. Needs a documented runbook before the deadline, not necessarily code. |
+| **14-day withdrawal right** | 🟡 review | Law 181/2018 gives consumers a statutory right to withdraw from a distance contract within 14 days without giving a reason. §4 allows refunds for **unspent** coins within 14 days and refuses spent ones. That is not a blanket no-returns policy, but it is close to the line and the spent-coins exclusion needs a lawyer's eye. |
+| **Separate, unticked marketing consent** | 🟡 review | `CookieConsentBanner` handles cookie consent. Marketing-by-SMS/email/WhatsApp needs its own default-off consent under the PDPL regulations. |
+| **Arabic invoices / e-receipts** | 🟡 review | The Egyptian Tax Authority treats online and offline commerce the same. If in scope, invoices and tax receipts are a separate obligation from the terms text. |
+| **Age 18+** | ✅ done | `MINIMUM_AGE` enforced in the consent gate. |
+
+**What this means for the release:** the legal text is now bilingual, versioned
+and gated, which is the right foundation. But `check:legal:strict` is *failing on
+purpose* because three registration fields are unknown, and the PDPL deadline is
+close. Do not treat the legal work as complete until those are resolved.
