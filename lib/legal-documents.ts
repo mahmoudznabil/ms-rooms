@@ -432,28 +432,28 @@ Write to msroomsprod@protonmail.com and we will respond within 30 days. We may a
   {
     heading: { en: "11. Changes and contact", ar: "١١. التعديلات والتواصل" },
     body: {
-      en: `When this policy changes we will publish a new version in the app and ask existing users to accept it.
+      en:`When this policy changes we will publish a new version in the app and ask existing users to accept it.
 
 Contact and registration details
 
   Legal name .................. Ms-Rooms
   Registered address .......... Bait Al Masria, October Gardens, Giza, Egypt
   Email ....................... msroomsprod@protonmail.com
-  Phone ....................... {{OPERATOR_PHONE}}
-  Commercial registration no. .. {{COMMERCIAL_REGISTRATION}}
-  Tax registration no. ......... {{TAX_REGISTRATION}}
+  Phone ....................... 01101100379
+  Commercial registration no. .. Available on request — contact msroomsprod@protonmail.com
+  Tax registration no. ......... Available on request — contact msroomsprod@protonmail.com
 
 To reach us about this policy, your data, or a complaint, use the email above. You also have the right to complain to the Egyptian Consumer Protection Agency.`,
-      ar: `عند تعديل هذه السياسة سننشر نسخة جديدة داخل التطبيق ونطلب من المستخدمين الحاليين قبولها.
+      ar:`عند تعديل هذه السياسة سننشر نسخة جديدة داخل التطبيق ونطلب من المستخدمين الحاليين قبولها.
 
 بيانات التواصل والتسجيل
 
   الاسم القانوني .................. Ms-Rooms
   العنوان المسجل .................. Bait Al Masria, October Gardens, Giza, Egypt
   البريد الإلكتروني ............... msroomsprod@protonmail.com
-  الهاتف ......................... {{OPERATOR_PHONE}}
-  رقم السجل التجاري ................ {{COMMERCIAL_REGISTRATION}}
-  رقم التسجيل الضريبي ............. {{TAX_REGISTRATION}}
+  الهاتف ......................... 01101100379
+  رقم السجل التجاري ................ متاح عند الطلب — للتواصل عبر msroomsprod@protonmail.com
+  رقم التسجيل الضريبي ............. متاح عند الطلب — للتواصل عبر msroomsprod@protonmail.com
 
 للتواصل معنا بشأن هذه السياسة أو بياناتك أو تقديم شكوى، استخدم البريد الإلكتروني أعلاه. ولك أيضًا حق التقدم بشكوى إلى جهاز حماية المستهلك المصري.`,
     },
@@ -595,6 +595,41 @@ export const LEGAL_DOCUMENTS: readonly LegalDocument[] = [
     sections: GUIDELINES,
   },
 ];
+
+/**
+ * Operator values that Egyptian consumer law expects and that are NOT yet
+ * filled in.
+ *
+ * Kept as code rather than left as visible tokens in the document text, so
+ * nothing unreadable can ever render in front of a customer — but still
+ * machine-checkable, so `npm run check:legal:strict` fails on it.
+ *
+ * This is the subtle half of the gate. An unfilled token is self-evident in the
+ * prose. A tracked-pending value is the opposite: the shipped text reads
+ * cleanly ("available on request") precisely BECAUSE the value is missing, so
+ * nothing in the wording reveals that anything is outstanding. That is why the
+ * release gate reads this array rather than trusting the prose.
+ *
+ * To close these: take the numbers from the operator's commercial registration
+ * (commercial register / السجل التجاري) and tax registration (tax card /
+ * بطاقة التسجيل الضريبي), replace the "Available on request" lines in the
+ * Privacy Policy section 11 contact block with the real values, and delete this
+ * array.
+ */
+export const LEGAL_PENDING_OPERATOR_VALUES = [
+  {
+    key: "commercial_registration",
+    required_by: "Consumer Protection Law 181/2018 — supplier identity disclosure",
+    how_to_obtain: "Commercial register certificate / شهادة السجل التجاري",
+    currently: "stated as available on request from the support address",
+  },
+  {
+    key: "tax_registration",
+    required_by: "Consumer Protection Law 181/2018 — supplier identity disclosure",
+    how_to_obtain: "Tax card / بطاقة التسجيل الضريبي",
+    currently: "stated as available on request from the support address",
+  },
+] as const;
 
 /** Look up a document by key. */
 export function getLegalDocument(key: string): LegalDocument | undefined {

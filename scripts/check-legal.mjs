@@ -127,7 +127,40 @@ for (const m of pairs) {
 const allPlaceholders = [...raw.matchAll(/\{\{([A-Z_]+)\}\}/g)].map((x) => x[1]);
 const placeholders = [...new Set(allPlaceholders)].sort();
 
+/**
+ * Operator values that are known to be missing, tracked in code.
+ *
+ * Unfilled tokens and tracked-pending values are the same problem arriving by
+ * different routes: the document says something the operator has not yet
+ * supplied. Tokens are the obvious case. The pending array is the subtler one —
+ * the shipped text reads cleanly ("available on request") precisely BECAUSE the
+ * value is absent, so nothing in the prose reveals that anything is missing.
+ *
+ * That is exactly why the release gate reads the array rather than trusting the
+ * prose. It fails on the array being non-empty, so the gap stays visible at the
+ * point where it matters, while the shipped document stays readable.
+ */
+const pendingBlock = raw.match(
+  /export const LEGAL_PENDING_OPERATOR_VALUES = \[([\s\S]*?)\] as const;/
+);
+const pending = pendingBlock
+  ? [...pendingBlock[1].matchAll(/key:\s*"([a-z_]+)"/g)].map((m) => m[1])
+  : [];
+
 console.log(`legal: checked ${checked} en/ar pairs in ${SRC.pathname.split("/").pop()}`);
+
+if (pending.length) {
+  console.log(`\nlegal: ${STRICT ? "ERROR" : "WARNING"}: ${pending.length} operator value(s) not yet supplied:`);
+  for (const k of pending) console.log(`  ${k}`);
+  if (STRICT) {
+    console.log(
+      "  These are legal-entity identifiers the operator must obtain (commercial\n" +
+        "  register, tax card). They are described in the shipped document as\n" +
+        "  available on request rather than left as unreadable tokens — see\n" +
+        "  LEGAL_PENDING_OPERATOR_VALUES in lib/legal-documents.ts."
+    );
+  }
+}
 
 if (problems.length) {
   console.log(`\nlegal: MIXED-SCRIPT PROBLEMS (${problems.length}):`);
@@ -151,7 +184,7 @@ if (placeholders.length) {
   }
 }
 
-if (problems.length || (STRICT && placeholders.length)) {
+if (problems.length || (STRICT && (placeholders.length || pending.length))) {
   console.log("\nlegal: FAILED");
   process.exit(1);
 }

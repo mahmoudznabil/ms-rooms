@@ -452,20 +452,50 @@ current; the flag decides whether the difference is enforced.
 **Unfilled placeholders — REQUIRED before this reaches customers.** Six
 `{{...}}` markers stand in for operator-specific facts:
 
-| Placeholder | Meaning |
-|---|---|
-| `{{OPERATOR_LEGAL_NAME}}` | Registered legal entity |
-| `{{REGISTERED_ADDRESS}}` | Registered address |
-| `{{GOVERNING_LAW}}` | Governing law / jurisdiction |
-| `{{LIABILITY_CAP}}` | Liability cap |
-| `{{SUPPORT_EMAIL}}` | Support contact |
+| Placeholder | Meaning | Status |
+|---|---|---|
+| `{{OPERATOR_LEGAL_NAME}}` | Registered legal entity | ✅ Ms-Rooms |
+| `{{REGISTERED_ADDRESS}}` | Registered address | ✅ Bait Al Masria, October Gardens, Giza, Egypt |
+| `{{GOVERNING_LAW}}` | Governing law | ✅ Arab Republic of Egypt |
+| `{{LIABILITY_CAP}}` | Liability cap | ✅ USD 100 floor + spend-linked ceiling |
+| `{{SUPPORT_EMAIL}}` | Support contact | ✅ msroomsprod@protonmail.com |
+| `{{OPERATOR_PHONE}}` | Phone | ✅ 01101100379 |
+| `{{COMMERCIAL_REGISTRATION}}` | Commercial register no. | 🔴 **outstanding** |
+| `{{TAX_REGISTRATION}}` | Tax registration no. | 🔴 **outstanding** |
 
-These are deliberately **not** filled with invented values — a plausible-looking
-but false registered address is worse than an obvious gap, because it is harder
-to notice and it is still a false statement to a customer.
+**Liability cap** — written as *the greater of USD 100, or the total amount paid
+in the preceding 12 months*. A pure fixed figure is fragile: a cap low enough to
+look protective is the kind a consumer-protection challenge can void, which
+leaves the operator worse off than having no cap at all, because they would have
+assumed cover they never had. The floor-plus-ceiling form scales with the
+relationship while staying above that threshold.
+
+**The two outstanding registration numbers.** These are legal-entity identifiers
+issued by Egyptian authorities, so they are **not** invented anywhere in this
+repo — a plausible-looking but false registration number is a false statement to
+every customer who reads the policy and to the regulator, which is worse than an
+acknowledged gap.
+
+Instead the shipped document states plainly:
 
 ```
-npm run check:legal          # warns on unfilled placeholders, fails on corruption
+Commercial registration no. .. Available on request — contact msroomsprod@protonmail.com
+Tax registration no. ......... Available on request — contact msroomsprod@protonmail.com
+```
+
+so no unfilled token can render in front of a customer. The gap is **not**
+forgotten: it lives in `LEGAL_PENDING_OPERATOR_VALUES`
+(`lib/legal-documents.ts`), which `check:legal:strict` still fails on. This is
+the subtle half of the gate — the prose reads cleanly *precisely because* the
+value is missing, so the release gate reads the array rather than trusting the
+wording.
+
+To close them: take the numbers from the operator's commercial register
+(السجل التجاري) and tax card (بطاقة التسجيل الضريبي), replace the two lines
+above in Privacy Policy §11, and delete the array.
+
+```
+npm run check:legal          # warns on outstanding values, fails on corruption
 npm run check:legal:strict   # fails on either — use as a release gate
 ```
 
@@ -525,7 +555,7 @@ CMS summaries); confirm each with an Egyptian lawyer before relying on it.
 | Item | Status | Notes |
 |---|---|---|
 | **PDPL compliance deadline 1 Nov 2026** | 🔴 **~2 weeks** | Personal Data Protection Law 151/2020 executive regulations (issued Nov 2025) start a one-year compliance period ending **1 November 2026**. Arabic privacy notice ✅ and explicit consent ✅ are done. **72-hour breach notification to the regulator is NOT implemented** — see below. |
-| **Commercial registration + tax number** | 🔴 missing | Consumer Protection Law 181/2018 requires seller identity — legal name, address, **commercial registration no.**, **tax number**, phone, email — disclosed *before* a distance contract. Name/address/email are filled; the other three are unfilled placeholders in §11 and fail `check:legal:strict`. Get these from your commercial/tax registration. |
+| **Commercial registration + tax number** | 🔴 missing | Consumer Protection Law 181/2018 requires seller identity — legal name, address, **commercial registration no.**, **tax number**, phone, email — disclosed *before* a distance contract. Name, address, phone and email are filled; the two registration numbers are stated as available on request and tracked in `LEGAL_PENDING_OPERATOR_VALUES`, so `check:legal:strict` still fails. See §6.8. |
 | **72-hour breach notification** | 🔴 not implemented | No code path notifies a regulator of a data breach. `/api/client-errors` and `/api/csp-report` log events but nothing escalates. Needs a documented runbook before the deadline, not necessarily code. |
 | **14-day withdrawal right** | 🟡 review | Law 181/2018 gives consumers a statutory right to withdraw from a distance contract within 14 days without giving a reason. §4 allows refunds for **unspent** coins within 14 days and refuses spent ones. That is not a blanket no-returns policy, but it is close to the line and the spent-coins exclusion needs a lawyer's eye. |
 | **Separate, unticked marketing consent** | 🟡 review | `CookieConsentBanner` handles cookie consent. Marketing-by-SMS/email/WhatsApp needs its own default-off consent under the PDPL regulations. |
