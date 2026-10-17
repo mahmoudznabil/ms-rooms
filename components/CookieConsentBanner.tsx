@@ -90,17 +90,17 @@ export default function CookieConsentBanner() {
 
   return (
     <div
-      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-5 md:left-auto md:right-5 md:w-96 z-50 animate-slide-up"
+      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 z-50 animate-slide-up md:bottom-4 md:left-6 md:right-6"
       role="dialog"
       aria-label="Cookie consent"
     >
       <div className="rounded-2xl border border-white/10 bg-ink-raised shadow-raised border-line-strong/95 backdrop-blur-sm p-4 shadow-2xl">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3 md:items-center">
           <div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-xl bg-violet-500/20 text-violet-300">
             <Cookie size={20} />
           </div>
 
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className="text-sm font-bold text-white">Cookies & Sign-In</h3>
             <p className="mt-1 text-xs text-white/60 leading-relaxed">
               This site uses cookies for authentication. Google sign-in requires{" "}
@@ -116,7 +116,7 @@ export default function CookieConsentBanner() {
               </div>
             )}
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 md:mt-0 md:pl-4">
               <button
                 onClick={accept}
                 className="rounded-lg bg-white px-4 py-1.5 min-h-[44px] text-xs font-semibold text-black transition hover:bg-white/85"
