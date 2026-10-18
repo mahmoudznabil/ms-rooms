@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "build": "next build --webpack && node scripts/stamp-sw.mjs",
+    "check:authz": "node scripts/check-authorization.mjs",
+    "check:authz:selftest": "node scripts/verify-authorization-gate.mjs",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:legal": "node scripts/check-legal.mjs",
     "check:legal:strict": "node scripts/check-legal.mjs --strict",

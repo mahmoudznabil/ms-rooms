@@ -60,15 +60,29 @@ export async function requireUser(request: Request, env: EnvWithDB): Promise<Aut
 }
 
 /**
- * Resolve an admin from a `Authorization: Bearer <token>` admin session.
+ * Resolve an admin from an admin session token.
  * Returns null when unauthenticated or expired. Role checks stay at the call
  * site via the returned `role`.
+ *
+ * READ THIS BEFORE USING IT
+ *
+ * As of the 2026-10-18 authorization sweep, this function is NOT on the live
+ * path. All 27 admin handlers in backend.ts resolve admins through a local
+ * `getAdminFromToken(readAdminToken(request))` pair, because those also handle
+ * the `admin_session` COOKIE. This function previously accepted only an
+ * `Authorization: Bearer` header, so using it would have rejected exactly the
+ * browser sessions the admin UI actually creates — a helper that looks correct
+ * and silently breaks every admin page.
+ *
+ * It now accepts the cookie too, so it at least agrees with reality. Prefer the
+ * local pair inside backend.ts, which also runs `ensureAdminTables()` first; if
+ * you are wiring up a NEW surface outside backend.ts, use this one.
  */
 export async function requireAdmin(
   request: Request,
   env: EnvWithDB,
 ): Promise<{ id: string; username: string; role: string } | null> {
-  const token = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+  const token = readAdminSessionToken(request);
   if (!token) return null;
   const row = await env.DB.prepare(
     `SELECT a.id, a.username, a.role FROM admin_sessions s
@@ -78,6 +92,21 @@ export async function requireAdmin(
   const adm = row as { id?: string; username?: string; role?: string } | null;
   if (!adm?.id) return null;
   return { id: adm.id, username: adm.username ?? "", role: adm.role ?? "" };
+}
+
+/**
+ * Bearer header, falling back to the `admin_session` cookie.
+ *
+ * Mirrors backend.ts `readAdminToken` (L410). Kept here as well so this module
+ * is self-contained for callers outside the worker; the prefix check matters —
+ * admin session ids are `admin_`-prefixed and a user session cookie must not be
+ * accepted as an admin session.
+ */
+export function readAdminSessionToken(request: Request): string {
+  const header = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/, "");
+  if (header) return header;
+  const cookie = request.headers.get("Cookie") || "";
+  return cookie.split("; ").find((c) => c.trim().startsWith("admin_session="))?.split("=")[1] ?? "";
 }
 
 /** Constant-time string comparison (CSRF tokens; password hashes after Phase 1.15). */

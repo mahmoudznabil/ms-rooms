@@ -23,6 +23,14 @@ import {
 } from "./recharge-policy";
 import { roomSeatPolicy, seatExists, seatRefusalReason } from "./room-policy";
 import {
+  canReleaseCustomer,
+  canReadCreditLedger,
+  canSeeUserPii,
+  USER_LIST_COLUMNS_SAFE,
+  USER_LIST_COLUMNS_PII,
+  type AdminRole,
+} from "./admin-policy";
+import {
   LEGAL_DOCUMENTS,
   LEGAL_LANGS,
   LEGAL_VERSION,
@@ -2194,7 +2202,14 @@ return j({ ok: true, ended: true });
         const resolved = await resolveUser(rawKey);
         if (!resolved) return notFound("User not found.");
         const id = resolved.id as string;
-        const viewer = url.searchParams.get("viewer_id") ?? "";
+        // The viewer comes from the session, never from the query string. This
+        // handler is deliberately public — profiles are — but `viewer_id` was
+        // read straight from `?viewer_id=`, so anyone could ask whether an
+        // arbitrary account follows an arbitrary other one and enumerate the
+        // follow graph without signing in. Unauthenticated callers simply get
+        // followed_by_viewer: false.
+        const viewerMe = await requireUser(request, env);
+        const viewer = viewerMe?.id ?? "";
         const counts = await env.DB.prepare(
           `SELECT (SELECT COUNT(*) FROM follows WHERE followee_id = ?) AS followers,
                   (SELECT COUNT(*) FROM follows WHERE follower_id = ?) AS following`
@@ -3231,7 +3246,28 @@ return j({
         await ensureUserIdentityColumns();
         const q = (url.searchParams.get("q") ?? "").trim().slice(0, 40);
         const like = `%${q}%`;
-        const rows = q ? await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone, provider, banned, ban_reason, firebase_uid, created_at FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ? OR email LIKE ? OR phone LIKE ? LIMIT 10`).bind(like, like, like, q, like, like).all() : await env.DB.prepare(`SELECT id, username, display_name, id_tag, coins, gems, xp, email, phone, provider, banned, ban_reason, firebase_uid, created_at FROM users ORDER BY updated_at DESC LIMIT 10`).all();
+        // Gate the COLUMNS, not the route. Support needs this list to do its
+        // job — look someone up, see their balance and ban state — so blocking
+        // the endpoint would break the role it exists for. But it returned
+        // email, phone and firebase_uid to every admin role, and the search
+        // matched across those very columns, which made it an enumeration
+        // oracle for the whole user table. The allowlist lives in admin-policy
+        // next to canSeeUserPii so the two cannot drift apart.
+        const pii = canSeeUserPii(adm.role as AdminRole).ok;
+        const columns = pii
+          ? [...USER_LIST_COLUMNS_SAFE, ...USER_LIST_COLUMNS_PII]
+          : [...USER_LIST_COLUMNS_SAFE];
+        const projection = columns.join(", ");
+        // Searching email/phone would leak whether a contact exists even if the
+        // values are not returned, so those predicates go only with the columns.
+        const piiPredicate = pii ? " OR email LIKE ? OR phone LIKE ?" : "";
+        const rows = q
+          ? await env.DB.prepare(
+              `SELECT ${projection} FROM users WHERE username LIKE ? OR display_name LIKE ? OR id_tag LIKE ? OR id = ?${piiPredicate} LIMIT 10`,
+            )
+              .bind(...(pii ? [like, like, like, q, like, like] : [like, like, like, q]))
+              .all()
+          : await env.DB.prepare(`SELECT ${projection} FROM users ORDER BY updated_at DESC LIMIT 10`).all();
         return j({ ok: true, users: rows.results ?? [] });
       }
 
@@ -3380,6 +3416,16 @@ return j({
         const target = await resolveUser(key);
         if (!target) return notFound("User not found.");
         const targetId = (target as Record<string, unknown>).id as string;
+        // Ownership is the boundary here. /claim immediately above refuses to
+        // take a customer another admin already owns; this endpoint did not, so
+        // any authenticated admin could release ANY admin's customer — taking
+        // their open recharge requests with it, because /claim adopts those
+        // requests onto whoever holds the customer. Two adjacent endpoints on the
+        // same resource with opposite rules is what a route audit catches and a
+        // type checker cannot.
+        const owner = await ownerOf(targetId);
+        const allowed = canReleaseCustomer(adm.role as AdminRole, String(adm.id), owner);
+        if (!allowed.ok) return j({ ok: false, error: allowed.reason }, allowed.status);
         await env.DB.prepare(`DELETE FROM admin_customers WHERE user_id = ?`).bind(targetId).run();
         return j({ ok: true, user_id: targetId, released: true });
       }
@@ -3530,6 +3576,15 @@ return j({
         const target = await resolveUser(key);
         if (!target) return notFound("User not found.");
         const userId = (target as Record<string, unknown>).id as string;
+        // The ledger is the financial record: coins credited, USD owed,
+        // settlement state, and the owning admin's notes. POST
+        // /api/admin/recharge/mark-paid below is already restricted to finance
+        // and master_admin; this read was not, so any admin role could pull any
+        // user's financial history while being unable to change it. Gating the
+        // write and not the read is not a boundary.
+        const owner = await ownerOf(userId);
+        const allowed = canReadCreditLedger(adm.role as AdminRole, String(adm.id), owner);
+        if (!allowed.ok) return j({ ok: false, error: allowed.reason }, allowed.status);
         const rows = await env.DB.prepare(
           `SELECT rc.id, rc.coins, rc.usd_cents, rc.status, rc.note, rc.created_at, rc.settled_at,
                   rc.package_id, au.username AS admin_username

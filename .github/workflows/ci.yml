@@ -72,3 +72,38 @@ jobs:
           # Same-origin default; keeps the suite independent of any local env file.
           NEXT_PUBLIC_API_URL: ""
           CI: "true"
+
+  # Security gates.
+  #
+  # These are not lint. Every endpoint in this API is type-correct whether or not
+  # it checks who is calling, and the five defects that motivated these gates were
+  # all found by manual review rather than by a failing test — including a
+  # cross-tenant hole in the admin customer desk where any admin could release
+  # any other admin's customer. They are cheap, they need no database, and they
+  # stop the next one from shipping silently.
+  security:
+    name: Security gates (authorization + encoding)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Every API route resolves an actor or is documented public
+        run: npm run check:authz
+      # Proves the gate above still fails when a guard is removed, so it cannot
+      # rot into a check that always passes.
+      - name: Authorization gate self-test
+        run: npm run check:authz:selftest
+      - name: No replacement characters in shipped source
+        run: npm run check:encoding
+      # Not strict: commercial registration and tax numbers are still pending
+      # operator values, so `check:legal:strict` is expected to fail until they
+      # are supplied. Flip this to strict once LEGAL_PENDING_OPERATOR_VALUES
+      # is empty.
+      - name: Bilingual legal text integrity
+        run: npm run check:legal
+
