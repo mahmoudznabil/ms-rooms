@@ -85,13 +85,26 @@ interface Env {
 // Cloudflare Pages, so a same-origin request (no Origin header, or one matching
 // the request host) is always allowed and never needs CORS headers. The list
 // below only matters when the frontend is deliberately pointed at a different
-// host during local development.
+// host.
 const ALLOWED_ORIGINS = [
   "https://ms-rooms.pages.dev",
   "https://main.ms-rooms.pages.dev",
-  "https://bestaudiobackend.mahmoudxnabil.workers.dev",
+  "https://bestaudiobackend.mahmoudznabil.workers.dev",
   "http://localhost:3000",
   "http://localhost:3001",
+  // Native app webviews (Capacitor). These are NOT local development: a
+  // Capacitor shell serves the web app from a fixed origin, so every request
+  // it makes to the API is cross-origin and is refused unless it is listed
+  // here. Without these two entries the Android and iOS builds cannot call a
+  // single endpoint -- not sign-in, not rooms, not the gift ledger.
+  //   iOS     -> capacitor://localhost
+  //   Android -> http://localhost
+  //
+  // They are safe to allow unconditionally: neither can be claimed by a
+  // browser-hosted page on another site, and the API still requires a valid
+  // session cookie plus CSRF token for anything that mutates state.
+  "capacitor://localhost",
+  "http://localhost",
 ];
 
 /** True when this request is same-origin with the API itself. */

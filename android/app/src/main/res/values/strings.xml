@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MS-ROOMS</string>
+    <string name="title_activity_main">MS-ROOMS</string>
+    <string name="package_name">com.msrooms.app</string>
+    <string name="custom_url_scheme">com.msrooms.app</string>
+</resources>

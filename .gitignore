@@ -32,3 +32,33 @@ npm-debug.log*
 pm run stage:apk puts a binary
 # here and a committed APK would rot the moment a new build is released.
 public/downloads/
+# Capacitor / native build artifacts.
+#
+# The android/ and ios/ PROJECTS are committed on purpose: they hold the app id,
+# the AndroidManifest with its media permissions, the gradle configuration and
+# the capacitor.config.json. Those are source, and regenerating them would
+# silently reset the permissions.
+#
+# What is NOT committed is generated: the web bundle is copied in by
+# `npx cap sync`, and gradle output is rebuilt on every build. Committing either
+# means a stale APK's assets or a stale build/ directory in git history forever.
+android/app/src/main/assets/public/
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/release/
+android/captures/
+android/.idea/
+ios/App/Pods/
+ios/App/build/
+ios/App/App/public/
+ios/DerivedData/
+ios/capacitor-cordova-ios-plugins/
+
+# Release signing material. The keystore IS the app's identity for its entire
+# life -- lose it and you cannot ship an update without changing the package id
+# and losing every install. It must never be in the repository.
+*.keystore
+*.jks
+keystore.properties

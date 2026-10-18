@@ -36,6 +36,16 @@ import { Apple, Check, Download, ShieldCheck, Smartphone } from "lucide-react";
 const APK_PATH = "/downloads/ms-rooms.apk";
 const SHA_PATH = "/downloads/ms-rooms.apk.sha256";
 
+/**
+ * App Store search for MS-ROOMS.
+ *
+ * Used until the listing exists. `apps.apple.com/.../search?term=` resolves to
+ * the App Store app on iOS and to the web search page everywhere else, so it
+ * degrades rather than dead-ending. Swap this for the real listing id link
+ * (`https://apps.apple.com/app/id<APP_ID>`) once Apple approves.
+ */
+const IOS_STORE_SEARCH_URL = "https://apps.apple.com/us/search?term=ms-rooms";
+
 type Availability = "checking" | "ready" | "unavailable";
 
 function formatBytes(bytes: number): string {
@@ -168,8 +178,17 @@ export function MobileDownload() {
 }
 
 /**
- * iOS column. Kept as its own component only so the copy can state the
- * constraint honestly rather than showing a button that cannot work.
+ * iOS card.
+ *
+ * iOS does not permit installing an app from a website, so there is no direct
+ * download to offer. Until the App Store listing exists, this links to the App
+ * Store search for "ms-rooms" rather than showing a dead button: a visitor on
+ * an iPhone lands in the App Store and can watch for the listing, add the app
+ * to their group, or search for it themselves.
+ *
+ * The label says "Searching the App Store" rather than "Download on the App
+ * Store" because that is literally what the link does, and a button that claims
+ * to hand over an app it cannot is worse than one that says what it does.
  */
 export function IosAvailability() {
   return (
@@ -177,15 +196,24 @@ export function IosAvailability() {
       <p className="flex items-center gap-2 text-sm font-bold text-white">
         <Apple size={16} className="shrink-0 text-paper-dim" />
         iPhone app
-        <span className="rounded-full border border-line-strong px-2 py-0.5 text-[11px] font-bold text-paper-dim">
-          Not released yet
+        <span className="rounded-full border border-coin/30 bg-coin/10 px-2 py-0.5 text-[11px] font-bold text-coin">
+          App Store
         </span>
       </p>
       <p className="mt-2 text-xs leading-relaxed text-paper-dim">
-        iOS does not allow apps to be installed from a website, so there is no download to offer
-        here. We are working on it and will announce it when there is a route that does not involve
-        the App Store.
+        iOS does not allow apps to be installed from a website. Until our listing is live, this opens
+        the App Store search for MS-ROOMS — save it and it will appear there as soon as it is
+        published.
       </p>
+      <a
+        href={IOS_STORE_SEARCH_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-full border border-line-strong bg-white/5 px-5 py-2.5 text-sm font-bold text-paper transition hover:bg-white/10"
+      >
+        <Apple size={16} />
+        Search the App Store
+      </a>
     </div>
   );
 }
