@@ -84,19 +84,64 @@ key for this, so it goes in the app's JS on the path that enters a room.
 
 ## Building an APK
 
-```bash
-# 1. Build the web app exactly as the website is built
-npm run build
+Toolchain this was last verified with, on Windows:
 
-# 2. Copy it into the native shell
+| | Version | Note |
+|---|---|---|
+| JDK | Temurin **21** | Android Gradle Plugin 8 needs 17+. The Java 8 on Windows is far too old. |
+| Android SDK | `platforms/android-36`, `build-tools/36.0.0` | Capacitor 8 targets `compileSdk 36`. |
+| Gradle | 8.14.3 | Supplied by the wrapper; it downloads itself. |
+
+### Step 0 — point Gradle at the SDK (do this first)
+
+```bash
+npm run native:sdk      # writes android/local.properties
+```
+
+Skip this and the build fails with a misleading error:
+
+```
+Could not determine the dependencies of task ':app:compileDebugJavaWithJavac'.
+> java.io.IOException: The filename, directory name, or volume label syntax is incorrect
+```
+
+thrown from `SdkLocator$SdkLocationSource.validateSdkPath`. Two Windows traps
+produce it and the stacktrace names neither:
+
+1. **CRLF.** PowerShell's `Out-File` writes `\r\n`; `java.util.Properties` keeps
+   the trailing `\r` as part of the value, so the path ends in a carriage return.
+2. **Mixed separators.** Android Studio writes `sdk.dir` with forward slashes
+   even on Windows. `C:\Users\x\AppData\Local/Android/Sdk` is a legal Windows
+   path and still fails.
+
+The script writes `sdk.dir=C:/Users/...` with a single LF and verifies both
+properties before exiting.
+
+### Build
+
+```bash
+export JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot"
+export ANDROID_HOME="%LOCALAPPDATA%\Android\Sdk"
+
+npm run build
 npx cap sync android
 
-# 3. Debug build, install on a connected phone
-npx cap run android
-
-# 4. Release build -> android/app/build/outputs/apk/release/app-release.apk
-cd android && ./gradlew assembleRelease
+cd android && ./gradlew assembleDebug     # debug-signed, ~9 min cold
+cd android && ./gradlew assembleRelease   # needs a keystore, see below
 ```
+
+### Verify before publishing
+
+Do not trust the build output alone:
+
+```bash
+"$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging app/build/outputs/apk/debug/app-debug.apk
+```
+
+Must show `name='com.msrooms.app'`, `RECORD_AUDIO`, `CAMERA` and
+`MODIFY_AUDIO_SETTINGS`. Grepping the APK's `AndroidManifest.xml` for those
+strings finds nothing — it is binary XML with a UTF-16 string pool — which is
+why `aapt2` is the tool for it.
 
 **Signing.** A release APK must be signed, and the keystore is the app's
 identity for its whole life — losing it means you cannot update the app
@@ -109,7 +154,14 @@ keytool -genkey -v -keystore ms-rooms-release.keystore \
 ```
 
 Configure it in `android/app/build.gradle` under `signingConfigs.release`, and
-add both the keystore and its properties file to `.gitignore`.
+add the keystore and its properties file to `.gitignore`.
+
+### The build that is currently published
+
+`ms-rooms.apk` on the landing page is **debug-signed**. It installs and runs
+normally, which is enough for a team test, but it cannot be upgraded in place:
+replacing it later means uninstalling first, because the signature changes.
+Switch to a release keystore before giving it to anyone outside the team.
 
 ---
 

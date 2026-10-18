@@ -22,6 +22,7 @@
     "native:add": "cap add android && cap add ios",
     "native:apk": "cap sync android && cd android && gradlew assembleRelease",
     "native:manifest": "node scripts/android-manifest.mjs",
+    "native:sdk": "node scripts/android-local-props.mjs",
     "native:sync": "cap sync android",
     "stage:apk": "node scripts/stage-apk.mjs",
     "start": "next start",
