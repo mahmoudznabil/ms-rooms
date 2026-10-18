@@ -144,7 +144,8 @@ export default function Home() {
             <p className="hero-lede mt-5 max-w-[52ch] text-base leading-relaxed text-paper-dim sm:text-lg">
               MS-ROOMS is a live voice party app that runs in your browser. Take a seat on
               stage, talk to the room, send gifts, play games together and call your friends
-              one to one. Nothing to install.
+              one to one. There is an Android app too, and nothing to install to get started
+            here.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-3">

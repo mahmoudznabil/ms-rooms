@@ -719,8 +719,10 @@ export interface RoomVoice {
   toggleMic: () => void;
   toggleMonitor: () => Promise<void>;
   leave: () => void;
+  /** True when the browser refused to play a remote peer's audio. */
   audioBlocked: boolean;
-  unlockAudio: () => void;
+  /** Retry playback after a user gesture. Reports the real outcome. */
+  unlockAudio: () => Promise<void>;
 }
 
 export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice {
@@ -1261,17 +1263,27 @@ export function useRoomVoice(roomId: string, myUserId: string | null): RoomVoice
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speakingUserIds.length]);
 
-  const unlockAudio = useCallback(() => {
-    let unblocked = false;
-    audioElsRef.current.forEach((el) => {
-      try {
-        void el.play().then(() => {
-          unblocked = true;
-        }).catch(() => undefined);
-      } catch {}
-    });
-    if (unblocked) setAudioBlocked(false);
-    else setAudioBlocked(false);
+  const unlockAudio = useCallback(async () => {
+    // This used to be a no-op that always reported success. It set
+    // `unblocked = true` inside a .then() callback and then read it
+    // synchronously on the very next line, so it was always false -- and both
+    // branches of the `if (unblocked) ... else ...` called the same
+    // setAudioBlocked(false). The function could not tell whether playback had
+    // actually resumed and cleared the warning regardless.
+    //
+    // That matters because this is the only recovery path from an autoplay
+    // block. `el.play()` rejects on desktop Chrome until the user has
+    // interacted with the origin; when it did, the room looked connected --
+    // meters lit, peer state fine -- and was completely silent, with no
+    // explanation, because nothing ever rendered `audioBlocked`.
+    const els = [...audioElsRef.current.values()];
+    if (!els.length) {
+      // Nothing is playing, so there is nothing blocking us.
+      setAudioBlocked(false);
+      return;
+    }
+    const results = await Promise.allSettled(els.map((el) => el.play()));
+    setAudioBlocked(!results.every((r) => r.status === "fulfilled"));
   }, []);
 
   return { status, micOn, level, error, peers, turnReady, speakingUserIds, monitoring, toggleMic, toggleMonitor, leave: stopAll, audioBlocked, unlockAudio };

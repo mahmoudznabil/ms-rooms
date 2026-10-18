@@ -23,6 +23,8 @@ import {
   UserCheck,
   Users,
   Volume2,
+  VolumeX,
+  X,
 } from "lucide-react";
 import { GIFT_CATALOG, formatCount } from "@/lib/rooms";
 import {
@@ -219,6 +221,8 @@ function RoomViewInner() {
   const serverMuted = mySeat?.is_muted === 1;
   const micLive = voice.micOn;
   const voiceToggle = voice.toggleMic;
+  /** The autoplay banner can be dismissed; it reappears if audio blocks again. */
+  const [soundHintDismissed, setSoundHintDismissed] = useState(false);
   useEffect(() => {
     if (serverMuted && micLive) {
       void voiceToggle();
@@ -648,6 +652,40 @@ function RoomViewInner() {
           : voice.status === "denied" || voice.status === "error" ? (voice.error ?? "Mic unavailable")
           : voice.micOn ? "Mic is on" : "Tap the mic to talk"}
       </p>
+
+      {/* Browser refused to play remote audio.
+          Desktop Chrome blocks autoplay until the user has interacted with the
+          origin, so `el.play()` rejects and the room is silent -- while every
+          other signal still says the call is fine: meters lit, peer connected.
+          `audioBlocked` was already computed by the hook and exposed, but
+          nothing rendered it, so the one thing that could tell the user was
+          being computed and thrown away.
+          unlockAudio() now reports the real result, so if the tap does not work
+          the banner stays instead of silently claiming success. */}
+      {voice.audioBlocked && !soundHintDismissed && (
+        <div className="mt-2 flex items-center gap-3 rounded-2xl border border-amber-400/35 bg-amber-500/10 p-3">
+          <VolumeX size={18} className="shrink-0 text-amber-300" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-amber-100">You cannot hear anyone yet</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-amber-200/80">
+              Your browser blocked sound until you interact with the page. One tap fixes it.
+            </p>
+          </div>
+          <button
+            onClick={() => void voice.unlockAudio()}
+            className="min-h-[44px] shrink-0 rounded-xl bg-amber-400 px-4 text-sm font-extrabold text-black transition hover:bg-amber-300"
+          >
+            Enable sound
+          </button>
+          <button
+            onClick={() => setSoundHintDismissed(true)}
+            aria-label="Dismiss"
+            className="shrink-0 p-1 text-amber-300/70 transition hover:text-amber-200"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {entryFx && (
         <div className="entry-banner mt-2 rounded-2xl px-3 py-2 text-center text-sm font-extrabold">
