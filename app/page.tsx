@@ -20,6 +20,7 @@ import {
   Video,
 } from "lucide-react";
 import { useSession } from "@/stores/useSession";
+import { MobileDownload, IosAvailability } from "@/components/MobileDownload";
 
 // Public landing page — shown only to signed-out visitors. Signed-in users are
 // redirected to the lobby (see the effect below and AppShell's route gate).
@@ -335,11 +336,11 @@ export default function Home() {
       {/* ---- Native apps ---- */}
       <section id="apps" className="border-t border-line">
         <div className="mx-auto w-full max-w-6xl px-5 py-16">
-          <h2 className="text-2xl font-extrabold sm:text-3xl">Android and iPhone apps are on the way</h2>
+          <h2 className="text-2xl font-extrabold sm:text-3xl">Android and iPhone apps</h2>
           <p className="mt-3 max-w-[62ch] text-sm leading-relaxed text-paper-dim sm:text-base">
-            We are building native MS-ROOMS apps for Android and iPhone. They are still in
-            development and not released yet, so there is nothing to download today. Everything
-            below is what we are targeting for the first public release.
+            Same rooms, same accounts, same coins. The Android app is distributed directly from this
+            page rather than through the Google Play Store. Everything below is what we are
+            targeting for the first public release.
           </p>
 
           <div className="mt-9 grid gap-4 sm:grid-cols-2">
@@ -383,11 +384,16 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-                <p className="mt-5 text-xs text-paper-faint">
-                  Nothing to install yet. Use the web app in the meantime.
-                </p>
               </div>
             ))}
+          </div>
+
+          {/* Real download controls, shown only when an APK is actually staged.
+              The component HEADs the file, so publishing is a deploy step and
+              not a code change — see components/MobileDownload.tsx. */}
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            <MobileDownload />
+            <IosAvailability />
           </div>
         </div>
       </section>

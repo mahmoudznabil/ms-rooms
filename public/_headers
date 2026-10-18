@@ -40,6 +40,33 @@
 sw.js
   Cache-Control: public, max-age=0, must-revalidate
 
+# Direct APK distribution (see components/MobileDownload.tsx).
+#
+# The Content-Type is NOT optional. The global `/*` rule above sets
+# X-Content-Type-Options: nosniff, and without this override Pages serves .apk
+# as application/octet-stream; some Android browsers and every desktop browser
+# then refuse to hand the file to the installer, so the download silently does
+# nothing. nosniff means the browser uses this type and will not second-guess
+# it, so it has to be right.
+#
+# Content-Disposition: attachment keeps the browser from trying to render or
+# sniff the binary. Caching is NOT disabled: the file name is versioned by
+# content (scripts/stage-apk.mjs stamps the checksum into the sidecar), and a
+# user who fetches a 60MB APK on mobile data should not refetch it on every
+# page load. Replacing a build changes the file, and Pages revalidates on the
+# next request after a deploy.
+/downloads/*.apk
+  Content-Type: application/vnd.android.package-archive
+  Content-Disposition: attachment; filename="ms-rooms.apk"
+  Cache-Control: public, max-age=0, must-revalidate
+
+# The checksum sidecar is read on every landing-page visit to populate the
+# verification box, so it must never be cached — otherwise a rebuilt APK would
+# still show the previous build's hash, which is worse than showing none.
+/downloads/*.sha256
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: no-store
+
 # Never let a CDN or proxy cache authenticated API traffic.
 /api/*
   Cache-Control: no-store

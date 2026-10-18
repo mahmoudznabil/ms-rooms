@@ -19,6 +19,7 @@
     "dev:smoke": "node scripts/dev-smoke.mjs",
     "launch:check": "node scripts/launch-check.mjs",
     "lint": "eslint",
+    "stage:apk": "node scripts/stage-apk.mjs",
     "start": "next start",
     "test": "vitest run",
     "test:e2e": "playwright test",

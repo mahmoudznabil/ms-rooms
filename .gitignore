@@ -27,3 +27,8 @@ npm-debug.log*
 
 # scaffold artifact from the initial generator workaround
 /best-audio-room/
+
+# Staged APKs are build output, not source: 
+pm run stage:apk puts a binary
+# here and a committed APK would rot the moment a new build is released.
+public/downloads/
