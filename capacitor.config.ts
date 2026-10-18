@@ -31,7 +31,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * forgetting it produces an app that installs and then cannot hear anything.
  */
 const config: CapacitorConfig = {
-  appId: "com.msrooms.app",
+  appId: "com.msrooms",
   appName: "MS-ROOMS",
   webDir: "out",
 

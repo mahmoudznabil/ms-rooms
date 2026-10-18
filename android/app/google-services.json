@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "887561048772",
+    "project_id": "ms-room-audio",
+    "storage_bucket": "ms-room-audio.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:887561048772:android:59e10d08d1c00a3d9d6f91",
+        "android_client_info": {
+          "package_name": "com.msrooms"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "887561048772-6tr9cpndqi0k4lsbidh6m431d4eo9f37.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAoJ3r-Qh0wRMhzNkF8-MHjRY3qB3knzBI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "887561048772-6tr9cpndqi0k4lsbidh6m431d4eo9f37.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

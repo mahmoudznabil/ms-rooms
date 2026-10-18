@@ -1,4 +1,4 @@
-package com.msrooms.app;
+package com.msrooms;
 
 import com.getcapacitor.BridgeActivity;
 
