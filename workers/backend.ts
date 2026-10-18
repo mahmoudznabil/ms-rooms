@@ -9,7 +9,7 @@
  */
 
 import { R2Bucket } from "@cloudflare/workers-types";
-import { requireUser, timingSafeEqual } from "./auth";
+import { requireUser, timingSafeEqual, userIdFromSessionToken, adminFromToken } from "./auth";
 import { isValidTriviaPack, parseTriviaPackReply } from "./trivia-validate";
 import {
   RECHARGE_GRACE_RECHARGES,
@@ -22,6 +22,7 @@ import {
   successfulRecharges,
 } from "./recharge-policy";
 import { roomSeatPolicy, seatExists, seatRefusalReason } from "./room-policy";
+import { ratePolicyFor, isOverLimit } from "./rate-limit";
 import {
   canReleaseCustomer,
   canReadCreditLedger,
@@ -302,37 +303,24 @@ async function runAi(env: Env, prompt: string): Promise<string | null> {
   }
 }
 
-// Best-effort in-isolate rate limiter. Keyed by IP+path, sliding 60s window.
-// Limits are conservative so normal use never trips; abuse does.
+// Best-effort in-isolate rate limiter. Keyed by IP+path, sliding window.
+//
+// The limits themselves live in workers/rate-limit.ts so each one is a stated,
+// testable decision rather than an arm of an if/else chain. See that file for
+// why this is best-effort and not a durable control.
 const rlHits = new Map<string, number[]>();
 function isRateLimited(key: string, path: string, method: string): boolean {
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
-    // Only rate-limit hot polled reads.
-    if (!path.startsWith("/api/signal/")) return false;
-  }
-  let limit = 60;
-  if (path.startsWith("/api/auth/")) limit = 20;
-  else if (path.startsWith("/api/admin/")) limit = 30;
-  else if (path.startsWith("/api/signal/")) limit = 120;
-  else if (path === "/api/spin") limit = 10;
-  else if (path === "/api/client-errors") limit = 30;
-  else if (path === "/api/csp-report") limit = 60;
-  // Consent is written once per account per document version, so the honest
-  // rate is low. Generous enough for a retry after a dropped connection,
-  // tight enough that the consent table cannot be bulk-filled from one address.
-  else if (path === "/api/legal/accept") limit = 12;
-  else if (path === "/api/attachments/upload") limit = 20;
-  else if (method !== "GET") limit = 100;
-  else return false;
+  const policy = ratePolicyFor(path, method);
+  if (policy.limit === null) return false;
   const now = Date.now();
-  const arr = (rlHits.get(key) ?? []).filter((t) => now - t < 60_000);
-  arr.push(now);
-  rlHits.set(key, arr);
+  const { limited, kept } = isOverLimit(rlHits.get(key) ?? [], now, policy.limit);
+  kept.push(now);
+  rlHits.set(key, kept);
   if (rlHits.size > 5000) {
     const oldest = [...rlHits.keys()].slice(0, 1000);
     for (const k of oldest) rlHits.delete(k);
   }
-  return arr.length > limit;
+  return limited;
 }
 
 // Set once per isolate after the users identity columns/index exist, so we
@@ -1230,25 +1218,50 @@ code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:6px;font-siz
         ).bind(cost, fromUserId, cost).run();
         const changed = (debit as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
         if (changed !== 1) return conflict("Not enough coins.");
-        await env.DB.prepare(
-          `INSERT INTO transactions (id, user_id, room_id, type, amount, description)
-           VALUES (?, ?, ?, 'gift_sent', ?, ?)`
-        )
-          .bind(newId("tx"), fromUserId, roomId, -Math.abs(cost), `Gift: ${giftId}`)
-          .run();
-        await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, 2, 'Sent gift', ?)`).bind(newId("xp"), fromUserId, roomId).run();
+
+        // Everything downstream of the debit goes in ONE D1 batch.
+        //
+        // D1 batch() is a transaction: either all statements land or none do.
+        // Before this, the debit, the ledger row, the xp event and the host's
+        // gem credit were four independent statements, so a failure between any
+        // two left the balance moved with no ledger entry explaining it — the
+        // coins are gone and nothing records why.
+        //
+        // The debit deliberately stays OUTSIDE the batch. It is a conditional
+        // update whose `meta.changes` decides whether to continue, and a batch
+        // commits all-or-nothing, so including it would mean the ledger rows
+        // commit even when the balance check fails. The residual window is now
+        // "debited, ledger write failed" — one statement instead of four.
+        const stmts = [
+          env.DB.prepare(
+            `INSERT INTO transactions (id, user_id, room_id, type, amount, description)
+             VALUES (?, ?, ?, 'gift_sent', ?, ?)`
+          ).bind(newId("tx"), fromUserId, roomId, -Math.abs(cost), `Gift: ${giftId}`),
+          env.DB.prepare(
+            `INSERT INTO xp_events (id, user_id, amount, reason, room_id) VALUES (?, ?, 2, 'Sent gift', ?)`
+          ).bind(newId("xp"), fromUserId, roomId),
+        ];
+
         // Credit host Gems at 70% revenue share if room exists
+        let hostId: string | undefined;
         if (roomId) {
-          try {
-            const room = await env.DB.prepare(`SELECT host_user_id FROM rooms WHERE id = ?`).bind(roomId).first();
-            const hostId = (room as Record<string, unknown> | null)?.host_user_id as string | undefined;
-            if (hostId && hostId !== fromUserId) {
-              const gemsEarned = Math.floor(cost * 0.7);
-              await env.DB.prepare(`UPDATE users SET gems = gems + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(gemsEarned, hostId).run();
-              await env.DB.prepare(`INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_received', ?, ?)`).bind(newId("tx"), hostId, roomId, gemsEarned, `Gem earn: ${giftId} from ${fromUserId}`).run();
-            }
-          } catch {}
+          const room = await env.DB.prepare(`SELECT host_user_id FROM rooms WHERE id = ?`).bind(roomId).first();
+          const candidate = (room as Record<string, unknown> | null)?.host_user_id as string | undefined;
+          if (candidate && candidate !== fromUserId) hostId = candidate;
         }
+        if (hostId && roomId) {
+          const gemsEarned = Math.floor(cost * 0.7);
+          stmts.push(
+            env.DB.prepare(`UPDATE users SET gems = gems + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(
+              gemsEarned,
+              hostId,
+            ),
+            env.DB.prepare(
+              `INSERT INTO transactions (id, user_id, room_id, type, amount, description) VALUES (?, ?, ?, 'gift_received', ?, ?)`
+            ).bind(newId("tx"), hostId, roomId, gemsEarned, `Gem earn: ${giftId} from ${fromUserId}`),
+          );
+        }
+        await env.DB.batch(stmts);
         const updated = await env.DB.prepare(`SELECT coins, gems, xp FROM users WHERE id = ?`).bind(fromUserId).first();
         return j({
           ok: true,
@@ -2434,17 +2447,27 @@ return j({ ok: true, ended: true });
           .run();
         const changed = (ins as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
         if (changed === 0) return conflict("Already checked in today. Come back tomorrow.");
-        await env.DB.prepare(`UPDATE users SET coins = coins + ?, xp = xp + 10, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-          .bind(amount, userId)
-          .run();
-        await env.DB.prepare(
-          `INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, 'daily_reward', ?, 'Daily check-in')`
-        )
-          .bind(newId("tx"), userId, amount)
-          .run();
-        await env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason) VALUES (?, ?, 10, 'Daily check-in')`)
-          .bind(newId("xp"), userId)
-          .run();
+        // One transaction for the credit and its two ledger rows. Previously the
+        // balance moved, then the transaction row, then the xp event, each on its
+        // own — a failure partway credited coins with no ledger entry, or wrote a
+        // ledger entry for a credit that never landed. batch() is atomic, so the
+        // balance and its audit trail move together or not at all.
+        //
+        // The INSERT OR IGNORE above stays outside the batch on purpose: its
+        // `meta.changes` is the idempotency gate, and a batch commits
+        // unconditionally, so the reward could not be made conditional inside it.
+        await env.DB.batch([
+          env.DB.prepare(
+            `UPDATE users SET coins = coins + ?, xp = xp + 10, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+          ).bind(amount, userId),
+          env.DB.prepare(
+            `INSERT INTO transactions (id, user_id, type, amount, description) VALUES (?, ?, 'daily_reward', ?, 'Daily check-in')`
+          ).bind(newId("tx"), userId, amount),
+          env.DB.prepare(`INSERT INTO xp_events (id, user_id, amount, reason) VALUES (?, ?, 10, 'Daily check-in')`).bind(
+            newId("xp"),
+            userId,
+          ),
+        ]);
         const days = await env.DB.prepare(`SELECT day FROM checkins WHERE user_id = ? ORDER BY day DESC LIMIT 60`)
           .bind(userId)
           .all();
@@ -2952,13 +2975,15 @@ return j({
       async function ensureAdminTables() {
         try { await env.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (id TEXT PRIMARY KEY, admin_id TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at TEXT NOT NULL, FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE CASCADE)`).run(); } catch {}
       }
+      // Used by all 27 admin handlers. Keeps `ensureAdminTables()` — the local
+      // helper has to bootstrap the admin schema on a cold database — and then
+      // defers the lookup to auth.ts so the `admin_sessions` query and its
+      // expiry rule exist once rather than twice. The JOIN there also means one
+      // round trip instead of the two this used to make.
       async function getAdminFromToken(token: string): Promise<Record<string, unknown> | null> {
         if (!token || !token.startsWith("admin_")) return null;
         await ensureAdminTables();
-        const sess = await env.DB.prepare(`SELECT * FROM admin_sessions WHERE id = ? AND expires_at > datetime('now')`).bind(token).first();
-        if (!sess) return null;
-        const adm = await env.DB.prepare(`SELECT * FROM admin_users WHERE id = ?`).bind((sess as Record<string, unknown>).admin_id).first();
-        return adm as Record<string, unknown> | null;
+        return await adminFromToken(token, env);
       }
 
       if (path === "/api/admin/login" && request.method === "POST") {
@@ -3988,11 +4013,13 @@ return j({ ok: true });
 
       // Session user for call endpoints. Guards the missing-cookie case BEFORE
       // binding (D1 throws D1_TYPE_ERROR on undefined bind values).
+      // Resolves the session cookie for every call site inside fetch(). The
+      // cookie parse stays here (it needs `request`); the lookup itself lives in
+      // auth.ts so there is one `SELECT ... FROM sessions` with one expiry rule,
+      // rather than the three copies this replaced.
       async function sessionUserId(): Promise<string | null> {
         const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
-        if (!cookieToken) return null;
-        const s = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
-        return ((s as Record<string, unknown> | null)?.user_id as string) ?? null;
+        return userIdFromSessionToken(cookieToken ?? null, env);
       }
 
       // Caller hangs up while still ringing → callee stops ringing (cancelled).
@@ -4329,11 +4356,11 @@ return j({ ok: true });
       // Privacy note: DMs are stored server-side in D1 (needed for multi-device
       // sync + moderation). This is NOT end-to-end encrypted: the server can
       // read message content. Never advertise E2EE for this path.
+      // Identical to sessionUserId() above and has always behaved identically —
+      // it existed because the chat routes were written by a different pass.
+      // Both now delegate to auth.ts, so the session lookup has one definition.
       async function requireChatUser(): Promise<string | null> {
-        const cookieToken = (request.headers.get("Cookie") || "").split("; ").find((c) => c.trim().startsWith("session="))?.split("=")[1];
-        if (!cookieToken) return null;
-        const s = await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`).bind(cookieToken).first();
-        return ((s as Record<string, unknown> | null)?.user_id as string) ?? null;
+        return sessionUserId();
       }
       async function isConversationMember(conversationId: string, userId: string): Promise<boolean> {
         const m = await env.DB.prepare(`SELECT 1 AS x FROM conversation_participants WHERE conversation_id = ? AND user_id = ?`).bind(conversationId, userId).first();
@@ -4848,6 +4875,42 @@ return j({ ok: true });
 
         if (!file) return j({ ok: false, error: "No file provided" }, 400);
         if (!conversationId && !messageId) return j({ ok: false, error: "conversation_id or message_id required" }, 400);
+
+        // Membership check — this was MISSING and is a real finding from the
+        // 2026-10-18 authorization sweep.
+        //
+        // The handler took `message_id` from the form and inserted the
+        // attachment row against it with no verification that the caller is in
+        // the conversation that message belongs to. Any signed-in user could
+        // therefore attach a file to any message in any conversation: filling
+        // someone else's thread, and spending the operator's R2 storage on
+        // conversations they have no part in. The download route did check
+        // participation, so the content was not directly readable by the
+        // attacker — the damage is content injection and storage abuse.
+        //
+        // Only one of the two needs resolving: an upload is unclaimed until
+        // POST /api/conversations/:id/messages links it, so a client that
+        // already knows the conversation can supply just conversation_id.
+        if (conversationId && conversationId.trim()) {
+          const convId = conversationId.trim();
+          const allowed = await isConversationMember(convId, userId);
+          if (!allowed) return j({ ok: false, error: "Not a participant in this conversation." }, 403);
+        }
+        if (messageId && messageId.trim()) {
+          const msgId = messageId.trim();
+          const owner = await env.DB.prepare(
+            `SELECT m.conversation_id AS cid FROM messages m WHERE m.id = ?`,
+          )
+            .bind(msgId)
+            .first();
+          const cid = (owner as Record<string, unknown> | null)?.cid as string | undefined;
+          // A message_id that does not resolve is rejected rather than inserted
+          // as a dangling reference: the attachment row would be unreachable by
+          // any later link step.
+          if (!cid) return j({ ok: false, error: "message_id not found" }, 404);
+          const allowed = await isConversationMember(cid, userId);
+          if (!allowed) return j({ ok: false, error: "Not a participant in this conversation." }, 403);
+        }
 
         // Validate file
         const maxSize = 50 * 1024 * 1024; // 50MB

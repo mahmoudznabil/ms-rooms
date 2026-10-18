@@ -15,6 +15,52 @@ interface EnvWithDB {
   DB: any;
 }
 
+/**
+ * Resolve a session user from an explicit token value.
+ *
+ * backend.ts had two closures that re-implemented the cookie lookup and the
+ * `SELECT user_id FROM sessions` query inline (`sessionUserId` and
+ * `requireChatUser`), duplicating the expiry check as well. That is three
+ * copies of one rule; a fix to the expiry condition would have had to land in
+ * all three, and the 2026-10-18 sweep found the copies had already drifted in
+ * shape even though they agreed in behaviour.
+ *
+ * They now delegate here, so the query exists once.
+ */
+export async function userIdFromSessionToken(
+  token: string | null,
+  env: EnvWithDB,
+): Promise<string | null> {
+  if (!token) return null;
+  const row = await env.DB.prepare(
+    `SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')`
+  ).bind(token).first();
+  return (row as { user_id?: string } | null)?.user_id ?? null;
+}
+
+/**
+ * Resolve an admin from an explicit token value.
+ *
+ * The counterpart of `userIdFromSessionToken`, and the reason all 27 admin
+ * handlers go through backend.ts's `getAdminFromToken` rather than
+ * `requireAdmin` directly: it takes a token, not a Request, so it can be called
+ * from a place that already extracted one.
+ */
+export async function adminFromToken(
+  token: string | null,
+  env: EnvWithDB,
+): Promise<{ id: string; username: string; role: string } | null> {
+  if (!token || !token.startsWith("admin_")) return null;
+  const row = await env.DB.prepare(
+    `SELECT a.id, a.username, a.role FROM admin_sessions s
+     JOIN admin_users a ON a.id = s.admin_id
+     WHERE s.id = ? AND s.expires_at > datetime('now')`
+  ).bind(token).first();
+  const adm = row as { id?: string; username?: string; role?: string } | null;
+  if (!adm?.id) return null;
+  return { id: adm.id, username: adm.username ?? "", role: adm.role ?? "" };
+}
+
 export interface AuthContext {
   id: string;
   /** 1 when the account is banned, otherwise 0. */
